@@ -227,35 +227,24 @@ echoes a raw response body.
 
 ## Releasing
 
-Releases are automated. **Never hand-edit `version` in `Cargo.toml`, and never write `CHANGELOG.md`
-by hand** — release-plz owns both, and a manual edit desynchronises the crate version from the git
-tag.
+Releases are automated. **Never hand-edit `version` in `Cargo.toml`, never write `CHANGELOG.md`
+by hand, and never create a tag manually** — release-plz owns all three, and a manual edit
+desynchronises the crate version from the git tag.
 
-### The first release is different
+### Release flow
 
-The steady-state flow below (release PR → review → merge → tag) assumes the crate is already on
-crates.io and a prior tag exists for release-plz to diff against. Neither is true yet: the crate
-has never been published, `Cargo.toml` already reads `1.0.0`, `CHANGELOG.md` already has its
-`## 1.0.0` section, and the repository has no tags at all. Under those conditions release-plz has
-nothing left to bump — the next push to `main` is what tags and publishes `1.0.0` directly, with
-no release PR to open or review.
-
-Before that push happens, `biokraft/homebrew-tap` and the `TAP_PAT` secret must already exist —
-`release.yml`'s `formula` job pushes the rendered formula there, and it needs the repo and the
-credential in place, not created afterward. If either is missing when the tag lands, the
-`formula` job's steps are skipped (they gate on `TAP_PAT` being set) rather than failing, so the
-release still completes with binaries attached; the tap simply doesn't get updated until the
-gap is fixed and a later release lands.
-
-### Steady state (subsequent releases)
-
-To cut a release once the crate is on crates.io and at least one tag exists:
+To cut a release:
 
 1. Land the change on `main` with a conventional-commit message. `feat`, `fix`, `docs`, `refactor`
    and `perf` appear in the changelog; `test`, `chore` and `ci` are skipped. A `!` suffix
    (`feat!:`) marks a breaking change and forces a minor/major bump.
 2. `release-plz` opens or updates a **release PR** carrying the version bump and the generated
-   `CHANGELOG.md`. Review it like any other PR.
+   `CHANGELOG.md` entries, computed from the conventional commits since the last release. Review
+   it like any other PR. The version is chosen by release-plz from the commit prefixes, not by
+   hand: since the project is pre-1.0, a `feat:` commit produces a minor bump (e.g. 0.9.x →
+   0.10.0) and a `fix:` produces a patch (e.g. 0.9.1 → 0.9.2). The one exception is a milestone
+   version such as 1.0.0, once the project is ready for it — the maintainer sets that version
+   deliberately as a conscious decision, not as routine practice.
 3. Merge the release PR. That triggers, in order: the git tag `v<version>`, the GitHub Release,
    `cargo publish` to crates.io, then `release.yml` builds the four target triples and attaches
    `bbcloud-v<version>-<triple>.tar.gz` archives, each with its own `<archive>.sha256` file (there
