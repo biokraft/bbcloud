@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2](https://github.com/biokraft/bbcloud/compare/v0.9.1...v0.9.2) - 2026-08-06
+
+### Documentation
+
+- describe the steady-state release flow now that the first release has shipped
+
 ## 0.9.1
 
 ### Fixed
