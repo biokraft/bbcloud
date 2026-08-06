@@ -327,6 +327,10 @@ fn bb_repo_env_var_wins_without_consulting_git() {
         .stdout(contains("https://bitbucket.org/acme/widgets"));
 }
 
+// NOTE (corrected during implementation): the scenario below is unreachable. `main.rs:21`
+// declares `--repo` with `env = "BB_REPO"`, so clap fills the argument from the environment
+// and "   " is parsed as a repo slug, which fails. `repo.rs:86-90` is dead code. The shipped
+// test asserts the real parse failure instead of the fall-through this block expects.
 #[test]
 fn a_whitespace_only_bb_repo_falls_through_to_git() {
     let repo = git_repo();
@@ -422,6 +426,9 @@ fn a_bitbucket_remote_other_than_origin_still_resolves() {
         .stdout(contains("https://bitbucket.org/acme/widgets"));
 }
 
+// NOTE (corrected during implementation): `git symbolic-ref` exits 128 on a detached HEAD
+// rather than succeeding with empty output, so `git.rs:36-40`'s friendly "detached HEAD" text
+// is unreachable. The shipped test asserts git's own "not a symbolic ref" stderr.
 /// `pr create` infers its source branch from HEAD, so a detached HEAD must be reported
 /// rather than producing a nonsense branch name.
 #[test]
@@ -690,7 +697,7 @@ what you want, since these tests assert the code never gets that far:
 async fn create_rejects_a_target_that_is_only_commas() {
     let server = MockServer::start().await;
     bb(&server)
-        .args(["pr", "create", ",,", "--source", "feature/x"])
+        .args(["pr", "create", ",,", "feature/x"]) // positional SOURCE, not --source
         .assert()
         .failure()
         .stderr(contains("no target branch given"));
@@ -701,7 +708,7 @@ async fn create_rejects_a_target_that_is_only_commas() {
 async fn create_rejects_a_source_equal_to_the_target() {
     let server = MockServer::start().await;
     bb(&server)
-        .args(["pr", "create", "main", "--source", "main"])
+        .args(["pr", "create", "main", "main"]) // positional SOURCE, not --source
         .assert()
         .failure()
         .stderr(contains("source and target are both `main`"));

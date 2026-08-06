@@ -74,7 +74,11 @@ Tests:
 
 Tests:
 1. `BB_REPO` set resolves without consulting git.
-2. `BB_REPO` set to whitespace falls through to git remote resolution.
+2. `BB_REPO` set to whitespace. **Corrected during implementation:** this does *not* fall through to
+   git remote resolution as the code at `repo.rs:86-90` intends. `main.rs:21` declares `--repo` with
+   `env = "BB_REPO"`, so clap fills the argument from the environment and `"   "` is parsed as a repo
+   slug, which fails. The shipped test asserts that real behaviour, and `repo.rs:86-90` is
+   unreachable dead code.
 3. Outside a git repository, resolution fails with `no git repository here`.
 4. In a git repo with no remotes, fails with `no git remotes configured`.
 5. In a git repo whose only remote is not Bitbucket, fails with
@@ -82,7 +86,11 @@ Tests:
 6. `origin` pointing at Bitbucket resolves.
 7. `origin` pointing elsewhere while a second remote points at Bitbucket still resolves — the
    fork/mirror case the comment at `repo.rs:96-98` describes.
-8. `git::current_branch` on a detached HEAD returns `BbError::Git` (`git.rs:36-40`).
+8. `git::current_branch` on a detached HEAD returns `BbError::Git`. **Corrected during
+   implementation:** the error does not come from `git.rs:36-40`. `git symbolic-ref --short HEAD`
+   exits 128 on a detached HEAD rather than succeeding with empty output, so the friendly
+   `"detached HEAD — cannot infer source branch"` message is unreachable and git's own
+   `"not a symbolic ref"` stderr surfaces instead. The shipped test asserts that.
 9. `git::remote_url` for a remote with no url returns `BbError::Git` (`git.rs:46-48`).
 
 Temp git repos are created with `tempfile` and plain `git init`, following the pattern already in
@@ -138,6 +146,30 @@ Named here so the residual gap is a recorded decision, not an oversight:
 The Codecov target moves to 90% via a committed `codecov.yml`, so a drop is reported on the pull
 request. It stays advisory — the coverage job is not made to hard-fail under a threshold, so a
 legitimate change is never blocked by an arithmetic cliff.
+
+## Outcome
+
+Line coverage reached **90.30%** — 197 missed lines of 2031, against a goal of ≤203. The keyring
+contingency was not needed. Per file: `commands/auth.rs` 51.89% → 88.68%, `repo.rs` 78.57% → 97.14%,
+`git.rs` 72.73% → 90.91%, `api/mod.rs` 83.56% → 99.32%, `commands/pr.rs` 90.04% → 91.81%,
+`commands/pr_comments.rs` 93.84% → 94.86%. `commands/update.rs` stayed at 76.97%, as designed.
+
+Writing these tests uncovered three pieces of **unreachable production code**, none of which this
+branch fixed, because production changes were out of scope. Each is documented in a comment beside
+the test that would otherwise look incomplete:
+
+1. `repo.rs:86-90` — `main.rs:21` declares `--repo` with `env = "BB_REPO"`, so clap fills the
+   argument before `resolve()` ever reads the variable. Side effect worth fixing: `BB_REPO="   "`
+   now fails with `invalid repository` instead of falling back to git remotes.
+2. `git.rs:36-40` — `git symbolic-ref` exits 128 on a detached HEAD, so the friendly message never
+   renders and raw git plumbing reaches the user.
+3. `pr_comments.rs:135` — `is_inline()` requires a non-empty `inline.path`, and `to_view()` derives
+   `file` from that same path, so the `_ => "-"` location fallback cannot be reached.
+
+A fourth discovery was a test-safety gap, and it *was* fixed here: the shared `bb()` helpers in
+`tests/pr_create.rs` and `tests/pr_view.rs` never set `BB_KEYRING_DISABLE`, so those tests had been
+running against the real OS keyring — the same class of defect that destroyed a developer's stored
+token earlier in this project.
 
 ## Verification
 
