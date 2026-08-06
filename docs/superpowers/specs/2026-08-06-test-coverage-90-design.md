@@ -47,7 +47,9 @@ Per-file starting point, worst first:
 
 ## Five test clusters
 
-Estimated yield ≈ 120 lines against a need of 110. The margin absorbs estimate error.
+Estimated yield ≈ 114 lines against a need of 110. Because that margin is thin, the keyring
+mock-builder tests described under "Deliberately left uncovered" are promoted to a contingency task,
+run only if the five clusters measure below 90%.
 
 ### Cluster 1 — `auth` (~40 lines)
 
@@ -86,13 +88,15 @@ Tests:
 Temp git repos are created with `tempfile` and plain `git init`, following the pattern already in
 `src/git.rs`'s test module.
 
-### Cluster 3 — `api::Client` (~22 lines)
+### Cluster 3 — `api::Client` (~15 lines)
 
 1. 403 maps to `BbError::Api { status: 403 }` (`api/mod.rs:85-88`).
 2. 429 maps to `BbError::Api { status: 429 }` (`api/mod.rs:92-95`).
-3. `post_json`, `put_json`, and `delete` each have no test at all (`api/mod.rs:153-166`). One test
-   per method, asserting the request method and body reach the server and the response
-   deserialises.
+3. `put_json` has no test at all (`api/mod.rs:153-166`) — asserts the PUT method and body reach the
+   server and the response deserialises. `post_json` and `delete` are already covered via
+   `pr create` and the comment commands; only `put_json` is untested.
+4. The `MAX_PAGES` cap at `api/mod.rs:180-181` — 101 distinct pages, each linking to the next,
+   asserting pagination stops at 100.
 
 ### Cluster 4 — `pr create` validation (~5 lines)
 
@@ -100,11 +104,16 @@ Both fail before any HTTP request, so no mock is needed:
 1. An empty target branch is rejected (`pr.rs:276-277`).
 2. A source branch equal to the target is rejected (`pr.rs:279-281`).
 
-### Cluster 5 — `output` (~3 lines)
+### Cluster 5 — comment-rendering edge cases (~4 lines)
 
-`warn` and `heading` have no test (`output.rs:105-111`). Their pure `*_line` helpers are already
-tested, so these assert the wrappers write to the right stream — `warn` to stderr, `heading` to
-stdout.
+`pr_comments.rs:113` and `:129` are the "none" lines shown when a comment section is empty, and
+`:134`/`:135` are the inline-location fallbacks for a comment with a file but no line, or with
+neither. Three `wiremock` tests on `bb pr view` cover all four.
+
+`output::heading` turns out to be covered already. `output.rs`'s residual gap is `warn`
+(`output.rs:105-107`), which the cluster-1 `logout` legacy-file test covers, and the spinner body
+(`output.rs:116-120`), which runs only when stderr is a terminal and so is unreachable from the test
+harness — it joins the deliberately-uncovered list below.
 
 ## Deliberately left uncovered
 
@@ -116,6 +125,8 @@ Named here so the residual gap is a recorded decision, not an oversight:
   `update.rs` therefore remains the weakest file.
 - **`inquire` prompts** (`auth.rs:60-62,71-76`; `pr.rs:287-299`) — require a real TTY.
 - **`open::that_detached` failure arms** (`browse.rs:38-40`, `pr.rs:355`) — no fakeable seam.
+- **The spinner body** (`output.rs:116-120`) — guarded by `stderr().is_terminal()`, which is false
+  under every test runner, so the tests always take the `ProgressBar::hidden()` path.
 - **Real keyring read/write arms** (`credentials.rs:86-127`) — reachable via keyring's mock
   credential builder, but that mutates process-global state. Held in reserve, used only if the
   five clusters land short of 90%.
