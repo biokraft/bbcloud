@@ -1,0 +1,15 @@
+# Coverage is advisory: it reports on pull requests but never blocks a merge, so a
+# legitimate change is not held up by an arithmetic cliff.
+coverage:
+  status:
+    project:
+      default:
+        target: 90%
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        informational: true
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true
