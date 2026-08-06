@@ -2,6 +2,9 @@
 
 use assert_cmd::Command;
 use predicates::str::contains;
+use tempfile::tempdir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// The token must never appear in `bb auth status` output, in either format.
 #[test]
@@ -130,4 +133,154 @@ fn auth_help_mentions_api_token_not_app_password() {
     let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
     assert!(text.contains("api token"));
     assert!(!text.contains("app password"));
+}
+
+/// `login` with --email and --token-stdin never prompts, so the whole verify-then-store
+/// path runs without a tty.
+#[tokio::test]
+async fn login_verifies_the_token_and_reports_the_account() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"display_name": "Dev Person"})),
+        )
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args([
+            "auth",
+            "login",
+            "--email",
+            "dev@example.com",
+            "--token-stdin",
+        ])
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("ATATT3xFfGF0abcd")
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "login failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Dev Person"), "no account name: {stdout}");
+    assert!(stdout.contains("****abcd"), "no redacted tail: {stdout}");
+    assert!(
+        !stdout.contains("ATATT3xFfGF0abcd"),
+        "token leaked: {stdout}"
+    );
+}
+
+/// The same path in --json mode must emit pure JSON on stdout and no human lines.
+#[tokio::test]
+async fn login_json_emits_pure_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"display_name": "Dev Person"})),
+        )
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args([
+            "auth",
+            "login",
+            "--email",
+            "dev@example.com",
+            "--token-stdin",
+            "--json",
+        ])
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("ATATT3xFfGF0abcd")
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "login failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout was not pure JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(value["account"], "Dev Person");
+    assert_eq!(value["email"], "dev@example.com");
+    assert_eq!(value["token"], "****abcd");
+}
+
+/// A value that is not an email address is rejected before any network call.
+#[test]
+fn login_rejects_an_email_without_an_at_sign() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "login", "--email", "not-an-email", "--token-stdin"])
+        .env("BB_API_BASE", "http://127.0.0.1:1")
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("some-token")
+        .assert()
+        .failure()
+        .stderr(contains("atlassian account email"));
+}
+
+/// A leftover plaintext credential file from the PHP-era CLI must be called out on logout.
+#[test]
+fn logout_warns_about_a_legacy_plaintext_credential_file() {
+    let home = tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".bitbucket-rest-cli-config.json"),
+        "{\"token\":\"whatever\"}",
+    )
+    .unwrap();
+
+    Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "logout"])
+        .env("HOME", home.path())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stderr(contains("legacy plaintext credential file"));
+}
+
+/// A failing identity check must not fail the command — the account is simply unknown.
+#[tokio::test]
+async fn status_reports_an_unverified_account_when_the_identity_check_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "status", "--json"])
+        .env("BB_EMAIL", "dev@example.com")
+        .env("BB_TOKEN", "ATATT3xFfGF0abcd")
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "status failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert!(
+        value["account"].is_null(),
+        "expected a null account, got {value}"
+    );
 }
