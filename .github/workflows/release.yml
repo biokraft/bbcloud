@@ -52,7 +52,7 @@ jobs:
           base="https://github.com/${REPO}/releases/download/${TAG}"
           for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
             asset="bbcloud-${TAG}-${target}"
-            curl -sSLf -o "/tmp/${asset}.sha256" "${base}/${asset}.tar.gz.sha256"
+            curl -sSLf -o "/tmp/${asset}.sha256" "${base}/${asset}.sha256"
           done
 
       - name: Render Formula/bb.rb

@@ -28,44 +28,26 @@ $ bb pr list
 
 ## Install
 
-Homebrew, the prebuilt archives, and `cargo binstall` all install a compiled binary and need no
-Rust toolchain at all; only building from source requires one, with a 1.88 floor.
-
-**Homebrew** (macOS and Linux):
-
 ```bash
 brew install biokraft/tap/bb
 ```
 
-**Prebuilt binary** — download the archive for your platform from the
-[latest release](https://github.com/biokraft/bbcloud/releases/latest), verify it against
-the accompanying `.sha256` file, and put `bb` on your `PATH`. Supported targets: `aarch64-apple-darwin`,
-`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`.
+Recommended: updates via `brew upgrade`, no Rust toolchain needed.
 
-**Install script** — detects your platform, verifies the checksum, installs to `~/.local/bin`:
+### Alternatives
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/install.sh | sh
-```
+| Method | Command | Requires |
+| --- | --- | --- |
+| Install script | `curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/install.sh \| sh` | Nothing — detects platform, verifies checksum, installs to `~/.local/bin` |
+| Prebuilt binary | Download from the [latest release](https://github.com/biokraft/bbcloud/releases/latest) | Manual `PATH` setup; verify against the matching `.sha256` |
+| `cargo binstall` | `cargo binstall bbcloud` | `cargo-binstall`, no compiler |
+| `cargo install` | `cargo install bbcloud --locked` | Rust 1.88+ (a clone pins 1.97 via `rust-toolchain.toml`) |
 
-**cargo-binstall** — fetches the same prebuilt binary, no compiler needed:
+Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`.
 
-```bash
-cargo binstall bbcloud
-```
-
-**From source** — needs [Rust](https://rustup.rs) 1.88 or newer:
-
-```bash
-cargo install bbcloud --locked
-```
-
-That installs `bb` into `~/.cargo/bin`. If the command isn't found afterwards, put that directory on
-your `PATH`:
-
-```bash
-echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc && exec zsh
-```
+The cargo routes install `bb` into `~/.cargo/bin` — add that to your `PATH` if the command isn't
+found afterwards.
 
 ## Authenticate
 

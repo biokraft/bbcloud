@@ -65,9 +65,15 @@ pub fn current_triple() -> Option<&'static str> {
 /// `archive:` pattern in `.github/workflows/release.yml`, which is
 /// `bbcloud-$tag-$target`; cargo-binstall's default templates key off the
 /// crate name, which is why the prefix is `bbcloud` and not the binary name.
+///
+/// The checksum asset is named `<base>.sha256`, where `<base>` is the
+/// archive name *without* its `.tar.gz` extension — not
+/// `<archive>.tar.gz.sha256`. That's how `taiki-e/upload-rust-binary-action`
+/// actually publishes it; verified against the real v0.9.0 release assets.
 pub fn asset_names(tag: &str, triple: &str) -> (String, String) {
-    let archive = format!("bbcloud-{tag}-{triple}.tar.gz");
-    let checksum = format!("{archive}.sha256");
+    let base = format!("bbcloud-{tag}-{triple}");
+    let archive = format!("{base}.tar.gz");
+    let checksum = format!("{base}.sha256");
     (archive, checksum)
 }
 
@@ -487,6 +493,6 @@ mod tests {
     fn asset_names_follow_the_release_workflow_convention() {
         let (archive, checksum) = asset_names("v1.0.0", "x86_64-apple-darwin");
         assert_eq!(archive, "bbcloud-v1.0.0-x86_64-apple-darwin.tar.gz");
-        assert_eq!(checksum, "bbcloud-v1.0.0-x86_64-apple-darwin.tar.gz.sha256");
+        assert_eq!(checksum, "bbcloud-v1.0.0-x86_64-apple-darwin.sha256");
     }
 }
