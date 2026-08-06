@@ -1,0 +1,26 @@
+[workspace]
+# The tag shape the binary-release workflow triggers on. Keep them in sync.
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+git_release_body = """
+{{ changelog }}
+
+Install: `brew install biokraft/tap/bb`, `cargo binstall bbcloud`, or download a binary below and \
+verify it against the accompanying `.sha256` file.
+"""
+changelog_update = true
+git_release_enable = true
+publish = true
+
+[changelog]
+protect_breaking_commits = true
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+]

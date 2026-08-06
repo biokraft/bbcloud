@@ -1,0 +1,40 @@
+bbcloud
+Copyright (c) 2026 Seán Baufeld
+
+This project is an independent rewrite, in Rust, of the "bb-cli" Bitbucket
+command-line client originally written in PHP and distributed under the MIT
+License. No PHP source from that project remains here, but this project began
+as a fork of it and its command surface and behaviour were the starting point
+for this implementation.
+
+The original project carried the following notice:
+
+    The MIT License (MIT)
+    Copyright (c) 2021 BB CLI
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+With thanks to its contributors:
+
+    Dinçer Demircioğlu
+    Semih Erdoğan
+    Celal Akyüz
+    Erşan Işık
+    Owen Valentine
+    Aaryan Rampal

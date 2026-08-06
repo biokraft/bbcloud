@@ -1,0 +1,27 @@
+# Changelog
+
+All notable changes to this project are documented in this file. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## 0.9.0
+
+First public pre-release.
+
+### Added
+
+- Pull requests: `bb pr list`, `view`, `diff`, `files`, `commits`, `create`, `comment`,
+  `request-changes` and `no-request-changes`. `bb pr view --unresolved` shows only the comment
+  threads that still need action, and `bb pr comment` posts general, inline and reply comments.
+- Branches: `bb branch list`, filterable by last-commit author or name.
+- `bb browse` opens a repository, pull request or branch page without invoking a shell.
+- `bb completions` for bash, zsh, fish, powershell and elvish.
+- `bb update` checks the latest release and either updates a standalone binary in place, after
+  verifying its checksum, or prints the correct command for a Homebrew- or cargo-managed install.
+- `--json` on every command, with stdout carrying only the serde value so output is safe to pipe
+  into `jq`.
+- Authentication with an Atlassian API token stored in the OS keyring. The token is never printed,
+  never written to disk, and never sent anywhere except `api.bitbucket.org`. `BB_EMAIL` and
+  `BB_TOKEN` cover CI and headless machines.
+- Installation via Homebrew, crates.io, `cargo binstall`, prebuilt binaries for macOS (arm64,
+  x86_64) and Linux (x86_64, aarch64), or the install script.

@@ -1,0 +1,15 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# SDD scratch workspace: regenerable review diffs live here.
+# The durable record (ledger, briefs, reports) is committed under docs/superpowers/.
+/.superpowers
+
+# OS and editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+
+# Worktrees for isolated feature work.
+/.worktrees

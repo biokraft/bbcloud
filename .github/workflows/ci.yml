@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all
+
+  msrv:
+    name: msrv 1.88
+    runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins 1.97 and beats any toolchain the action selects.
+      # RUSTUP_TOOLCHAIN is the one thing that overrides the file.
+      RUSTUP_TOOLCHAIN: "1.88"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - name: Check against the declared MSRV
+        run: cargo check --all-targets --locked
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins 1.97 and beats any toolchain the action selects.
+      # Installing llvm-tools onto `stable` puts the component on a toolchain that
+      # never runs `cargo llvm-cov` — rustup keeps components per-toolchain. Pin the
+      # action to 1.97 and set RUSTUP_TOOLCHAIN too, the same fix as the msrv job.
+      RUSTUP_TOOLCHAIN: "1.97"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97
+        with:
+          components: llvm-tools
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Collect coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  publish-dryrun:
+    name: publish dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the crate packages and would publish
+        run: cargo publish --dry-run --locked

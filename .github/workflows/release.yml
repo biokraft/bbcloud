@@ -1,0 +1,120 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, archive, checksum and upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: bb
+          target: ${{ matrix.target }}
+          archive: bbcloud-$tag-$target
+          tar: all
+          zip: none
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  formula:
+    name: generate the multi-platform homebrew formula
+    needs: binaries
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+      REPO: biokraft/bbcloud
+      TAP_PAT: ${{ secrets.TAP_PAT }}
+    steps:
+      - name: Fetch release asset checksums
+        if: env.TAP_PAT != ''
+        run: |
+          set -euo pipefail
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            asset="bbcloud-${TAG}-${target}"
+            curl -sSLf -o "/tmp/${asset}.sha256" "${base}/${asset}.tar.gz.sha256"
+          done
+
+      - name: Render Formula/bb.rb
+        if: env.TAP_PAT != ''
+        run: |
+          set -euo pipefail
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          sha() { awk '{print $1}' "/tmp/bbcloud-${TAG}-${1}.sha256"; }
+
+          cat > /tmp/bb.rb <<RUBY
+          class Bb < Formula
+            desc "Bitbucket Cloud CLI"
+            homepage "https://github.com/${REPO}"
+            license "MIT"
+            version "${TAG#v}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${base}/bbcloud-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              else
+                url "${base}/bbcloud-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${base}/bbcloud-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha aarch64-unknown-linux-gnu)"
+              else
+                url "${base}/bbcloud-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "$(sha x86_64-unknown-linux-gnu)"
+              end
+            end
+
+            def install
+              bin.install "bb"
+            end
+
+            test do
+              system "#{bin}/bb", "--version"
+            end
+          end
+          RUBY
+
+      - name: Push the formula to the tap
+        if: env.TAP_PAT != ''
+        env:
+          COMMITTER_TOKEN: ${{ env.TAP_PAT }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/biokraft/homebrew-tap.git" /tmp/tap
+          mkdir -p /tmp/tap/Formula
+          cp /tmp/bb.rb /tmp/tap/Formula/bb.rb
+          cd /tmp/tap
+          git config user.name "bb-release-bot"
+          git config user.email "actions@github.com"
+          git add Formula/bb.rb
+          if git diff --cached --quiet; then
+            echo "Formula unchanged, nothing to commit."
+            exit 0
+          fi
+          git commit -m "bb ${TAG}"
+          git push origin HEAD
