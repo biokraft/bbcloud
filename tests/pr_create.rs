@@ -10,7 +10,8 @@ fn bb(server: &MockServer) -> Command {
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())
         .env("BB_REPO", "acme/widgets")
-        .env("NO_COLOR", "1");
+        .env("NO_COLOR", "1")
+        .env("BB_KEYRING_DISABLE", "1");
     cmd
 }
 
@@ -237,4 +238,26 @@ async fn create_json_reports_ids_and_urls() {
         .as_str()
         .unwrap()
         .contains("pull-requests/17"));
+}
+
+/// A target of only separators leaves no branch to target.
+#[tokio::test]
+async fn create_rejects_a_target_that_is_only_commas() {
+    let server = MockServer::start().await;
+    bb(&server)
+        .args(["pr", "create", ",,", "feature/x"])
+        .assert()
+        .failure()
+        .stderr(contains("no target branch given"));
+}
+
+/// Opening a pull request from a branch onto itself is always a mistake.
+#[tokio::test]
+async fn create_rejects_a_source_equal_to_the_target() {
+    let server = MockServer::start().await;
+    bb(&server)
+        .args(["pr", "create", "main", "main"])
+        .assert()
+        .failure()
+        .stderr(contains("source and target are both `main`"));
 }

@@ -7,7 +7,7 @@ use bb_cli::error::BbError;
 use bb_cli::repo::RepoSlug;
 use serde::Deserialize;
 use support::client_for;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[derive(Debug, Deserialize)]
@@ -192,4 +192,98 @@ fn page_defaults_are_forgiving() {
     let page: Page<Item> = serde_json::from_str("{}").unwrap();
     assert!(page.values.is_empty());
     assert!(page.next.is_none());
+}
+
+#[tokio::test]
+async fn maps_403_to_a_scope_hint() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/forbidden"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_json::<Item>("/forbidden")
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Api { status, message } => {
+            assert_eq!(status, 403);
+            // The message must point at the likely cause rather than echo the body.
+            assert!(message.contains("scope"), "unhelpful message: {message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn maps_429_to_a_rate_limit_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/limited"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_json::<Item>("/limited")
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Api { status, message } => {
+            assert_eq!(status, 429);
+            assert!(
+                message.contains("rate limited"),
+                "unhelpful message: {message}"
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn put_json_sends_the_body_and_parses_the_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/thing/1"))
+        .and(body_json(serde_json::json!({"content": "edited"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 42})))
+        .mount(&server)
+        .await;
+
+    let item: Item = client_for(&server.uri())
+        .put_json("/thing/1", &serde_json::json!({"content": "edited"}))
+        .await
+        .unwrap();
+    assert_eq!(item.id, 42);
+}
+
+/// A server that keeps handing out fresh `next` links must not be followed forever.
+#[tokio::test]
+async fn paginate_stops_at_the_page_cap() {
+    let server = MockServer::start().await;
+    let base = server.uri();
+
+    // Page N links to page N+1, each a distinct url so the repeat-detection guard
+    // does not fire — only the hard page cap can stop this.
+    for n in 0..150u32 {
+        let next = format!("{base}/pages?page={}", n + 1);
+        Mock::given(method("GET"))
+            .and(path("/pages"))
+            .and(query_param("page", n.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{"id": n}],
+                "next": next
+            })))
+            .mount(&server)
+            .await;
+    }
+
+    let items: Vec<Item> = client_for(&server.uri())
+        .paginate("/pages?page=0")
+        .await
+        .unwrap();
+    // MAX_PAGES is 100 in src/api/mod.rs.
+    assert_eq!(items.len(), 100, "expected the page cap to stop pagination");
 }

@@ -10,7 +10,8 @@ fn bb(server: &MockServer) -> Command {
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())
         .env("BB_REPO", "acme/widgets")
-        .env("NO_COLOR", "1");
+        .env("NO_COLOR", "1")
+        .env("BB_KEYRING_DISABLE", "1");
     cmd
 }
 
@@ -172,3 +173,81 @@ async fn comments_only_skips_the_pull_request_lookup() {
         .success()
         .stdout(contains("general remark"));
 }
+
+/// Same pull-request mock as `mock_pr_and_comments`, with a caller-supplied comment page.
+async fn mock_pr_and_comments_with(server: &MockServer, comments: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 7,
+            "title": "A change",
+            "state": "OPEN",
+            "author": { "display_name": "Me" },
+            "source": { "branch": { "name": "feature/x" } },
+            "destination": { "branch": { "name": "main" } },
+            "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/7" } }
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(comments))
+        .mount(server)
+        .await;
+}
+
+/// With no comments at all, both sections must say so rather than render empty.
+#[tokio::test]
+async fn view_reports_none_for_empty_comment_sections() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(&server, serde_json::json!({ "values": [] })).await;
+
+    let out = bb(&server).args(["pr", "view", "7"]).output().unwrap();
+    assert!(out.status.success(), "view failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // One "none" under general comments, one under inline comments.
+    assert_eq!(
+        stdout.matches("none").count(),
+        2,
+        "expected both sections to report none: {stdout}"
+    );
+}
+
+/// An inline comment carrying a file but no line renders the bare path.
+#[tokio::test]
+async fn an_inline_comment_without_a_line_renders_just_the_path() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(
+        &server,
+        serde_json::json!({
+            "values": [{
+                "id": 500,
+                "content": { "raw": "whole-file note" },
+                "user": { "display_name": "Reviewer" },
+                "created_on": "2026-08-04T10:00:00+00:00",
+                "inline": { "path": "src/lib.rs" }
+            }]
+        }),
+    )
+    .await;
+
+    bb(&server)
+        .args(["pr", "view", "7"])
+        .assert()
+        .success()
+        .stdout(contains("src/lib.rs"))
+        .stdout(contains("whole-file note"));
+}
+
+// NOTE: the brief's fourth test — an inline comment with neither path nor
+// line, expecting the dash fallback at pr_comments.rs:135 — is not included.
+// `Comment::is_inline()` (src/api/models.rs:110-114) only classifies a
+// comment as inline when `inline.path` is present and non-empty, and
+// `to_view()` derives `CommentView.file` from that same `path`. So any
+// comment reaching the inline-rendering loop always has `file = Some(_)`;
+// the `_ => "-".to_string()` catch-all at pr_comments.rs:135 is dead code
+// under the current model — a comment with `"inline": {}` is classified as
+// general, not inline (verified empirically: it printed under "general
+// comments", not "inline comments"). Writing a test with this input and
+// asserting on the dash string would not exercise line 135 and would
+// silently pass for the wrong reason, so it is omitted rather than faked.
