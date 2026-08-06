@@ -24,16 +24,17 @@ tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
   | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1)"
 [ -n "$tag" ] || fail "cannot determine the latest release tag"
 
-archive="bbcloud-$tag-$triple.tar.gz"
+asset_base="bbcloud-$tag-$triple"
+archive="$asset_base.tar.gz"
 base="https://github.com/$REPO/releases/download/$tag"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 printf 'downloading %s\n' "$archive"
 curl -fsSL -o "$tmp/$archive" "$base/$archive"
-curl -fsSL -o "$tmp/$archive.sha256" "$base/$archive.sha256"
+curl -fsSL -o "$tmp/$asset_base.sha256" "$base/$asset_base.sha256"
 
-expected="$(awk '{print $1; exit}' "$tmp/$archive.sha256")"
+expected="$(awk '{print $1; exit}' "$tmp/$asset_base.sha256")"
 if command -v sha256sum >/dev/null 2>&1; then
   actual="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
 elif command -v shasum >/dev/null 2>&1; then
