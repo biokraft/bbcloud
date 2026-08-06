@@ -33,6 +33,54 @@ cargo test --all
 Toolchain is pinned to 1.97 in `rust-toolchain.toml`; MSRV is 1.88. Do not lower the pin —
 current `keyring`, `reqwest`, and `wiremock` all require newer than 1.75.
 
+## Development workflow
+
+**Branches.** Start every change on a branch off `main`, named for what it is: `feat/…`,
+`fix/…`, `docs/…`, `ci/…`. Never commit to `main` directly — it is protected and requires a pull
+request with passing checks.
+
+**Before opening a pull request**, run these locally and get all three green:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+One caveat, because it bites: CI additionally sets `RUSTFLAGS: -D warnings` for the whole
+workflow, so a warning clippy tolerates locally can still turn CI red. If CI fails on a warning
+you did not see locally, that is why.
+
+**The pull request.** CI runs five jobs, and all must pass before merge: `test (macos-latest)`
+and `test (ubuntu-latest)` cover the two supported platforms; `msrv 1.88` guards the version
+floor the README promises, and needs `RUSTUP_TOOLCHAIN` set because otherwise `rust-toolchain.toml`'s
+1.97 pin would override the action's toolchain choice; `coverage` uploads to Codecov and now
+fails the build if the upload itself fails, because a silently skipped upload once left the
+badge reading "unknown" for weeks; `publish dry run` catches crates.io packaging problems before
+a real release depends on them.
+
+**Commit messages are functional, not cosmetic.** release-plz parses them to build the changelog
+and pick the next version: `feat:` earns a minor bump, `fix:` a patch, a `!` suffix or a
+`BREAKING CHANGE:` trailer a major, and `test:`/`chore:`/`ci:` are skipped from the changelog
+entirely. Get the prefix wrong and you get a wrong version number, so it matters more here than
+in a repo where the changelog is written by hand.
+
+**Releases are automated end to end. Never do any of these by hand:** edit `version` in
+`Cargo.toml`, write `CHANGELOG.md`, or create a git tag. Merging to `main` makes release-plz open
+a release PR carrying the version bump and generated changelog; merging *that* PR tags the
+commit, publishes to crates.io, builds the four target binaries with their checksums, and updates
+the Homebrew formula in `biokraft/homebrew-tap`.
+
+Two prohibitions specific to this repository's history:
+
+- **Never force-push `main`.** It was force-pushed once, while the repository was still private
+  and being prepared; that period is over. Published tags point into the current history, and
+  other people's clones descend from it.
+- **Never `git push --tags`.** Tags come only from release-plz.
+
+The `docs/` tree — design specs and execution records — lives on a separate remote outside this
+repository, which is why you will not find it here.
+
 ## Hard rules
 
 These are enforced by lints or tests. Breaking one breaks the build.
