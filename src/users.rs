@@ -1,6 +1,7 @@
 use crate::api::models::User;
 use crate::api::{repo_path, Client};
 use crate::error::{BbError, Result};
+use crate::output;
 use crate::repo::RepoSlug;
 use serde::Deserialize;
 
@@ -11,16 +12,30 @@ struct Membership {
     user: Option<User>,
 }
 
+/// `/repositories/{ws}/{repo}/permissions-config/users` wraps each user in a
+/// permission entry, one per person with explicit repo access. This is
+/// repo-scoped, so it still works when the token lacks workspace scope and
+/// `/workspaces/{ws}/members` 403s — it is the primary pool for that case.
+#[derive(Debug, Deserialize)]
+struct RepoPermission {
+    user: Option<User>,
+}
+
 pub async fn current_user(client: &Client) -> Result<User> {
     client.get_json("/user").await
 }
 
-/// Everyone `query` could plausibly mean, deduplicated by uuid.
-async fn candidates(client: &Client, slug: &RepoSlug, extra: &[User]) -> Result<Vec<User>> {
+/// Everyone `query` could plausibly mean, deduplicated by uuid, plus whether the
+/// `/workspaces/{ws}/members` lookup was refused (403/401) rather than merely
+/// empty — the caller uses that to decide whether an eventual no-match deserves
+/// a warning that the pool may be incomplete.
+async fn candidates(client: &Client, slug: &RepoSlug, extra: &[User]) -> Result<(Vec<User>, bool)> {
     let mut pool: Vec<User> = Vec::new();
+    let mut members_refused = false;
 
-    // The token may not carry workspace scope. That is not fatal: the smaller
-    // pools below still cover the common cases.
+    // The token may not carry workspace scope. That is not fatal: the
+    // permissions-config and default-reviewers pools below are repo-scoped and
+    // still cover the common cases.
     match client
         .paginate::<Membership>(&format!(
             "/workspaces/{}/members?pagelen=100",
@@ -29,9 +44,16 @@ async fn candidates(client: &Client, slug: &RepoSlug, extra: &[User]) -> Result<
         .await
     {
         Ok(memberships) => pool.extend(memberships.into_iter().filter_map(|m| m.user)),
-        Err(BbError::Api { status: 403, .. }) | Err(BbError::Auth) => {}
+        Err(BbError::Api { status: 403, .. }) | Err(BbError::Auth) => {
+            members_refused = true;
+        }
         Err(other) => return Err(other),
     }
+
+    let permissions: Vec<RepoPermission> = client
+        .paginate(&repo_path(slug, "/permissions-config/users?pagelen=100"))
+        .await?;
+    pool.extend(permissions.into_iter().filter_map(|p| p.user));
 
     let defaults: Vec<User> = client
         .paginate(&repo_path(slug, "/default-reviewers?pagelen=100"))
@@ -59,7 +81,7 @@ async fn candidates(client: &Client, slug: &RepoSlug, extra: &[User]) -> Result<
         None => true,
     });
 
-    Ok(pool)
+    Ok((pool, members_refused))
 }
 
 fn matches(user: &User, needle: &str) -> bool {
@@ -103,7 +125,7 @@ pub async fn resolve_user(
     }
 
     let needle = query.to_lowercase();
-    let pool = candidates(client, slug, extra).await?;
+    let (pool, members_refused) = candidates(client, slug, extra).await?;
 
     // An exact name wins outright, or a workspace holding both "ana" and
     // "anastasia" makes "ana" unaddressable forever.
@@ -114,9 +136,17 @@ pub async fn resolve_user(
 
     match found.len() {
         1 => Ok(found.remove(0)),
-        0 => Err(BbError::Config(format!(
-            "no user matching `{query}` — pass a `{{uuid}}` to be exact"
-        ))),
+        0 => {
+            if members_refused {
+                output::warn(
+                    "the workspace member list could not be read (missing scope) — \
+                     the candidate pool may be incomplete; pass a `{uuid}` to be exact",
+                );
+            }
+            Err(BbError::Config(format!(
+                "no user matching `{query}` — pass a `{{uuid}}` to be exact"
+            )))
+        }
         _ => {
             let names: Vec<&str> = found.iter().map(|u| u.name()).collect();
             Err(BbError::Config(format!(

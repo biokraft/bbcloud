@@ -214,6 +214,11 @@ async fn mount_members(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(server)
+        .await;
 }
 
 /// `@me` and the review-state filters need to know who the token belongs to.

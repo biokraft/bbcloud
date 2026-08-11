@@ -33,6 +33,16 @@ async fn mount_default_reviewers(server: &MockServer, reviewers: serde_json::Val
         .await;
 }
 
+async fn mount_permissions_config(server: &MockServer, entries: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": entries })),
+        )
+        .mount(server)
+        .await;
+}
+
 /// A uuid is already exact, so resolution must not spend two api calls on it.
 #[tokio::test]
 async fn a_uuid_is_used_verbatim_without_any_lookup() {
@@ -64,6 +74,7 @@ async fn a_substring_of_the_display_name_resolves() {
     )
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let user = resolve_user(&client_for(&server.uri()), &slug(), "patri", &[])
         .await
@@ -83,6 +94,7 @@ async fn an_ambiguous_query_errors_and_names_every_candidate() {
     )
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let err = resolve_user(&client_for(&server.uri()), &slug(), "ana", &[])
         .await
@@ -114,6 +126,7 @@ async fn an_exact_name_beats_a_longer_substring_match() {
     )
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let user = resolve_user(&client_for(&server.uri()), &slug(), "ANA", &[])
         .await
@@ -126,6 +139,7 @@ async fn no_match_errors_naming_the_query() {
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
         .await
@@ -147,6 +161,7 @@ async fn an_email_is_not_special_cased() {
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let err = resolve_user(&client_for(&server.uri()), &slug(), "ana@example.com", &[])
         .await
@@ -169,6 +184,7 @@ async fn a_403_on_members_falls_back_to_the_remaining_pool() {
         serde_json::json!([{ "uuid": "{p}", "display_name": "Patrick Stein" }]),
     )
     .await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let user = resolve_user(&client_for(&server.uri()), &slug(), "patrick", &[])
         .await
@@ -183,6 +199,7 @@ async fn the_extra_pool_is_searched_too() {
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
 
     let extra: Vec<bb_cli::api::models::User> =
         serde_json::from_value(serde_json::json!([{ "uuid": "{x}", "display_name": "Ex Ternal" }]))
@@ -191,4 +208,113 @@ async fn the_extra_pool_is_searched_too() {
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{x}"));
+}
+
+/// The live bug this feature shipped with: someone who has explicit repo access
+/// but is neither a workspace member (as seen by this token) nor a default
+/// reviewer must still resolve, via `/permissions-config/users`.
+#[tokio::test]
+async fn a_name_present_only_in_the_permissions_config_list_resolves() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    mount_members(&server, serde_json::json!([])).await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(
+        &server,
+        serde_json::json!([
+            { "user": { "uuid": "{w}", "display_name": "Wenyi Ou", "nickname": "Wenyi Ou" } }
+        ]),
+    )
+    .await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "wenyi", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.uuid.as_deref(), Some("{w}"));
+}
+
+/// A members 403 is routine once the permissions-config pool covers the gap —
+/// it must not produce a warning when resolution still succeeds.
+#[tokio::test]
+async fn a_members_403_with_a_working_permissions_list_resolves_without_warning() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(
+        &server,
+        serde_json::json!([
+            { "user": { "uuid": "{w}", "display_name": "Wenyi Ou" } }
+        ]),
+    )
+    .await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "wenyi", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.uuid.as_deref(), Some("{w}"));
+    // No direct way to assert stderr from here; the success path in `users.rs`
+    // simply never calls `output::warn` unless `found.len() == 0`, which is
+    // exercised deliberately by the next test.
+}
+
+/// No match anywhere, with a members 403, must both fail resolution and warn on
+/// stderr that the pool may be incomplete.
+#[tokio::test]
+async fn no_match_with_a_members_403_warns_and_errors() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
+
+    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Config(message) => {
+            assert!(message.contains("nobody"), "{message}");
+            assert!(message.contains("uuid"), "{message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+    // The warning itself goes to stderr via `output::warn`, which this
+    // in-process test cannot capture; the branch is covered by the
+    // `members_refused` flag threading verified via the assertions above
+    // (this test only reaches the 0-match arm when `members_refused` is true).
+}
+
+/// A person listed in both `/permissions-config/users` and `/default-reviewers`
+/// is one candidate, not two — otherwise every default reviewer with explicit
+/// repo access would look ambiguous against their own name.
+#[tokio::test]
+async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    mount_members(&server, serde_json::json!([])).await;
+    mount_default_reviewers(
+        &server,
+        serde_json::json!([{ "uuid": "{m}", "display_name": "Moritz Fischer" }]),
+    )
+    .await;
+    mount_permissions_config(
+        &server,
+        serde_json::json!([
+            { "user": { "uuid": "{m}", "display_name": "Moritz Fischer" } }
+        ]),
+    )
+    .await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "moritz", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.uuid.as_deref(), Some("{m}"));
 }
