@@ -21,6 +21,7 @@ Do not use `gh`. Do not ask the user to open the web UI.
 5. Give a body to every comment. Use `--body` for one line. Use `--body-stdin` for more than one
    paragraph. Without a body and without a terminal, the command fails.
 6. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
+7. In a new checkout, run `bb skill install` to set up this skill. It needs no authentication.
 
 ## Read a pull request
 

@@ -141,10 +141,16 @@ src/api/mod.rs         Client: auth header, pagination, error mapping
 src/api/models.rs      serde models, all Option-tolerant with documented fallbacks
 src/output.rs          Format, tables, color, spinners, relative_time
 src/users.rs           resolve a typed name to one Bitbucket user
+src/skill.rs           embedded SKILL.md, agent detection, install/status/uninstall state
 src/commands/*.rs      one module per command group
 src/commands/pr_list.rs       `pr list`: fetch, filter, render
 src/commands/pr_reviewers.rs  `pr reviewers` list/add/remove
+src/commands/skill.rs         `bb skill install/status/uninstall`
 ```
+
+**`bb skill *` deliberately bypasses `Ctx`.** It needs no `Client`, no `RepoSlug`, and no
+credentials — it only reads and writes local skill files, so it must keep working on a machine
+that has never run `bb auth login`. Do not thread it through `Ctx` as a drive-by refactor.
 
 **`Ctx` is the shared per-command context** and lives in `src/commands/pr.rs`:
 

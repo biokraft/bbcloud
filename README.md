@@ -32,7 +32,8 @@ $ bb pr list
 brew install biokraft/tap/bb
 ```
 
-Recommended: updates via `brew upgrade`, no Rust toolchain needed.
+Recommended: updates via `brew update && brew upgrade`, no Rust toolchain needed. (`brew upgrade`
+alone does not refresh the tap, so a freshly published version can stay invisible.)
 
 ### Alternatives
 
@@ -155,25 +156,29 @@ agent to answer comment threads and report them, and to leave the resolve decisi
 Install it into a project:
 
 ```bash
-mkdir -p .agents/skills/bitbucket-cloud
-curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/.agents/skills/bitbucket-cloud/SKILL.md \
-  -o .agents/skills/bitbucket-cloud/SKILL.md
+bb skill install
 ```
+
+The skill text ships inside the `bb` binary, so this needs no network and no credentials. It
+detects which agents the project uses — `.claude/` means Claude Code, any of `.agents/`,
+`.cursor/`, `.opencode/` means the portable location — and defaults to `.agents/skills/` if it
+finds none. Pass `--agent agents|claude|all` to pick explicitly, or `--global` to install under
+your home directory instead, so every project picks it up.
 
 | Agent | Discovers skills in | Extra step |
 | --- | --- | --- |
 | [Codex](https://learn.chatgpt.com/docs/build-skills) | `.agents/skills/`, `~/.agents/skills/` | none |
 | [Cursor](https://cursor.com/docs/skills) | `.agents/skills/`, `.cursor/skills/`, and the `~/` equivalents | none |
 | [OpenCode](https://opencode.ai/docs/skills/) | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` | none |
-| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | link it, see below |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | none — `bb skill install` writes a symlink there |
 
-```bash
-mkdir -p .claude/skills
-ln -s ../../.agents/skills/bitbucket-cloud .claude/skills/bitbucket-cloud
-```
+Run `bb skill status` to see where the skill is installed and whether each copy is current, stale
+or has been edited locally. `bb update` refreshes every tracked copy to match the binary, so the
+skill never drifts — a locally edited file is left alone and reported instead of overwritten.
 
-To get the skill in every project, install it under your home directory instead: `~/.agents/skills/`
-for Codex, Cursor and OpenCode, `~/.claude/skills/` for Claude Code.
+Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
+home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
+as `install`.
 
 Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
 *"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into

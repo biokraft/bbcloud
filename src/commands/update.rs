@@ -79,6 +79,11 @@ pub fn asset_names(tag: &str, triple: &str) -> (String, String) {
 
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com";
 
+/// `brew upgrade bb` alone never fetches the tap, so a freshly published
+/// formula stays invisible and reports "already installed" even when a
+/// newer release exists. `brew update` (no arguments) is what refreshes it.
+const HOMEBREW_UPDATE_HINT: &str = "brew update && brew upgrade bb";
+
 #[derive(Debug, Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -166,6 +171,64 @@ pub fn release_api_base() -> String {
     std::env::var("BB_UPDATE_API_BASE").unwrap_or_else(|_| DEFAULT_RELEASE_API.to_string())
 }
 
+/// Header lookup that treats every header as optional: they only exist on
+/// GitHub's responses, so any other host (or a malformed/missing header)
+/// must fall through cleanly rather than panicking.
+fn header_str<'a>(response: &'a reqwest::Response, name: &str) -> Option<&'a str> {
+    response.headers().get(name)?.to_str().ok()
+}
+
+/// Renders a GitHub `x-ratelimit-reset` epoch as a local wall-clock
+/// `HH:MM`. Returns `None` for a missing or unparseable header rather than
+/// falling back to the Unix epoch (`1970-01-01`), which would be a lie.
+fn retry_time(response: &reqwest::Response) -> Option<String> {
+    let epoch: i64 = header_str(response, "x-ratelimit-reset")?.parse().ok()?;
+    format_epoch_local(epoch)
+}
+
+/// Renders a Unix epoch as a local `HH:MM`, rejecting negative values rather
+/// than letting them render as a pre-1970 clock.
+fn format_epoch_local(epoch: i64) -> Option<String> {
+    if epoch < 0 {
+        return None;
+    }
+    let utc = chrono::DateTime::from_timestamp(epoch, 0)?;
+    Some(
+        utc.with_timezone(&chrono::Local)
+            .format("%H:%M")
+            .to_string(),
+    )
+}
+
+/// Maps a non-success release-api response to an honest error: a GitHub
+/// unauthenticated rate limit is named as such (with a retry time when the
+/// header allows one), and anything else is reported as a plain release-api
+/// error rather than a false "cannot reach" / "bitbucket" claim.
+fn release_error(response: &reqwest::Response) -> BbError {
+    let status = response.status();
+    let remaining = header_str(response, "x-ratelimit-remaining");
+    let is_rate_limited = matches!(status.as_u16(), 403 | 429) && remaining == Some("0");
+
+    let message = if is_rate_limited {
+        match retry_time(response) {
+            Some(time) => format!(
+                "github api rate limit reached — 60 requests per hour for unauthenticated access, retry after {time}"
+            ),
+            None => "github api rate limit reached — 60 requests per hour for unauthenticated access".to_string(),
+        }
+    } else {
+        status
+            .canonical_reason()
+            .unwrap_or("unknown error")
+            .to_string()
+    };
+
+    BbError::Release {
+        status: status.as_u16(),
+        message,
+    }
+}
+
 pub async fn run(format: Format, base_url: &str) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     let http = release_client()?;
@@ -175,36 +238,56 @@ pub async fn run(format: Format, base_url: &str) -> Result<()> {
     );
     let response = http.get(&url).send().await?;
     if !response.status().is_success() {
-        return Err(BbError::Api {
-            status: response.status().as_u16(),
-            message: "cannot reach the release api".into(),
-        });
+        return Err(release_error(&response));
     }
     let body = bound_body(response, MAX_RELEASE_JSON_BYTES, "release metadata").await?;
     let release: Release = serde_json::from_slice(&body)?;
     let latest = release.tag_name.clone();
 
-    if !is_newer(&latest, current) {
-        return report(format, current, &latest, true, "none");
-    }
+    let (action, up_to_date) = if !is_newer(&latest, current) {
+        ("none", true)
+    } else {
+        let exe = std::env::current_exe().map_err(BbError::Io)?;
+        let action = match classify_install(&exe) {
+            InstallKind::Homebrew => HOMEBREW_UPDATE_HINT,
+            InstallKind::Cargo => "cargo install bbcloud --locked --force",
+            InstallKind::Standalone => {
+                // The https-only requirement below is scoped to real usage: it
+                // only applies when the release api itself is https (the
+                // production default). The `BB_UPDATE_API_BASE` test override
+                // that points at a local http wiremock server also relaxes the
+                // asset-url check, so integration tests can exercise the
+                // download-and-unpack path without standing up TLS.
+                let require_https = base_url.starts_with("https://");
+                self_update(&http, &release, &exe, require_https).await?;
+                "self-updated"
+            }
+        };
+        (action, false)
+    };
 
-    let exe = std::env::current_exe().map_err(BbError::Io)?;
-    let action = match classify_install(&exe) {
-        InstallKind::Homebrew => "brew upgrade bb",
-        InstallKind::Cargo => "cargo install bbcloud --locked --force",
-        InstallKind::Standalone => {
-            // The https-only requirement below is scoped to real usage: it
-            // only applies when the release api itself is https (the
-            // production default). The `BB_UPDATE_API_BASE` test override
-            // that points at a local http wiremock server also relaxes the
-            // asset-url check, so integration tests can exercise the
-            // download-and-unpack path without standing up TLS.
-            let require_https = base_url.starts_with("https://");
-            self_update(&http, &release, &exe, require_https).await?;
-            "self-updated"
+    // `brew upgrade bb` and `cargo install` never run our code, so this is the
+    // only moment we can bring skill files up to date with the running binary.
+    // Refreshing runs on every path `run()` can take, including up-to-date,
+    // since that is the only path most Homebrew/Cargo users ever hit.
+    let skill_outcomes = match crate::skill::refresh_tracked() {
+        Ok(outcomes) => outcomes,
+        // The binary upgrade already succeeded and is what the user actually
+        // wanted; a filesystem problem here is a warning, not an exit code.
+        Err(err) => {
+            output::warn(&format!("could not refresh agent skills: {err}"));
+            Vec::new()
         }
     };
-    report(format, current, &latest, false, action)
+
+    report(
+        format,
+        current,
+        &latest,
+        up_to_date,
+        action,
+        &skill_outcomes,
+    )
 }
 
 fn report(
@@ -213,14 +296,33 @@ fn report(
     latest: &str,
     up_to_date: bool,
     action: &str,
+    skill_outcomes: &[crate::skill::Outcome],
 ) -> Result<()> {
+    let refreshed: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::Refreshed)
+        .collect();
+    let skipped: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::SkippedModified)
+        .collect();
+
     match format {
-        Format::Json => output::print_json(&serde_json::json!({
-            "current": current,
-            "latest": latest,
-            "up_to_date": up_to_date,
-            "action": action,
-        })),
+        Format::Json => {
+            let mut payload = serde_json::json!({
+                "current": current,
+                "latest": latest,
+                "up_to_date": up_to_date,
+                "action": action,
+            });
+            if !skill_outcomes.is_empty() {
+                payload["skills"] = serde_json::json!({
+                    "refreshed": refreshed.len(),
+                    "skipped_modified": skipped.iter().map(|o| &o.path).collect::<Vec<_>>(),
+                });
+            }
+            output::print_json(&payload)
+        }
         Format::Human => {
             if up_to_date {
                 output::success(&format!("bb {current} is up to date"));
@@ -231,6 +333,19 @@ fn report(
                 } else {
                     output::info(&format!("this install is managed elsewhere; run: {action}"));
                 }
+            }
+            if !refreshed.is_empty() {
+                output::success(&format!(
+                    "refreshed {} tracked agent skill{}",
+                    refreshed.len(),
+                    if refreshed.len() == 1 { "" } else { "s" }
+                ));
+            }
+            for outcome in &skipped {
+                output::info(&format!(
+                    "skipped modified skill (customized locally): {}",
+                    outcome.path.display()
+                ));
             }
             Ok(())
         }
@@ -422,6 +537,15 @@ mod tests {
         }
     }
 
+    /// `brew upgrade bb` alone does not refresh the tap, so a freshly
+    /// published formula stays invisible; the hint must run `brew update`
+    /// first. This exercises the same literal `run()` delegates to for a
+    /// Homebrew install.
+    #[test]
+    fn homebrew_hint_refreshes_the_tap_before_upgrading() {
+        assert_eq!(HOMEBREW_UPDATE_HINT, "brew update && brew upgrade bb");
+    }
+
     #[test]
     fn cargo_bin_is_detected() {
         assert_eq!(
@@ -487,6 +611,18 @@ mod tests {
         assert!(
             checked_asset_url("bb.tar.gz", "http://127.0.0.1:1234/bb.tar.gz".into(), false).is_ok()
         );
+    }
+
+    /// A negative epoch must never render a pre-1970 clock.
+    #[test]
+    fn negative_epoch_is_rejected() {
+        assert_eq!(format_epoch_local(-1), None);
+        assert_eq!(format_epoch_local(-1_000_000), None);
+    }
+
+    #[test]
+    fn a_valid_epoch_still_formats() {
+        assert!(format_epoch_local(1_786_452_151).is_some());
     }
 
     #[test]

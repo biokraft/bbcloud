@@ -62,6 +62,38 @@ enum Command {
     },
     /// Check for a newer release and update this install
     Update,
+    /// Install the bundled agent skill so your coding agent can drive `bb`
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// Install or refresh the skill for the agents in this project
+    Install {
+        /// Which agent layout to write: agents, claude or all (default: auto-detect)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Install into your home directory instead of this project
+        #[arg(long)]
+        global: bool,
+        /// Overwrite a skill file that was edited locally
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show where the skill is installed and whether it is current
+    Status,
+    /// Remove skills this tool installed
+    Uninstall {
+        /// Act on your home directory instead of this project
+        #[arg(long)]
+        global: bool,
+        /// Remove a skill file that was edited locally
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -382,6 +414,17 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Update => {
             commands::update::run(format, &commands::update::release_api_base()).await
         }
+        Command::Skill { command } => match command {
+            SkillCommand::Install {
+                agent,
+                global,
+                force,
+            } => commands::skill::install(format, agent.as_deref(), global, force),
+            SkillCommand::Status => commands::skill::status(format),
+            SkillCommand::Uninstall { global, force } => {
+                commands::skill::uninstall(format, global, force)
+            }
+        },
     }
 }
 
