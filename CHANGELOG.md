@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/biokraft/bbcloud/compare/v0.9.5...v0.10.0) - 2026-08-11
+
+### Added
+
+- *(pr)* reviewer visibility, tagging, and review-state filters ([#12](https://github.com/biokraft/bbcloud/pull/12))
+
 ## [0.9.5](https://github.com/biokraft/bbcloud/compare/v0.9.4...v0.9.5) - 2026-08-11
 
 ## [0.9.4](https://github.com/biokraft/bbcloud/compare/v0.9.3...v0.9.4) - 2026-08-11
