@@ -23,18 +23,27 @@ Do not use `gh`. Do not ask the user to open the web UI.
 ## Read a pull request
 
 ```bash
-bb pr list --json                       # open pull requests
-bb pr list main --state MERGED --json   # filter by target branch and state
-bb pr view 42 --json                    # the pull request, plus all comments
-bb pr view 42 --unresolved --json       # only the threads that still need an answer
-bb pr diff 42                           # raw diff, plain text
-bb pr files 42 --json                   # changed paths
-bb pr commits 42 --json                 # commits, short hashes
+bb pr list --json                          # open pull requests
+bb pr list main --state MERGED --json      # filter by target branch and state
+bb pr list --state all --json              # every state, not just OPEN
+bb pr list --needs-my-review --json        # I'm a reviewer and haven't approved yet
+bb pr list --reviewer patrick --json       # PRs that person is tagged on
+bb pr list --author @me --json             # PRs I opened; @me resolves the authenticated account
+bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
+bb pr view 42 --json                       # the pull request, plus all comments
+bb pr view 42 --unresolved --json          # only the threads that still need an answer
+bb pr diff 42                              # raw diff, plain text
+bb pr files 42 --json                      # changed paths
+bb pr commits 42 --json                    # commits, short hashes
 ```
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
 `timestamp`, `body`, `file`, `line` and `resolved`. Use the comment `id` to answer in the correct
 thread.
+
+`bb pr list` returns `state` (raw API value, e.g. `"OPEN"`), `draft` (bool), and `reviewers`, an
+array of `{name, uuid, state}` where `state` is `approved`, `changes_requested` or `pending`.
+There is no `approvals` field.
 
 Find the pull request for the current branch:
 
@@ -66,6 +75,27 @@ bb pr request-changes 42 --json
 bb pr no-request-changes 42 --json
 ```
 
+## Reviewers
+
+```bash
+bb pr reviewers 42 --json                     # list, same as `list`
+bb pr reviewers add 42 patrick,raigon --json  # tag reviewers, comma-separated
+bb pr reviewers remove 42 raigon --json       # untag a reviewer
+```
+
+Names match case-insensitively as a substring of display name or nickname, against the
+repository's user list plus its default reviewers. An exact match wins over a longer substring
+match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when ambiguous.
+Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
+
+Every name is resolved before any write, so one bad name in `add 42 a,b` writes nothing. Adding
+someone already tagged makes no write and exits 0. Removing someone not tagged is an error, exit
+1, with no write. Bitbucket rejects the PR's author as a reviewer (400, exit 1) — that's the
+API's rule.
+
+Approving, merging, declining and resolving comment threads are not supported. Do not attempt
+them.
+
 ## Open a pull request
 
 ```bash
@@ -93,12 +123,14 @@ Both filters match a substring, and ignore case.
 
 | Command | Result |
 |---|---|
-| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED]` | `[{id,title,author,source,destination,reviewers[],approvals[],url}]` |
+| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]` |
 | `bb pr view <id> [--unresolved] [--comments-only]` | `{pull_request,general[],inline[]}` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
+| `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
+| `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
 | `bb pr request-changes <id>` | `{requested_changes:<id>}` |
 | `bb pr no-request-changes <id>` | `{unrequested_changes:<id>}` |

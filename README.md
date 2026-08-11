@@ -18,12 +18,12 @@ credentials.
 
 ```
 $ bb pr list
-┌────┬──────────────────────────┬─────────────────┬───┬────────┬────────┬────────────┬──────────┐
-│ ID ┆ TITLE                    ┆ SOURCE          ┆ → ┆ TARGET ┆ AUTHOR ┆ REVIEWERS  ┆ APPROVED │
-╞════╪══════════════════════════╪═════════════════╪═══╪════════╪════════╪════════════╪══════════╡
-│ 42 ┆ Cache session lookups    ┆ feat/cache      ┆ → ┆ main   ┆ dev    ┆ Ada, Linus ┆ Ada      │
-│ 41 ┆ Fix token refresh window ┆ fix/token-clock ┆ → ┆ main   ┆ dev    ┆ Linus      ┆          │
-└────┴──────────────────────────┴─────────────────┴───┴────────┴────────┴────────────┴──────────┘
+┌────┬──────────────────────────┬───────┬─────────────────┬───┬────────┬────────┬───────────────────────────┐
+│ ID ┆ TITLE                    ┆ STATE ┆ SOURCE          ┆ → ┆ TARGET ┆ AUTHOR ┆ REVIEWERS                 │
+╞════╪══════════════════════════╪═══════╪═════════════════╪═══╪════════╪════════╪═══════════════════════════╡
+│ 42 ┆ Cache session lookups    ┆ Open  ┆ feat/cache      ┆ → ┆ main   ┆ dev    ┆ Patrick ✓, Raigon ✗, Ana · │
+│ 41 ┆ Fix token refresh window ┆ Draft ┆ fix/token-clock ┆ → ┆ main   ┆ dev    ┆ Linus ·                   │
+└────┴──────────────────────────┴───────┴─────────────────┴───┴────────┴────────┴───────────────────────────┘
 ```
 
 ## Install
@@ -106,13 +106,18 @@ cd any-bitbucket-repo && bb pr list
 `bb <noun> <verb>`:
 
 ```bash
-bb pr list                                # open PRs, with reviewers and approvals
+bb pr list                                # open PRs, with state and per-reviewer decisions
+bb pr list --needs-my-review              # only PRs waiting on your review
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
+bb pr reviewers add 42 patrick            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb branch list --user alice
 bb update                                 # check for a newer release and update
 ```
+
+`bb pr list` also takes `--reviewer <name>`, `--author <name|@me>`, `--review-state
+approved|changes-requested|pending`, and `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`.
 
 `bb update` compares your version against the latest GitHub release. If Homebrew or cargo installed
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they
@@ -124,7 +129,7 @@ One thing worth knowing that `--help` won't tell you:
 tables, whose layout is not a contract. Scripts and agents should default to it.
 
 ```bash
-bb pr list --json | jq -r '.[] | select(.approvals == []) | "\(.id)\t\(.title)"'
+bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved")) | "\(.id)\t\(.title)"'
 ```
 
 Shell completions make the rest discoverable:
