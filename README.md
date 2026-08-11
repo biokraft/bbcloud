@@ -169,6 +169,10 @@ Run `bb skill status` to see where the skill is installed and whether each copy 
 or has been edited locally. `bb update` refreshes every tracked copy to match the binary, so the
 skill never drifts — a locally edited file is left alone and reported instead of overwritten.
 
+Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
+home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
+as `install`.
+
 Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
 *"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
 `AGENTS.md` or `CLAUDE.md` — it is plain Markdown.
