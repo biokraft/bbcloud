@@ -69,12 +69,21 @@ asserts the exact query string reaches the server.
 
 ## Name resolution — `src/users.rs` (new)
 
-`pub async fn resolve_user(ctx: &Ctx, query: &str) -> Result<User>`
+`pub async fn resolve_user(client: &Client, slug: &RepoSlug, query: &str, extra: &[User]) -> Result<User>`
 
-1. A query containing `@` or starting with `{` is treated as an email or UUID and used verbatim, with
-   no lookup and no API call.
+1. A query wrapped in braces — `{9a1b…}` — is a UUID and is used verbatim, with no lookup and no API
+   call.
 2. Otherwise the query is matched case-insensitively as a substring against each candidate's
    `nickname` and `display_name`.
+
+Email addresses are deliberately **not** accepted. A reviewer is written to the API as
+`{"uuid": …}`, and Bitbucket's member listings do not expose email addresses, so an email could
+never be turned into a uuid — accepting one would mean failing later with a worse message. The
+escape hatch for an ambiguous or unlisted person is the uuid, which the error message names.
+
+`resolve_user` takes a client and a slug rather than the whole `Ctx`, so it is testable without
+constructing credentials. `extra` is the caller's additional candidate pool — `pr reviewers` passes
+the target pull request's current reviewers, `pr list` passes an empty slice.
 
 Candidate pool, deduplicated by `uuid`:
 
@@ -88,7 +97,7 @@ the remaining sources, which is enough to remove someone already tagged. Any oth
 Outcomes:
 
 - exactly one match → that user
-- zero matches → `BbError::Config("no user matching `<query>` — pass an email or uuid to be exact")`
+- zero matches → `BbError::Config("no user matching `<query>` — pass a `{uuid}` to be exact")`
 - more than one match → `BbError::Config` listing every candidate's display name, so the user can
   retry with something unambiguous
 
@@ -221,8 +230,8 @@ token, which has happened in this project before.
 6. one bad name in `add a,b` means no `PUT` at all
 
 `tests/user_resolve.rs` (new):
-1. an email is used verbatim with no members call
-2. a UUID in `{}` likewise
+1. a UUID in `{}` is used verbatim, with no members call
+2. an email address is rejected like any other unmatched query
 3. a substring resolves
 4. an ambiguous substring errors and names every candidate
 5. an exact match wins over a longer substring match
