@@ -132,75 +132,39 @@ Shell completions make the rest discoverable:
 bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 ```
 
-## Use it from Claude Code
+## Use it from an AI Agent
 
-Copy this whole block into your project's `CLAUDE.md` so your agent drives PR review through `bb`
-instead of asking you to open a browser.
+This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
+`SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
+review pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
+comment and reply flags, the exit codes, and what to do when a scope is missing.
 
-```markdown
-## Bitbucket via `bb`
+Install it into a project:
 
-This project uses Bitbucket, not GitHub. Use the `bb` CLI for all pull request work — never `gh`,
-and never ask the user to open the web UI. Run `bb --help` to discover commands.
-
-### Rules
-
-- **Always pass `--json`** and parse that. Never scrape the human-readable tables; their layout is
-  not a contract. The one exception is `pr diff`, where `--json` wraps the whole diff in an escaped
-  JSON string — read that one as plain text.
-- Never pass `-w`/`--web` — it tries to launch a browser.
-- For multi-paragraph comment bodies use `--body-stdin` and pipe the text in. Interior blank lines
-  and indentation are preserved; only trailing newlines are trimmed.
-- Exit codes are meaningful: 0 success, 1 error, 2 not authenticated, 3 not found. Branch on those
-  rather than matching error strings.
-- Add `-R workspace/repo` to act on a repository that is not the current checkout.
-
-### Reading review feedback
-
-    bb pr list --json                        # find the PR
-    bb pr view <id> --json                   # full PR plus general and inline comments
-    bb pr view <id> --unresolved --json      # only threads still needing action
-    bb pr diff <id>                          # raw diff
-    bb pr files <id> --json                  # changed paths
-
-Each entry under `.inline[]` has `file`, `line`, `author`, `body`, `resolved`, and `id`. Use that
-`id` to reply in the right thread.
-
-### Responding to review feedback
-
-    # reply in the thread you are addressing
-    bb pr comment <id> --reply-to <comment-id> --body "Fixed in <short-sha>."
-
-    # raise a new point on a specific line
-    bb pr comment <id> -f path/to/file.rs -l 88 --body "This drops the error."
-
-    # multi-paragraph body
-    printf 'Refactored as suggested.\n\nSplit the parser out.\n' | bb pr comment <id> --body-stdin
-
-### Opening a PR
-
-    bb pr create main --title "Short imperative summary"
-
-### Reviewers
-
-    bb pr reviewers 682                     # who is tagged, and what each decided
-    bb pr reviewers add 682 patrick         # tag someone (comma-separate for several)
-    bb pr reviewers remove 682 raigon       # untag someone
-
-Names are matched case-insensitively against workspace members and the repository's default
-reviewers. An ambiguous name errors and lists the candidates; pass a `{uuid}` to be exact.
-
-### Filtering the list
-
-    bb pr list --needs-my-review            # waiting on you
-    bb pr list --reviewer patrick           # tagged for someone else
-    bb pr list --author @me                 # yours
-    bb pr list --state draft                # drafts only
-    bb pr list --review-state approved      # ones you already approved
-
-`bb pr list` shows a STATE column (Draft / Open / Merged / Declined) and a REVIEWERS column
-marking each reviewer: `✓` approved, `✗` changes requested, `·` no state yet.
+```bash
+mkdir -p .agents/skills/bitbucket-cloud
+curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/.agents/skills/bitbucket-cloud/SKILL.md \
+  -o .agents/skills/bitbucket-cloud/SKILL.md
 ```
+
+| Agent | Discovers skills in | Extra step |
+| --- | --- | --- |
+| [Codex](https://learn.chatgpt.com/docs/build-skills) | `.agents/skills/`, `~/.agents/skills/` | none |
+| [Cursor](https://cursor.com/docs/skills) | `.agents/skills/`, `.cursor/skills/`, and the `~/` equivalents | none |
+| [OpenCode](https://opencode.ai/docs/skills/) | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` | none |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | link it, see below |
+
+```bash
+mkdir -p .claude/skills
+ln -s ../../.agents/skills/bitbucket-cloud .claude/skills/bitbucket-cloud
+```
+
+To get the skill in every project, install it under your home directory instead: `~/.agents/skills/`
+for Codex, Cursor and OpenCode, `~/.claude/skills/` for Claude Code.
+
+Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
+*"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
+`AGENTS.md` or `CLAUDE.md` — it is plain Markdown.
 
 ## Reference
 
