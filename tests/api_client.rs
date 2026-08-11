@@ -287,3 +287,99 @@ async fn paginate_stops_at_the_page_cap() {
     // MAX_PAGES is 100 in src/api/mod.rs.
     assert_eq!(items.len(), 100, "expected the page cap to stop pagination");
 }
+
+// Bitbucket's `/pullrequests/{id}/diff` endpoint answers 302 with a Location on
+// the same origin. The client must follow that, still carrying the credentials,
+// or `bb pr diff` fails with "bitbucket api error 302: Found".
+#[tokio::test]
+async fn follows_a_same_origin_redirect_and_replays_auth() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/1/diff"))
+        .respond_with(ResponseTemplate::new(302).insert_header(
+            "location",
+            format!("{}/diff/abc..def", server.uri()).as_str(),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/diff/abc..def"))
+        .and(header(
+            "authorization",
+            "Basic ZGV2QGV4YW1wbGUuY29tOnQwa2VuLXZhbHVl",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string("diff --git a/x b/x\n"))
+        .mount(&server)
+        .await;
+
+    let text = client_for(&server.uri())
+        .get_text("/pullrequests/1/diff")
+        .await
+        .unwrap();
+    assert_eq!(text, "diff --git a/x b/x\n");
+}
+
+// The credentials must never reach another origin, so a cross-origin redirect is
+// not followed and the 302 surfaces as an error instead.
+#[tokio::test]
+async fn does_not_follow_a_cross_origin_redirect() {
+    let elsewhere = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+        .mount(&elsewhere)
+        .await;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/1/diff"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/steal", elsewhere.uri()).as_str()),
+        )
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_text("/pullrequests/1/diff")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, BbError::Api { status: 302, .. }),
+        "expected the cross-origin redirect to stop, got {err:?}"
+    );
+    assert!(
+        elsewhere
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the client sent the credentials to another origin"
+    );
+}
+
+// A redirect that never terminates must stop at the hop cap rather than loop.
+#[tokio::test]
+async fn stops_a_redirect_loop_at_the_hop_cap() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/loop"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/loop", server.uri()).as_str()),
+        )
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_text("/loop")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, BbError::Api { status: 302, .. }),
+        "expected the hop cap to stop the loop, got {err:?}"
+    );
+    // MAX_REDIRECTS is 5 in src/api/mod.rs, so the server sees the original
+    // request plus five followed redirects and nothing more.
+    let hops = server.received_requests().await.unwrap_or_default().len();
+    assert_eq!(hops, 6, "expected exactly 5 followed redirects");
+}

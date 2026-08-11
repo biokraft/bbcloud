@@ -10,6 +10,7 @@ use std::time::Duration;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.bitbucket.org/2.0";
 const MAX_PAGES: usize = 100;
+const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
@@ -26,6 +27,23 @@ pub fn repo_path(slug: &RepoSlug, suffix: &str) -> String {
     format!("/repositories/{}{}", slug.path(), suffix)
 }
 
+/// Bitbucket answers some endpoints — `/pullrequests/{id}/diff` among them —
+/// with a 302 to another url on the same origin, so redirects have to be
+/// followed or those commands fail outright. They are followed only within the
+/// same origin: the Authorization header is attached to every request this
+/// client makes, and it must never be replayed to another host.
+fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        match attempt.previous().last() {
+            Some(previous) if previous.origin() == attempt.url().origin() => attempt.follow(),
+            _ => attempt.stop(),
+        }
+    })
+}
+
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -35,8 +53,7 @@ pub struct Client {
 impl Client {
     pub fn new(creds: Credentials, base_url: String) -> Result<Self> {
         let http = reqwest::Client::builder()
-            // Never replay the Authorization header to another host.
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(same_origin_redirect_policy())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .user_agent(concat!("bb-cli/", env!("CARGO_PKG_VERSION")))
