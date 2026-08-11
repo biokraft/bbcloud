@@ -132,57 +132,7 @@ Shell completions make the rest discoverable:
 bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 ```
 
-## Use it from Claude Code
-
-Copy this whole block into your project's `CLAUDE.md` so your agent drives PR review through `bb`
-instead of asking you to open a browser.
-
-```markdown
-## Bitbucket via `bb`
-
-This project uses Bitbucket, not GitHub. Use the `bb` CLI for all pull request work — never `gh`,
-and never ask the user to open the web UI. Run `bb --help` to discover commands.
-
-### Rules
-
-- **Always pass `--json`** and parse that. Never scrape the human-readable tables; their layout is
-  not a contract. The one exception is `pr diff`, where `--json` wraps the whole diff in an escaped
-  JSON string — read that one as plain text.
-- Never pass `-w`/`--web` — it tries to launch a browser.
-- For multi-paragraph comment bodies use `--body-stdin` and pipe the text in. Interior blank lines
-  and indentation are preserved; only trailing newlines are trimmed.
-- Exit codes are meaningful: 0 success, 1 error, 2 not authenticated, 3 not found. Branch on those
-  rather than matching error strings.
-- Add `-R workspace/repo` to act on a repository that is not the current checkout.
-
-### Reading review feedback
-
-    bb pr list --json                        # find the PR
-    bb pr view <id> --json                   # full PR plus general and inline comments
-    bb pr view <id> --unresolved --json      # only threads still needing action
-    bb pr diff <id>                          # raw diff
-    bb pr files <id> --json                  # changed paths
-
-Each entry under `.inline[]` has `file`, `line`, `author`, `body`, `resolved`, and `id`. Use that
-`id` to reply in the right thread.
-
-### Responding to review feedback
-
-    # reply in the thread you are addressing
-    bb pr comment <id> --reply-to <comment-id> --body "Fixed in <short-sha>."
-
-    # raise a new point on a specific line
-    bb pr comment <id> -f path/to/file.rs -l 88 --body "This drops the error."
-
-    # multi-paragraph body
-    printf 'Refactored as suggested.\n\nSplit the parser out.\n' | bb pr comment <id> --body-stdin
-
-### Opening a PR
-
-    bb pr create main --title "Short imperative summary"
-```
-
-## Use it from an AI agent
+## Use it from an AI Agent
 
 This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
 `SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
