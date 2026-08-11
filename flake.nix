@@ -15,28 +15,15 @@
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     in
     {
+      overlays.default = final: _prev: {
+        bbcloud = final.callPackage ./package.nix { };
+      };
+
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          manifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-          bbcloud = pkgs.rustPlatform.buildRustPackage {
-            pname = manifest.package.name;
-            inherit (manifest.package) version;
-
-            src = ./.;
-            cargoLock.lockFile = ./Cargo.lock;
-
-            # The Linux Secret Service backend builds its vendored OpenSSL with Perl.
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.perl ];
-            doCheck = false;
-
-            meta = {
-              inherit (manifest.package) description homepage;
-              license = pkgs.lib.licenses.mit;
-              mainProgram = "bb";
-            };
-          };
+          bbcloud = pkgs.callPackage ./package.nix { };
         in
         {
           inherit bbcloud;
