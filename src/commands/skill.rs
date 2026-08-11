@@ -70,7 +70,12 @@ pub fn install(format: Format, agent: Option<&str>, global: bool, force: bool) -
         Format::Json => output::print_json(&rows)?,
         Format::Human => {
             for row in &rows {
-                output::success(&format!("{} {}", row.action, row.path));
+                let line = format!("{} {}", row.action, row.path);
+                match row.action.as_str() {
+                    "unchanged" => output::info(&line),
+                    "skipped_modified" => output::warn(&line),
+                    _ => output::success(&line),
+                }
             }
         }
     }

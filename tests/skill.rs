@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)] // test code is exempt from the unwrap/expect ban
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 /// Runs `bb` with the project root and both config locations pointed inside
@@ -85,6 +86,8 @@ fn a_modified_skill_makes_install_exit_one_without_clobbering() {
         .args(["skill", "install"])
         .assert()
         .code(1)
+        .stdout(contains("skipped_modified").not())
+        .stderr(contains("skipped_modified"))
         .stderr(contains("--force"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# ours\n");
 
