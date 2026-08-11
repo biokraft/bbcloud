@@ -20,7 +20,13 @@ struct StatusRowJson {
 #[derive(Serialize)]
 struct UninstallRowJson {
     path: String,
-    removed: bool,
+    /// One of "removed", "refused_modified", "refused_unsafe_path", "absent" —
+    /// kept as an explicit outcome string rather than a boolean so a consumer
+    /// can tell "we refused to touch a local edit" apart from "there was
+    /// nothing there to remove"; collapsing those into one `removed: false`
+    /// used to make an honest "it just wasn't there" render as the same lie
+    /// as a refusal, in both human text and this JSON.
+    outcome: String,
 }
 
 pub fn install(format: Format, agent: Option<&str>, global: bool, force: bool) -> Result<()> {
@@ -121,6 +127,11 @@ pub fn status(format: Format) -> Result<()> {
                 })
                 .collect();
             output::print_table(&["PATH", "AGENT", "STATE"], table_rows);
+            output::info(&format!(
+                "{} tracked skill{}",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" }
+            ));
         }
     }
     Ok(())
@@ -139,9 +150,9 @@ pub fn uninstall(format: Format, global: bool, force: bool) -> Result<()> {
         Format::Json => {
             let json_rows: Vec<UninstallRowJson> = results
                 .iter()
-                .map(|(path, removed)| UninstallRowJson {
+                .map(|(path, outcome)| UninstallRowJson {
                     path: path.display().to_string(),
-                    removed: *removed,
+                    outcome: outcome.as_str().to_string(),
                 })
                 .collect();
             output::print_json(&json_rows)?;
@@ -150,14 +161,23 @@ pub fn uninstall(format: Format, global: bool, force: bool) -> Result<()> {
             if results.is_empty() {
                 output::info("nothing to uninstall");
             }
-            for (path, removed) in &results {
-                if *removed {
-                    output::success(&format!("removed {}", path.display()));
-                } else {
-                    output::warn(&format!(
+            for (path, outcome) in &results {
+                match outcome {
+                    skill::RemovalOutcome::Removed => {
+                        output::success(&format!("removed {}", path.display()))
+                    }
+                    skill::RemovalOutcome::RefusedModified => output::warn(&format!(
                         "{} was edited locally — left alone (pass --force to remove)",
                         path.display()
-                    ));
+                    )),
+                    skill::RemovalOutcome::RefusedUnsafePath => output::warn(&format!(
+                        "{} does not look like a skill path bb would have written — left alone",
+                        path.display()
+                    )),
+                    skill::RemovalOutcome::Absent => output::info(&format!(
+                        "{} was already gone — nothing to remove",
+                        path.display()
+                    )),
                 }
             }
         }
