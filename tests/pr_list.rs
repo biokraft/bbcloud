@@ -308,7 +308,7 @@ async fn author_filter_keeps_only_that_authors_prs() {
 async fn author_me_uses_the_authenticated_account() {
     let server = MockServer::start().await;
     mount_list(&server, pr_pair()).await;
-    mount_me(&server, "{me}", "Ana").await;
+    mount_me(&server, "{a}", "Ana").await;
 
     let out = bb(&server)
         .args(["pr", "list", "--author", "@me"])
@@ -385,6 +385,46 @@ async fn review_state_changes_requested_matches_my_rejection() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("fix the thing"), "{text}");
     assert!(!text.contains("other thing"), "{text}");
+}
+
+#[tokio::test]
+async fn review_state_pending_matches_an_unreviewed_tag() {
+    let server = MockServer::start().await;
+    mount_list(&server, pr_pair()).await;
+    // Cy is tagged on 7 but has no participant entry, so their state is Pending.
+    // Cy is not tagged on 8 at all.
+    mount_me(&server, "{c}", "Cy").await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--review-state", "pending"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("fix the thing"), "{text}");
+    assert!(!text.contains("other thing"), "{text}");
+}
+
+/// `--author @me` and `--needs-my-review` both need "who am I"; they must share one
+/// `GET /user` call rather than each fetching it independently.
+#[tokio::test]
+async fn author_me_and_needs_my_review_share_a_single_user_fetch() {
+    let server = MockServer::start().await;
+    mount_list(&server, pr_pair()).await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{sean}",
+            "display_name": "Sean B",
+            "nickname": "sean"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "list", "--author", "@me", "--needs-my-review"])
+        .assert()
+        .success();
 }
 
 /// Filters must AND, not OR.

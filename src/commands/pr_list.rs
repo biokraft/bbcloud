@@ -1,4 +1,4 @@
-use crate::api::models::{PullRequest, ReviewState, ReviewerState, User};
+use crate::api::models::{PullRequest, ReviewState, ReviewerState};
 use crate::commands::pr::Ctx;
 use crate::error::Result;
 use crate::output::{self, Format};
@@ -22,7 +22,7 @@ impl ReviewStateArg {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ListArgs {
     pub destination: Option<String>,
     pub state: String,
@@ -118,15 +118,21 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
         None => None,
     };
-    let author_match: Option<User> = match args.author.as_deref() {
-        Some("@me") => Some(current_user(&ctx.client).await?),
-        Some(name) => Some(resolve_user(&ctx.client, &ctx.slug, name, &[]).await?),
-        None => None,
-    };
-    let me = if args.needs_my_review || args.review_state.is_some() {
+
+    // `GET /user` must happen at most once per invocation, so every flag that
+    // needs "who am I" (`--author @me`, `--needs-my-review`, `--review-state`)
+    // shares this single fetch instead of each fetching it independently.
+    let author_is_me = args.author.as_deref() == Some("@me");
+    let me = if author_is_me || args.needs_my_review || args.review_state.is_some() {
         my_uuid(ctx).await?
     } else {
         None
+    };
+
+    let author_uuid = match args.author.as_deref() {
+        Some("@me") => me.clone(),
+        Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
+        None => None,
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
@@ -155,13 +161,8 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
                 .any(|r| r.uuid.as_deref() == Some(uuid)),
             None => true,
         })
-        .filter(|pr| match &author_match {
-            Some(who) => {
-                let uuid_match = who.uuid.is_some()
-                    && pr.author.as_ref().and_then(|a| a.uuid.as_deref()) == who.uuid.as_deref();
-                let name_match = pr.author.as_ref().map(User::name) == Some(who.name());
-                uuid_match || name_match
-            }
+        .filter(|pr| match author_uuid.as_deref() {
+            Some(uuid) => pr.author.as_ref().and_then(|a| a.uuid.as_deref()) == Some(uuid),
             None => true,
         })
         .filter(|pr| match args.review_state {
