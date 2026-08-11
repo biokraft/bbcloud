@@ -143,7 +143,7 @@ async fn a_failed_resolution_after_a_members_403_warns_on_stderr() {
         "escape hatch missing from warning/error: {stderr}"
     );
     assert!(
-        stderr.contains("incomplete") || stderr.contains("scope"),
-        "incomplete-pool warning missing: {stderr}"
+        stderr.contains("some user lists could not be read"),
+        "incomplete-pool warning missing or reworded: {stderr}"
     );
 }

@@ -205,6 +205,33 @@ async fn one_bad_name_in_a_list_prevents_the_whole_put() {
         .stderr(contains("nobodyhere"));
 }
 
+/// A read-only token, or any other failure on the PUT, must not have already
+/// announced success. `✓ added ...` printed just before a 500 is the worst
+/// possible mixed signal on a mutating command.
+#[tokio::test]
+async fn a_failed_put_does_not_announce_success() {
+    let server = MockServer::start().await;
+    mount_get_pr(&server).await;
+    mount_members(&server).await;
+    Mock::given(method("PUT"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "reviewers", "add", "7", "patrick"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "expected a non-zero exit");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("added"),
+        "success was announced before the write completed: {stdout}"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_pr_exits_three() {
     let server = MockServer::start().await;

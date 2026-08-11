@@ -10,11 +10,14 @@ pub struct User {
 
 impl User {
     /// The name a human recognizes. `display_name` is what the Bitbucket web ui
-    /// shows, so it is preferred over the nickname.
+    /// shows, so it is preferred over the nickname. A bare `uuid` (the `{uuid}`
+    /// escape hatch has no names at all) is the next best identifier — it still
+    /// names somebody, unlike the final `"-"` fallback.
     pub fn name(&self) -> &str {
         self.display_name
             .as_deref()
             .or(self.nickname.as_deref())
+            .or(self.uuid.as_deref())
             .unwrap_or("-")
     }
 }
@@ -459,5 +462,14 @@ mod tests {
 
         let empty: User = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(empty.name(), "-");
+    }
+
+    /// The `{uuid}` escape hatch has no names at all; `name()` must still
+    /// identify the person rather than falling through to `"-"`.
+    #[test]
+    fn user_name_falls_back_to_uuid_when_no_names_are_set() {
+        let uuid_only: User =
+            serde_json::from_value(serde_json::json!({ "uuid": "{5f3a}" })).unwrap();
+        assert_eq!(uuid_only.name(), "{5f3a}");
     }
 }

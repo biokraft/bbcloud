@@ -152,8 +152,8 @@ pub async fn resolve_user(
         0 => {
             if pool_incomplete {
                 output::warn(
-                    "the workspace member list could not be read (missing scope) — \
-                     the candidate pool may be incomplete; pass a `{uuid}` to be exact",
+                    "some user lists could not be read, so the name search may be \
+                     incomplete — pass a `{uuid}` to be exact",
                 );
             }
             Err(BbError::Config(format!(

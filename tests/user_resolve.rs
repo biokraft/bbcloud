@@ -215,7 +215,6 @@ async fn the_extra_pool_is_searched_too() {
 /// reviewer must still resolve, via `/permissions-config/users`.
 #[tokio::test]
 async fn a_name_present_only_in_the_permissions_config_list_resolves() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
@@ -237,7 +236,6 @@ async fn a_name_present_only_in_the_permissions_config_list_resolves() {
 /// it must not produce a warning when resolution still succeeds.
 #[tokio::test]
 async fn a_members_403_with_a_working_permissions_list_resolves_without_warning() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/workspaces/acme/members"))
@@ -266,7 +264,6 @@ async fn a_members_403_with_a_working_permissions_list_resolves_without_warning(
 /// stderr that the pool may be incomplete.
 #[tokio::test]
 async fn no_match_with_a_members_403_warns_and_errors() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/workspaces/acme/members"))
@@ -297,7 +294,6 @@ async fn no_match_with_a_members_403_warns_and_errors() {
 /// repo access would look ambiguous against their own name.
 #[tokio::test]
 async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(
@@ -325,7 +321,6 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
 /// consulted — otherwise this fix regresses every token that isn't a repo admin.
 #[tokio::test]
 async fn a_403_on_permissions_config_falls_back_to_default_reviewers() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     mount_members(&server, serde_json::json!([])).await;
     Mock::given(method("GET"))
@@ -350,7 +345,6 @@ async fn a_403_on_permissions_config_falls_back_to_default_reviewers() {
 /// propagating either refusal as a hard failure.
 #[tokio::test]
 async fn both_lookups_refused_with_no_match_still_errors_normally() {
-    std::env::set_var("BB_KEYRING_DISABLE", "1");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/workspaces/acme/members"))

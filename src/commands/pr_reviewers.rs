@@ -64,7 +64,13 @@ async fn resolve_all(ctx: &Ctx, names: &str, pool: &[User]) -> Result<Vec<User>>
 /// There is no add-reviewer or remove-reviewer endpoint, so the whole set is
 /// written back. `title` is included because the api rejects a PUT without it;
 /// every other field is omitted and left untouched.
-async fn write_reviewers(ctx: &Ctx, id: u64, pr: &PullRequest, uuids: Vec<String>) -> Result<()> {
+async fn write_reviewers(
+    ctx: &Ctx,
+    id: u64,
+    pr: &PullRequest,
+    uuids: Vec<String>,
+    success_message: &str,
+) -> Result<()> {
     let body = serde_json::json!({
         "title": pr.title.clone().unwrap_or_default(),
         "reviewers": uuids
@@ -76,6 +82,11 @@ async fn write_reviewers(ctx: &Ctx, id: u64, pr: &PullRequest, uuids: Vec<String
         .client
         .put_json(&ctx.path(&format!("/pullrequests/{id}")), &body)
         .await?;
+    // Only announce success once the PUT has actually returned Ok — printing
+    // it earlier would claim success ahead of a write that might still fail.
+    if !ctx.format.is_json() {
+        output::success(success_message);
+    }
     render(ctx, &updated.reviewer_states())
 }
 
@@ -110,13 +121,11 @@ pub async fn add(ctx: &Ctx, id: u64, names: &str) -> Result<()> {
         return render(ctx, &pr.reviewer_states());
     }
 
-    if !ctx.format.is_json() {
-        output::success(&format!("added {}", added.join(", ")));
-        if !already.is_empty() {
-            output::info(&format!("already a reviewer: {}", already.join(", ")));
-        }
+    if !already.is_empty() && !ctx.format.is_json() {
+        output::info(&format!("already a reviewer: {}", already.join(", ")));
     }
-    write_reviewers(ctx, id, &pr, uuids).await
+    let message = format!("added {}", added.join(", "));
+    write_reviewers(ctx, id, &pr, uuids, &message).await
 }
 
 pub async fn remove(ctx: &Ctx, id: u64, names: &str) -> Result<()> {
@@ -140,8 +149,6 @@ pub async fn remove(ctx: &Ctx, id: u64, names: &str) -> Result<()> {
         removed.push(user.name().to_string());
     }
 
-    if !ctx.format.is_json() {
-        output::success(&format!("removed {}", removed.join(", ")));
-    }
-    write_reviewers(ctx, id, &pr, uuids).await
+    let message = format!("removed {}", removed.join(", "));
+    write_reviewers(ctx, id, &pr, uuids, &message).await
 }

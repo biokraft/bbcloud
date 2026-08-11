@@ -71,6 +71,22 @@ async fn list_requests_the_reviewer_fields() {
     bb(&server).args(["pr", "list"]).assert().success();
 }
 
+/// A bare `bb pr list`, with no `--state` flag at all, must default to asking
+/// bitbucket for OPEN only — otherwise merged/declined noise leaks into the
+/// default view.
+#[tokio::test]
+async fn list_with_no_state_flag_requests_open() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("state", "OPEN"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    bb(&server).args(["pr", "list"]).assert().success();
+}
+
 #[tokio::test]
 async fn list_marks_each_reviewer_with_their_state() {
     let server = MockServer::start().await;
