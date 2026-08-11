@@ -6,9 +6,48 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [0.11.0](https://github.com/biokraft/bbcloud/compare/v0.10.0...v0.11.0) - 2026-08-11
 
+Two features: comment threads can now be closed and reopened from the shell, and the bundled agent
+skill installs itself with a command instead of a `curl` recipe.
+
 ### Added
 
-- *(skill)* install the agent skill with bb skill install ([#14](https://github.com/biokraft/bbcloud/pull/14))
+- **`bb pr resolve` and `bb pr unresolve`** — close a review thread once it is answered, or reopen one
+  ([#10](https://github.com/biokraft/bbcloud/pull/10)).
+
+      bb pr resolve 42 998877        # asks for confirmation first
+      bb pr resolve 42 998877 --yes  # skip the prompt
+      bb pr unresolve 42 998877      # reopen it
+
+  Pass the id of the thread's **first** comment — the one whose `parent` is `null`, which
+  `bb pr view --unresolved --json` gives you. A reply id fails, and so does a general comment, since
+  only inline threads carry a resolution. `resolve` asks a human to confirm and fails outright with no
+  terminal attached, so closing a thread stays a deliberate act rather than something a script does by
+  accident.
+
+- **`bb skill install`** — set up this repository's Agent Skill for the coding agents in your project
+  ([#14](https://github.com/biokraft/bbcloud/pull/14)).
+
+      bb skill install     # detects .claude/, .agents/, .cursor/, .opencode/ and sets them up
+      bb skill status      # where it is installed, and whether it is current
+      bb skill uninstall
+
+  This replaces the manual `mkdir` + `curl` + symlink instructions. The skill text is embedded in the
+  binary, so installation needs no network and the installed skill can never describe flags your
+  binary lacks. Claude Code reads only `.claude/skills/`, so that path becomes a relative symlink to
+  the `.agents/` copy — the manual link step is gone. Your own edits to an installed skill are never
+  overwritten without `--force`, and `bb update` brings unmodified copies forward as the binary moves.
+  The whole group works without authentication.
+
+### Fixed
+
+- **`bb update` blamed the wrong service and hid the real problem.** A GitHub rate limit surfaced as
+  `bitbucket api error 403: cannot reach the release api` — wrong service, and the API had in fact
+  answered. It now reports `release api error 403: github api rate limit reached — 60 requests per hour
+  for unauthenticated access, retry after 14:42`, taking the retry time from the response.
+
+- **The Homebrew upgrade hint did not work.** `bb update` suggested `brew upgrade bb`, which never
+  refreshes taps, so a freshly published formula stayed invisible and the command reported "already
+  installed" while a newer version existed. It now suggests `brew update && brew upgrade bb`.
 
 ## [0.10.0](https://github.com/biokraft/bbcloud/compare/v0.9.5...v0.10.0) - 2026-08-11
 
