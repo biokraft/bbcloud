@@ -88,7 +88,7 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
-        /// State filter: OPEN, MERGED, DECLINED or SUPERSEDED
+        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
     },
@@ -195,7 +195,7 @@ async fn run(cli: Cli) -> Result<()> {
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
                 PrCommand::List { destination, state } => {
-                    commands::pr::list(&ctx, destination, state).await
+                    commands::pr_list::list(&ctx, destination, state).await
                 }
                 PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,

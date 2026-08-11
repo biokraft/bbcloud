@@ -4,4 +4,5 @@ pub mod browse;
 pub mod completions;
 pub mod pr;
 pub mod pr_comments;
+pub mod pr_list;
 pub mod update;
