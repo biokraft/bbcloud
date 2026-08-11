@@ -40,6 +40,7 @@ Recommended: updates via `brew upgrade`, no Rust toolchain needed.
 | --- | --- | --- |
 | Install script | `curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/install.sh \| sh` | Nothing — detects platform, verifies checksum, installs to `~/.local/bin` |
 | Prebuilt binary | Download from the [latest release](https://github.com/biokraft/bbcloud/releases/latest) | Manual `PATH` setup; verify against the matching `.sha256` |
+| Nix | `nix profile install github:biokraft/bbcloud` | Nix with flakes enabled |
 | `cargo binstall` | `cargo binstall bbcloud` | `cargo-binstall`, no compiler |
 | `cargo install` | `cargo install bbcloud --locked` | Rust 1.88+ (a clone pins 1.97 via `rust-toolchain.toml`) |
 
