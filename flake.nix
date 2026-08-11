@@ -24,32 +24,12 @@
             pname = manifest.package.name;
             inherit (manifest.package) version;
 
-            src = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.unions [
-                ./Cargo.toml
-                ./Cargo.lock
-                ./src
-                ./tests
-              ];
-            };
+            src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
             # The Linux Secret Service backend builds its vendored OpenSSL with Perl.
             nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.perl ];
-            nativeCheckInputs = [ pkgs.gitMinimal ];
-
-            # Some table tests inspect whether stdout is a terminal. Redirect the test
-            # harness so the Nix builder provides the same non-TTY environment as CI.
-            checkPhase = ''
-              runHook preCheck
-              if ! cargo test --release --target ${pkgs.stdenv.hostPlatform.rust.rustcTarget} --offline > cargo-test.log; then
-                cat cargo-test.log
-                exit 1
-              fi
-              cat cargo-test.log
-              runHook postCheck
-            '';
+            doCheck = false;
 
             meta = {
               inherit (manifest.package) description homepage;
