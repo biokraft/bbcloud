@@ -162,6 +162,40 @@ pub struct StatusRow {
     pub state: State,
 }
 
+/// Refuses any path that does not end in `.agents/skills/<SKILL_NAME>/SKILL.md`
+/// or `.claude/skills/<SKILL_NAME>/SKILL.md`. Every removal or write driven by
+/// a state entry must go through this first: the state file is user-editable
+/// (by hand or by a bad merge), and nothing it names should let `bb` touch an
+/// arbitrary path on disk. Deliberately checks shape, not existence or type —
+/// `state_of` already treats a directory as `Missing` (it can't be read as a
+/// file), and that used to be enough to make the `Missing` repair branches
+/// reach a `remove_dir_all`/`write_file` on whatever the state file named.
+fn is_shaped_like_a_skill_path(path: &Path) -> bool {
+    let mut components: Vec<_> = path.components().collect();
+    let Some(file) = components.pop() else {
+        return false;
+    };
+    if file.as_os_str() != "SKILL.md" {
+        return false;
+    }
+    let Some(skill_dir) = components.pop() else {
+        return false;
+    };
+    if skill_dir.as_os_str() != SKILL_NAME {
+        return false;
+    }
+    let Some(skills_dir) = components.pop() else {
+        return false;
+    };
+    if skills_dir.as_os_str() != "skills" {
+        return false;
+    }
+    matches!(
+        components.pop().map(|c| c.as_os_str().to_owned()),
+        Some(agents_dir) if agents_dir == ".agents" || agents_dir == ".claude"
+    )
+}
+
 fn state_of(entry: &Entry, wanted: &str) -> State {
     match std::fs::read(&entry.path) {
         Err(_) => State::Missing,
@@ -192,9 +226,44 @@ pub fn status() -> (Vec<StatusRow>, Option<String>) {
     (rows, warning)
 }
 
+/// Distinguishes *why* an entry did not end up removed, so the caller can be
+/// honest about it instead of collapsing "refused because modified" and
+/// "wasn't there to begin with" into the same boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemovalOutcome {
+    Removed,
+    RefusedModified,
+    RefusedUnsafePath,
+    Absent,
+}
+
+impl RemovalOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Removed => "removed",
+            Self::RefusedModified => "refused_modified",
+            Self::RefusedUnsafePath => "refused_unsafe_path",
+            Self::Absent => "absent",
+        }
+    }
+}
+
+/// True when the directory *containing* `path` is itself a symlink — the
+/// shape a Claude entry takes when `install_claude_dir` linked it. Checked
+/// against disk rather than trusted from the recorded `kind`, because `kind`
+/// can be wrong: a pre-existing hand-made symlink that `install` finds
+/// `Unchanged` or `SkippedModified` (no prior state entry to inherit from)
+/// used to default to `kind: "file"`, which then bypassed this exact guard.
+fn parent_is_symlink(path: &Path) -> bool {
+    path.parent()
+        .and_then(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 /// Removes what bb recorded. A customized file is left in place unless `force`,
 /// and an untracked file is never touched at all.
-pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)>> {
+pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, RemovalOutcome)>> {
     let (entries, warning) = load_state();
     if let Some(warning) = warning {
         crate::output::warn(&warning);
@@ -209,9 +278,18 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)
             keep.push(entry);
             continue;
         }
+        if !is_shaped_like_a_skill_path(&entry.path) {
+            crate::output::warn(&format!(
+                "refusing to touch {} — does not look like a skill path bb would have written",
+                entry.path.display()
+            ));
+            results.push((entry.path.clone(), RemovalOutcome::RefusedUnsafePath));
+            keep.push(entry);
+            continue;
+        }
         let modified = matches!(state_of(&entry, &wanted), State::Modified);
         if modified && !force {
-            results.push((entry.path.clone(), false));
+            results.push((entry.path.clone(), RemovalOutcome::RefusedModified));
             keep.push(entry);
             continue;
         }
@@ -219,15 +297,37 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)
         // directory, so removing it directly would follow the link and delete
         // the `.agents` copy it points at. The thing actually on disk at the
         // Claude location is the symlink one level up — remove that instead,
-        // and don't recurse into what it points to.
-        let removal_target: &Path = if entry.kind == "symlink" {
+        // and don't recurse into what it points to. Trusts disk over the
+        // recorded `kind`: a hand-made symlink that predates any bb-recorded
+        // `kind` must still be removed as a link, not followed.
+        let is_symlinked_dir = entry.kind == "symlink" || parent_is_symlink(&entry.path);
+        let removal_target: &Path = if is_symlinked_dir {
             entry.path.parent().unwrap_or(&entry.path)
         } else {
             &entry.path
         };
         let existed = removal_target.exists() || std::fs::symlink_metadata(removal_target).is_ok();
         remove_existing(removal_target)?;
-        results.push((entry.path.clone(), existed));
+        // A `kind: "file"` Claude fallback can leave an empty
+        // `.claude/skills/<SKILL_NAME>/` directory behind once `SKILL.md`
+        // inside it is gone. Clean up that one directory — never a parent,
+        // and never one that still has something in it.
+        if !is_symlinked_dir {
+            if let Some(dir) = entry.path.parent() {
+                let is_empty = std::fs::read_dir(dir)
+                    .map(|mut i| i.next().is_none())
+                    .unwrap_or(false);
+                if is_empty {
+                    let _ = std::fs::remove_dir(dir);
+                }
+            }
+        }
+        let outcome = if existed {
+            RemovalOutcome::Removed
+        } else {
+            RemovalOutcome::Absent
+        };
+        results.push((entry.path.clone(), outcome));
     }
 
     save_state(&keep)?;
@@ -344,6 +444,13 @@ pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome
             }
         } else if let Some(entry) = &recorded {
             kind = entry.kind.clone();
+        } else if parent_is_symlink(&path) {
+            // No prior state entry to inherit `kind` from — e.g. a hand-made
+            // Claude symlink, exactly what older docs told users to create
+            // themselves — so it must be read off disk rather than defaulted
+            // to `"file"`, or a later uninstall would bypass the symlink
+            // guard and follow the link into whatever it points at.
+            kind = "symlink".to_string();
         }
 
         if action != Action::SkippedModified {
@@ -392,6 +499,12 @@ fn claude_root_from_entry_path(path: &Path) -> Result<&Path> {
 /// actually written so the caller can keep the recorded state honest even
 /// when the platform refuses a symlink and falls back to a real file.
 fn restore_claude_link(entry_path: &Path) -> Result<String> {
+    if !is_shaped_like_a_skill_path(entry_path) {
+        return Err(BbError::Config(format!(
+            "refusing to touch {} — does not look like a skill path bb would have written",
+            entry_path.display()
+        )));
+    }
     let root = claude_root_from_entry_path(entry_path)?;
     let agents_installed = root
         .join(".agents")
@@ -418,6 +531,13 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
     let mut outcomes = Vec::new();
 
     for entry in &mut state {
+        if !is_shaped_like_a_skill_path(&entry.path) {
+            crate::output::warn(&format!(
+                "refusing to touch {} — does not look like a skill path bb would have written",
+                entry.path.display()
+            ));
+            continue;
+        }
         let action = match state_of(entry, &wanted) {
             // The link is intact — writing to `entry.path` follows it straight
             // into the `.agents` file it points at, refreshing the shared
@@ -643,7 +763,11 @@ mod tests {
 
                 let results = uninstall(Some(&claude_root), false).unwrap();
                 assert_eq!(results.len(), 1, "only the claude entry was in scope");
-                assert!(results[0].1, "the claude entry should report removed");
+                assert_eq!(
+                    results[0].1,
+                    RemovalOutcome::Removed,
+                    "the claude entry should report removed"
+                );
 
                 let claude_dir = dir.path().join(".claude/skills/bitbucket-cloud");
                 assert!(
@@ -1058,6 +1182,171 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(&claude_path).unwrap(), SKILL_MD);
                 let (state, _) = load_state();
                 assert_eq!(state[0].kind, "symlink");
+            },
+        );
+    }
+
+    #[test]
+    fn shape_guard_accepts_only_the_two_real_skill_locations() {
+        assert!(is_shaped_like_a_skill_path(Path::new(
+            "/proj/.agents/skills/bitbucket-cloud/SKILL.md"
+        )));
+        assert!(is_shaped_like_a_skill_path(Path::new(
+            "/proj/.claude/skills/bitbucket-cloud/SKILL.md"
+        )));
+        for bad in [
+            "/proj/src",
+            "/proj/src/main.rs",
+            "/proj/.agents/skills/bitbucket-cloud",
+            "/proj/.agents/skills/some-other-skill/SKILL.md",
+            "/proj/.opencode/skills/bitbucket-cloud/SKILL.md",
+            "/etc/passwd",
+        ] {
+            assert!(
+                !is_shaped_like_a_skill_path(Path::new(bad)),
+                "{bad} should have been refused"
+            );
+        }
+    }
+
+    /// Critical 2, reproduced and fixed: a hand-made Claude symlink — exactly
+    /// what the old README's `ln -s` instructions told users to create —
+    /// must not be deleted-through by `uninstall` just because no prior state
+    /// entry existed to tell `install` its `kind` was `"symlink"`.
+    #[test]
+    #[serial_test::serial]
+    fn uninstall_does_not_follow_a_hand_made_symlink_into_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // Set up the .agents copy the way a real project would have
+                // it, then hand-make the Claude symlink exactly as the old
+                // README instructed, *before* bb has ever recorded anything.
+                let agents_path = skill_file(dir.path(), Agent::Agents);
+                std::fs::create_dir_all(agents_path.parent().unwrap()).unwrap();
+                std::fs::write(&agents_path, SKILL_MD).unwrap();
+
+                let claude_dir = dir.path().join(".claude").join("skills").join(SKILL_NAME);
+                std::fs::create_dir_all(claude_dir.parent().unwrap()).unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(
+                    Path::new("..")
+                        .join("..")
+                        .join(".agents")
+                        .join("skills")
+                        .join(SKILL_NAME),
+                    &claude_dir,
+                )
+                .unwrap();
+
+                let outcomes = install(dir.path(), &[Agent::Claude], false).unwrap();
+                assert!(
+                    matches!(outcomes[0].action, Action::Unchanged),
+                    "sanity: content already matches, so install should not rewrite it"
+                );
+
+                let results = uninstall(None, false).unwrap();
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].1, RemovalOutcome::Removed);
+
+                assert!(
+                    std::fs::read_to_string(&agents_path).unwrap() == SKILL_MD,
+                    "the .agents copy must survive uninstall of the claude link"
+                );
+                assert!(
+                    std::fs::symlink_metadata(&claude_dir).is_err(),
+                    "no dangling claude symlink should remain (Path::exists() would \
+                     wrongly report false for a dangling link, so this checks \
+                     symlink_metadata instead)"
+                );
+            },
+        );
+    }
+
+    /// Important 3, reproduced and fixed: a state entry pointing at an
+    /// unrelated directory must be refused, and that directory must survive.
+    #[test]
+    #[serial_test::serial]
+    fn uninstall_refuses_a_state_entry_pointing_outside_the_skill_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let victim_dir = dir.path().join("src");
+                std::fs::create_dir_all(&victim_dir).unwrap();
+                std::fs::write(victim_dir.join("main.rs"), "fn main() {}").unwrap();
+
+                let victim_file = dir.path().join("Cargo.toml");
+                std::fs::write(&victim_file, "[package]").unwrap();
+
+                save_state(&[
+                    Entry {
+                        path: victim_dir.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        sha256: "deadbeef".into(),
+                        version: "0.0.1".into(),
+                    },
+                    Entry {
+                        path: victim_file.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        sha256: "deadbeef".into(),
+                        version: "0.0.1".into(),
+                    },
+                ])
+                .unwrap();
+
+                let results = uninstall(None, true).unwrap();
+                assert_eq!(results.len(), 2);
+                assert!(results
+                    .iter()
+                    .all(|(_, o)| *o == RemovalOutcome::RefusedUnsafePath));
+
+                assert!(victim_dir.is_dir(), "unrelated directory must survive");
+                assert!(
+                    victim_dir.join("main.rs").exists(),
+                    "unrelated directory's contents must survive"
+                );
+                assert!(victim_file.is_file(), "unrelated file must survive");
+
+                // Refused entries stay tracked rather than being dropped.
+                let (remaining, _) = load_state();
+                assert_eq!(remaining.len(), 2);
+            },
+        );
+    }
+
+    /// A legitimate entry still works after the shape guard was added.
+    #[test]
+    #[serial_test::serial]
+    fn uninstall_still_removes_a_legitimate_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents], false).unwrap();
+                let results = uninstall(None, false).unwrap();
+                assert_eq!(
+                    results,
+                    vec![(
+                        skill_file(dir.path(), Agent::Agents),
+                        RemovalOutcome::Removed
+                    )]
+                );
             },
         );
     }
