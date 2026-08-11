@@ -304,21 +304,40 @@ async fn approve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
             "resolving needs approval — answer the prompt in a terminal, or pass --yes to approve up front".into(),
         ));
     }
+    gate(ctx, id, comment, ask_human).await
+}
 
+/// Shows the thread, then turns the answer into a verdict. `ask` is a parameter
+/// because the real prompt needs a terminal no test has: this way the parts that
+/// carry the decision are exercised, and `ask_human` is left holding nothing but
+/// the rendering.
+async fn gate<A>(ctx: &Ctx, id: u64, comment: u64, ask: A) -> Result<()>
+where
+    A: FnOnce(&str) -> Result<bool>,
+{
     // Fetched only on this path: `--yes` must cost no extra request.
     let thread: Comment = ctx
         .client
         .get_json(&ctx.path(&format!("/pullrequests/{id}/comments/{comment}")))
         .await?;
 
-    match inquire::Confirm::new(&format!("resolve {}?", describe(&thread)))
+    if ask(&format!("resolve {}?", describe(&thread)))? {
+        Ok(())
+    } else {
+        // Declining is an error, not a quiet success: a script reading exit 0 as
+        // "resolved" must never see one.
+        Err(BbError::Config(format!("comment {comment} left open")))
+    }
+}
+
+/// Left uncovered on purpose: it needs a terminal, and it holds no decision that
+/// a test could get wrong — the same shape as the `inquire::Editor` call in
+/// `read_body`.
+fn ask_human(question: &str) -> Result<bool> {
+    inquire::Confirm::new(question)
         .with_default(false)
         .prompt()
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(BbError::Config(format!("comment {comment} left open"))),
-        Err(e) => Err(BbError::Config(format!("cancelled: {e}"))),
-    }
+        .map_err(|e| BbError::Config(format!("cancelled: {e}")))
 }
 
 /// One line naming what the approval covers: where the thread sits, who raised
@@ -435,6 +454,118 @@ mod build_payload_tests {
             ..args()
         };
         assert!(build_payload(&a, "hi").is_err());
+    }
+}
+
+/// Everything the gate decides, with the prompt answered by the test instead of
+/// by a human. The one thing left uncovered is `ask_human`, which needs a
+/// terminal and holds no decision of its own.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod gate_tests {
+    use super::*;
+    use crate::api::Client;
+    use crate::credentials::Credentials;
+    use crate::repo::RepoSlug;
+    use crate::secret::SecretString;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ctx(server: &MockServer) -> Ctx {
+        Ctx {
+            client: Client::new(
+                Credentials {
+                    email: "dev@example.com".into(),
+                    token: SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: RepoSlug::parse("acme/widgets").unwrap(),
+            format: Format::Human,
+        }
+    }
+
+    async fn mount_thread(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path(
+                "/repositories/acme/widgets/pullrequests/7/comments/900",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 900,
+                "content": { "raw": "this drops the error" },
+                "user": { "display_name": "Reviewer" },
+                "inline": { "path": "src/auth.rs", "to": 88 },
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_yes_passes_the_gate_and_the_question_names_the_thread() {
+        let server = MockServer::start().await;
+        mount_thread(&server).await;
+
+        let mut asked = String::new();
+        let result = gate(&ctx(&server), 7, 900, |question| {
+            asked = question.to_string();
+            Ok(true)
+        })
+        .await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(asked.starts_with("resolve "), "{asked}");
+        assert!(asked.contains("src/auth.rs:88"), "{asked}");
+        assert!(asked.contains("this drops the error"), "{asked}");
+    }
+
+    #[tokio::test]
+    async fn a_no_fails_and_names_the_comment_left_open() {
+        let server = MockServer::start().await;
+        mount_thread(&server).await;
+
+        let err = gate(&ctx(&server), 7, 900, |_| Ok(false))
+            .await
+            .unwrap_err();
+
+        let shown = err.to_string();
+        assert!(shown.contains("900"), "{shown}");
+        assert!(shown.contains("left open"), "{shown}");
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_prompt_stops_the_gate() {
+        let server = MockServer::start().await;
+        mount_thread(&server).await;
+
+        let result = gate(&ctx(&server), 7, 900, |_| {
+            Err(BbError::Config("cancelled: interrupted".into()))
+        })
+        .await;
+
+        assert!(result.is_err(), "an unanswered prompt must not resolve");
+    }
+
+    /// A bad id fails at the lookup, so nobody is asked to approve a thread that
+    /// does not exist.
+    #[tokio::test]
+    async fn an_unknown_comment_never_reaches_the_prompt() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/repositories/acme/widgets/pullrequests/7/comments/404",
+            ))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let err = gate(&ctx(&server), 7, 404, |_| unreachable!("asked anyway"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.exit_code(), 3);
     }
 }
 
