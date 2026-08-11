@@ -182,6 +182,40 @@ Each entry under `.inline[]` has `file`, `line`, `author`, `body`, `resolved`, a
     bb pr create main --title "Short imperative summary"
 ```
 
+## Use it from an AI agent
+
+This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
+`SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
+review pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
+comment and reply flags, the exit codes, and what to do when a scope is missing.
+
+Install it into a project:
+
+```bash
+mkdir -p .agents/skills/bitbucket-cloud
+curl -fsSL https://raw.githubusercontent.com/biokraft/bbcloud/main/.agents/skills/bitbucket-cloud/SKILL.md \
+  -o .agents/skills/bitbucket-cloud/SKILL.md
+```
+
+| Agent | Discovers skills in | Extra step |
+| --- | --- | --- |
+| [Codex](https://learn.chatgpt.com/docs/build-skills) | `.agents/skills/`, `~/.agents/skills/` | none |
+| [Cursor](https://cursor.com/docs/skills) | `.agents/skills/`, `.cursor/skills/`, and the `~/` equivalents | none |
+| [OpenCode](https://opencode.ai/docs/skills/) | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` | none |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | link it, see below |
+
+```bash
+mkdir -p .claude/skills
+ln -s ../../.agents/skills/bitbucket-cloud .claude/skills/bitbucket-cloud
+```
+
+To get the skill in every project, install it under your home directory instead: `~/.agents/skills/`
+for Codex, Cursor and OpenCode, `~/.claude/skills/` for Claude Code.
+
+Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
+*"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
+`AGENTS.md` or `CLAUDE.md` — it is plain Markdown.
+
 ## Reference
 
 | Flag / variable | Purpose |
