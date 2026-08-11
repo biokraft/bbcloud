@@ -88,9 +88,21 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
-        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED or ALL
+        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
+        /// Only pull requests this person is tagged to review
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// Only pull requests opened by this person; `@me` for yourself
+        #[arg(long)]
+        author: Option<String>,
+        /// Your own review state on the pull request
+        #[arg(long, value_enum)]
+        review_state: Option<commands::pr_list::ReviewStateArg>,
+        /// Only pull requests waiting on your review
+        #[arg(long)]
+        needs_my_review: bool,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -222,8 +234,26 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Pr { command } => {
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
-                PrCommand::List { destination, state } => {
-                    commands::pr_list::list(&ctx, destination, state).await
+                PrCommand::List {
+                    destination,
+                    state,
+                    reviewer,
+                    author,
+                    review_state,
+                    needs_my_review,
+                } => {
+                    commands::pr_list::list(
+                        &ctx,
+                        commands::pr_list::ListArgs {
+                            destination,
+                            state,
+                            reviewer,
+                            author,
+                            review_state,
+                            needs_my_review,
+                        },
+                    )
+                    .await
                 }
                 PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,

@@ -180,6 +180,26 @@ Each entry under `.inline[]` has `file`, `line`, `author`, `body`, `resolved`, a
 ### Opening a PR
 
     bb pr create main --title "Short imperative summary"
+
+### Reviewers
+
+    bb pr reviewers 682                     # who is tagged, and what each decided
+    bb pr reviewers add 682 patrick         # tag someone (comma-separate for several)
+    bb pr reviewers remove 682 raigon       # untag someone
+
+Names are matched case-insensitively against workspace members and the repository's default
+reviewers. An ambiguous name errors and lists the candidates; pass a `{uuid}` to be exact.
+
+### Filtering the list
+
+    bb pr list --needs-my-review            # waiting on you
+    bb pr list --reviewer patrick           # tagged for someone else
+    bb pr list --author @me                 # yours
+    bb pr list --state draft                # drafts only
+    bb pr list --review-state approved      # ones you already approved
+
+`bb pr list` shows a STATE column (Draft / Open / Merged / Declined) and a REVIEWERS column
+marking each reviewer: `✓` approved, `✗` changes requested, `·` no state yet.
 ```
 
 ## Reference
