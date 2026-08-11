@@ -140,6 +140,14 @@ enum PrCommand {
         #[arg(long)]
         comments_only: bool,
     },
+    /// Show, add or remove the reviewers tagged on a pull request
+    #[command(args_conflicts_with_subcommands = true)]
+    Reviewers {
+        /// Pull request id (omit when using add/remove)
+        id: Option<u64>,
+        #[command(subcommand)]
+        command: Option<ReviewersCommand>,
+    },
     /// Comment on a pull request
     Comment {
         id: u64,
@@ -161,6 +169,26 @@ enum PrCommand {
         /// Open the comment in a browser
         #[arg(long, short = 'w')]
         web: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReviewersCommand {
+    /// List the reviewers on a pull request and what each has decided
+    #[command(alias = "l", alias = "ls")]
+    List { id: u64 },
+    /// Tag one or more reviewers, comma-separated
+    Add {
+        id: u64,
+        /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
+        names: String,
+    },
+    /// Untag one or more reviewers, comma-separated
+    #[command(alias = "rm")]
+    Remove {
+        id: u64,
+        /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
+        names: String,
     },
 }
 
@@ -229,6 +257,21 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                PrCommand::Reviewers { id, command } => match (id, command) {
+                    (_, Some(ReviewersCommand::List { id })) => {
+                        commands::pr_reviewers::list(&ctx, id).await
+                    }
+                    (_, Some(ReviewersCommand::Add { id, names })) => {
+                        commands::pr_reviewers::add(&ctx, id, &names).await
+                    }
+                    (_, Some(ReviewersCommand::Remove { id, names })) => {
+                        commands::pr_reviewers::remove(&ctx, id, &names).await
+                    }
+                    (Some(id), None) => commands::pr_reviewers::list(&ctx, id).await,
+                    (None, None) => Err(bb_cli::error::BbError::Config(
+                        "pass a pull request id, or `add`/`remove`".into(),
+                    )),
+                },
                 PrCommand::View {
                     id,
                     unresolved,
