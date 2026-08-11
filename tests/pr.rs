@@ -2,7 +2,7 @@
 
 use assert_cmd::Command;
 use predicates::str::contains;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
@@ -11,114 +11,9 @@ fn bb(server: &MockServer) -> Command {
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())
         .env("BB_REPO", "acme/widgets")
-        .env("NO_COLOR", "1");
+        .env("NO_COLOR", "1")
+        .env("BB_KEYRING_DISABLE", "1");
     cmd
-}
-
-fn pr_json(id: u64, source: &str, dest: &str) -> serde_json::Value {
-    serde_json::json!({
-        "id": id,
-        "title": format!("pr {id}"),
-        "state": "OPEN",
-        "author": { "nickname": "sean", "display_name": "Sean B" },
-        "source": { "branch": { "name": source } },
-        "destination": { "branch": { "name": dest } },
-        "links": { "html": { "href": format!("https://bitbucket.org/acme/widgets/pull-requests/{id}") } },
-        "reviewers": [{ "uuid": "{r1}", "display_name": "Rev One" }],
-        "participants": [{ "user": { "display_name": "Rev One" }, "state": "approved" }]
-    })
-}
-
-#[tokio::test]
-async fn pr_list_renders_a_table() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/pullrequests"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [pr_json(7, "feature/a", "main"), pr_json(8, "feature/b", "develop")]
-        })))
-        .mount(&server)
-        .await;
-
-    bb(&server)
-        .args(["pr", "list"])
-        .assert()
-        .success()
-        .stdout(contains("7"))
-        .stdout(contains("feature/a"))
-        .stdout(contains("Rev One"));
-}
-
-#[tokio::test]
-async fn pr_list_filters_by_destination_branch() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/pullrequests"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [pr_json(7, "feature/a", "main"), pr_json(8, "feature/b", "develop")]
-        })))
-        .mount(&server)
-        .await;
-
-    let out = bb(&server)
-        .args(["pr", "list", "develop"])
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("feature/b"), "{text}");
-    assert!(
-        !text.contains("feature/a"),
-        "destination filter not applied: {text}"
-    );
-}
-
-#[tokio::test]
-async fn pr_list_requests_open_state_by_default() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/pullrequests"))
-        .and(query_param("state", "OPEN"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
-        .mount(&server)
-        .await;
-
-    bb(&server).args(["pr", "list"]).assert().success();
-}
-
-#[tokio::test]
-async fn pr_list_json_emits_an_array() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/pullrequests"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [pr_json(7, "feature/a", "main")]
-        })))
-        .mount(&server)
-        .await;
-
-    let out = bb(&server).args(["pr", "list", "--json"]).output().unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(value[0]["id"], 7);
-    assert_eq!(value[0]["source"], "feature/a");
-}
-
-/// Zero-row `--json` must stay pure JSON: `print_table`'s "nothing to show" line
-/// is not format-aware, so purity depends on the call site gating on Format.
-#[tokio::test]
-async fn pr_list_json_on_zero_rows_is_pure_empty_array() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/pullrequests"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
-        .mount(&server)
-        .await;
-
-    let out = bb(&server).args(["pr", "list", "--json"]).output().unwrap();
-    assert!(out.status.success());
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let value: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("stdout did not parse as JSON: {e}\nstdout: {stdout}"));
-    assert_eq!(value, serde_json::json!([]));
 }
 
 #[tokio::test]

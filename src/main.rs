@@ -88,9 +88,21 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
-        /// State filter: OPEN, MERGED, DECLINED or SUPERSEDED
+        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
+        /// Only pull requests this person is tagged to review
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// Only pull requests opened by this person; `@me` for yourself
+        #[arg(long)]
+        author: Option<String>,
+        /// Your own review state on the pull request
+        #[arg(long, value_enum)]
+        review_state: Option<commands::pr_list::ReviewStateArg>,
+        /// Only pull requests waiting on your review
+        #[arg(long)]
+        needs_my_review: bool,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -140,6 +152,14 @@ enum PrCommand {
         #[arg(long)]
         comments_only: bool,
     },
+    /// Show, add or remove the reviewers tagged on a pull request
+    #[command(args_conflicts_with_subcommands = true)]
+    Reviewers {
+        /// Pull request id (omit when using add/remove)
+        id: Option<u64>,
+        #[command(subcommand)]
+        command: Option<ReviewersCommand>,
+    },
     /// Comment on a pull request
     Comment {
         id: u64,
@@ -180,6 +200,26 @@ enum PrCommand {
 }
 
 #[derive(Subcommand)]
+enum ReviewersCommand {
+    /// List the reviewers on a pull request and what each has decided
+    #[command(alias = "l", alias = "ls")]
+    List { id: u64 },
+    /// Tag one or more reviewers, comma-separated
+    Add {
+        id: u64,
+        /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
+        names: String,
+    },
+    /// Untag one or more reviewers, comma-separated
+    #[command(alias = "rm")]
+    Remove {
+        id: u64,
+        /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
+        names: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum AuthCommand {
     /// Store an atlassian api token in the os keyring
     Login {
@@ -209,8 +249,26 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Pr { command } => {
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
-                PrCommand::List { destination, state } => {
-                    commands::pr::list(&ctx, destination, state).await
+                PrCommand::List {
+                    destination,
+                    state,
+                    reviewer,
+                    author,
+                    review_state,
+                    needs_my_review,
+                } => {
+                    commands::pr_list::list(
+                        &ctx,
+                        commands::pr_list::ListArgs {
+                            destination,
+                            state,
+                            reviewer,
+                            author,
+                            review_state,
+                            needs_my_review,
+                        },
+                    )
+                    .await
                 }
                 PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
@@ -244,6 +302,21 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                PrCommand::Reviewers { id, command } => match (id, command) {
+                    (_, Some(ReviewersCommand::List { id })) => {
+                        commands::pr_reviewers::list(&ctx, id).await
+                    }
+                    (_, Some(ReviewersCommand::Add { id, names })) => {
+                        commands::pr_reviewers::add(&ctx, id, &names).await
+                    }
+                    (_, Some(ReviewersCommand::Remove { id, names })) => {
+                        commands::pr_reviewers::remove(&ctx, id, &names).await
+                    }
+                    (Some(id), None) => commands::pr_reviewers::list(&ctx, id).await,
+                    (None, None) => Err(bb_cli::error::BbError::Config(
+                        "pass a pull request id, or `add`/`remove`".into(),
+                    )),
+                },
                 PrCommand::View {
                     id,
                     unresolved,

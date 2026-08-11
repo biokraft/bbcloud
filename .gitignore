@@ -2,9 +2,12 @@
 **/*.rs.bk
 *.pdb
 
-# SDD scratch workspace: regenerable review diffs live here.
-# The durable record (ledger, briefs, reports) is committed under docs/superpowers/.
+# SDD scratch workspace: ledger, briefs, reports and regenerable review diffs.
 /.superpowers
+
+# Design specs and implementation plans are working notes, not shipped artifacts.
+# Git history and the code are the durable record.
+/docs
 
 # OS and editor cruft
 .DS_Store

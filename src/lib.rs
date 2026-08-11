@@ -8,3 +8,4 @@ pub mod git;
 pub mod output;
 pub mod repo;
 pub mod secret;
+pub mod users;

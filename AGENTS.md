@@ -140,7 +140,10 @@ src/repo.rs            RepoSlug parse/resolve, percent-encoded path(), browse_ur
 src/api/mod.rs         Client: auth header, pagination, error mapping
 src/api/models.rs      serde models, all Option-tolerant with documented fallbacks
 src/output.rs          Format, tables, color, spinners, relative_time
+src/users.rs           resolve a typed name to one Bitbucket user
 src/commands/*.rs      one module per command group
+src/commands/pr_list.rs       `pr list`: fetch, filter, render
+src/commands/pr_reviewers.rs  `pr reviewers` list/add/remove
 ```
 
 **`Ctx` is the shared per-command context** and lives in `src/commands/pr.rs`:
