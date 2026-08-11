@@ -320,8 +320,9 @@ where
         .client
         .get_json(&ctx.path(&format!("/pullrequests/{id}/comments/{comment}")))
         .await?;
+    let where_ = resolvable(&thread)?;
 
-    if ask(&format!("resolve {}?", describe(&thread)))? {
+    if ask(&format!("resolve {}?", describe(&thread, &where_)))? {
         Ok(())
     } else {
         // Declining is an error, not a quiet success: a script reading exit 0 as
@@ -340,28 +341,40 @@ fn ask_human(question: &str) -> Result<bool> {
         .map_err(|e| BbError::Config(format!("cancelled: {e}")))
 }
 
-/// One line naming what the approval covers: where the thread sits, who raised
-/// it, and what it says.
-fn describe(thread: &Comment) -> String {
+/// Rejects the ids the endpoint cannot act on, and yields where the thread sits.
+///
+/// Bitbucket answers 403 both for a reply and for a comment that is not on the
+/// diff, and the generic 403 text blames the token's scopes — a wrong diagnosis
+/// that costs the reader real time. So these two cases are named here instead,
+/// before anything is sent or any human is asked to approve a doomed request.
+fn resolvable(thread: &Comment) -> Result<String> {
+    if let Some(root) = thread.parent_id() {
+        return Err(BbError::Config(format!(
+            "comment {} is a reply — resolve the thread's first comment, {root}",
+            thread.id
+        )));
+    }
     let inline = thread.inline.as_ref();
-    let where_ = location(
+    location(
         inline.and_then(|i| i.path.as_deref()),
         inline.and_then(|i| i.to.or(i.from)),
     )
-    .unwrap_or_else(|| format!("comment {}", thread.id));
+    .ok_or_else(|| {
+        BbError::Config(format!(
+            "comment {} is not on the diff, and bitbucket resolves only inline threads",
+            thread.id
+        ))
+    })
+}
 
-    let mut line = format!(
+/// One line naming what the approval covers: where the thread sits, who raised
+/// it, and what it says.
+fn describe(thread: &Comment, where_: &str) -> String {
+    format!(
         "the thread at {where_} by {} — \"{}\"",
         thread.author(),
         summarize(&thread.body())
-    );
-    if let Some(root) = thread.parent_id() {
-        line.push_str(&format!(
-            " (comment {} is a reply, so this resolves the thread rooted at {root})",
-            thread.id
-        ));
-    }
-    line
+    )
 }
 
 /// First line of a comment, short enough to sit inside a prompt.
@@ -548,6 +561,32 @@ mod gate_tests {
         assert!(result.is_err(), "an unanswered prompt must not resolve");
     }
 
+    /// A reply id is refused before the prompt: the request it would send is the
+    /// one bitbucket answers 403 for.
+    #[tokio::test]
+    async fn a_reply_never_reaches_the_prompt() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/repositories/acme/widgets/pullrequests/7/comments/901",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 901,
+                "content": { "raw": "fixed" },
+                "user": { "display_name": "Me" },
+                "inline": { "path": "src/auth.rs", "to": 88 },
+                "parent": { "id": 900 },
+            })))
+            .mount(&server)
+            .await;
+
+        let err = gate(&ctx(&server), 7, 901, |_| unreachable!("asked anyway"))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("900"), "{err}");
+    }
+
     /// A bad id fails at the lookup, so nobody is asked to approve a thread that
     /// does not exist.
     #[tokio::test]
@@ -591,31 +630,52 @@ mod describe_tests {
 
     #[test]
     fn names_the_place_the_author_and_the_point() {
-        let shown = describe(&comment(inline_thread()));
+        let thread = comment(inline_thread());
+        let shown = describe(&thread, &resolvable(&thread).unwrap());
         assert!(shown.contains("src/auth.rs:88"), "{shown}");
         assert!(shown.contains("Reviewer"), "{shown}");
         assert!(shown.contains("this drops the error"), "{shown}");
         assert!(!shown.contains("second line"), "one line only: {shown}");
     }
 
+    /// Bitbucket answers 403 for a reply, so the id is refused with the root to
+    /// use instead — a prompt claiming to resolve that root would be a lie.
     #[test]
-    fn a_reply_warns_that_the_whole_thread_resolves() {
+    fn a_reply_is_refused_and_names_the_root() {
         let mut json = inline_thread();
         json["id"] = serde_json::Value::from(601);
         json["parent"] = serde_json::json!({ "id": 600 });
-        let shown = describe(&comment(json));
-        assert!(shown.contains("reply"), "{shown}");
-        assert!(shown.contains("600"), "must name the root: {shown}");
+        let err = resolvable(&comment(json)).unwrap_err().to_string();
+        assert!(err.contains("reply"), "{err}");
+        assert!(err.contains("600"), "must name the root: {err}");
     }
 
+    /// "Not on the diff" is the other documented 403: a general comment has no
+    /// thread to resolve.
     #[test]
-    fn a_general_comment_falls_back_to_its_id() {
-        let shown = describe(&comment(serde_json::json!({
+    fn a_general_comment_is_refused() {
+        let err = resolvable(&comment(serde_json::json!({
             "id": 42,
             "content": { "raw": "a general remark" },
             "user": { "display_name": "Reviewer" },
-        })));
-        assert!(shown.contains("comment 42"), "{shown}");
+        })))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("42"), "{err}");
+        assert!(err.contains("inline"), "{err}");
+    }
+
+    /// An inline root with a file but no line is still resolvable.
+    #[test]
+    fn a_whole_file_thread_is_resolvable() {
+        let where_ = resolvable(&comment(serde_json::json!({
+            "id": 500,
+            "content": { "raw": "whole-file note" },
+            "user": { "display_name": "Reviewer" },
+            "inline": { "path": "src/lib.rs" },
+        })))
+        .unwrap();
+        assert_eq!(where_, "src/lib.rs");
     }
 
     #[test]

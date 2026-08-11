@@ -73,7 +73,7 @@ scopes are enough:
 |---|---|
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits` |
-| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr request-changes` |
+| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes` |
 | `read:repository:bitbucket` | `branch list`, and the default-reviewer lookup `pr create` does |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
@@ -118,7 +118,7 @@ bb update                                 # check for a newer release and update
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they
 manage. For a standalone binary it verifies the download's checksum and replaces itself atomically.
 
-One thing worth knowing that `--help` won't tell you:
+Two things worth knowing that `--help` won't tell you:
 
 **Everything speaks JSON.** Add `--json` to any command and pipe it to `jq` rather than parsing the
 tables, whose layout is not a contract. Scripts and agents should default to it.
@@ -127,11 +127,10 @@ tables, whose layout is not a contract. Scripts and agents should default to it.
 bb pr list --json | jq -r '.[] | select(.approvals == []) | "\(.id)\t\(.title)"'
 ```
 
-**Resolving asks first.** `bb pr resolve` prints the thread it is about to close — where it sits, who
-raised it, what it says — and waits for a yes. With no terminal it fails naming `--yes` rather than
-prompting, so nothing resolves in a script or under an agent unless the command line says so
-explicitly. Closing a reviewer's point is a decision, not a formality; `bb pr unresolve` reopens a
-thread and needs no confirmation.
+**`bb pr resolve` asks first.** It shows the thread it will close — the file and line, who raised
+it, what it says — and waits for a yes. Without a terminal it fails and names `--yes`, so nothing
+resolves in a script or under an agent unless the command line approves it. `bb pr unresolve`
+reopens a thread, and needs no confirmation.
 
 Shell completions make the rest discoverable:
 
@@ -144,8 +143,8 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
 `SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
 review pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
-comment and reply flags, the exit codes, and what to do when a scope is missing. It also draws the
-line the CLI cannot: the agent answers comment threads and reports them, and leaves resolving to you.
+comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
+agent to answer comment threads and report them, and to leave the resolve decision to you.
 
 Install it into a project:
 

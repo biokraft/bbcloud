@@ -36,9 +36,8 @@ bb pr commits 42 --json                 # commits, short hashes
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
 `timestamp`, `body`, `file`, `line`, `resolved` and `parent`. Use the comment `id` to answer in the
-correct thread. `parent` holds the comment answered, and is `null` on the first comment of a
-thread — that first `id` is the one that identifies the thread, and `resolved` tells you whether it
-is already closed.
+correct thread. `parent` is `null` on the first comment of a thread, and holds that comment's id on
+a reply. `resolved` tells you whether the thread is closed.
 
 Find the pull request for the current branch:
 
@@ -65,30 +64,30 @@ parent.
 
 ## Report threads, do not close them
 
-**Never resolve a thread on your own initiative.** Answering a comment is your job. Deciding that
-the point is settled is the user's, the same as approving or merging. A thread you resolve is a
-thread reviewers stop reading.
+Answer the comments. Report what you answered. Let the user close the threads.
 
-So after you reply, report — do not resolve. Say which threads you answered, and let the user close
-them. List what is still open, root comments only:
+Never resolve a thread on your own initiative. A resolved thread hides a reviewer's point, and only
+the user can decide that the point is settled. This is the rule for approval and merge too.
+
+List the threads that are still open, root comments only:
 
 ```bash
 bb pr view 42 --unresolved --json | jq '.inline[] | select(.parent == null)'
 ```
 
-Resolve only when the user asks you to, in that turn, for threads they name. If you believe a thread
-is settled, say so and ask; a reply from you is not an answer to that question. Then:
+You can recommend a thread to close. Wait for the answer, then resolve only the ids the user names:
 
 ```bash
 bb pr resolve 42 998877 --yes --json   # {resolved,pull_request}
-bb pr unresolve 42 998877 --json       # reopen it
+bb pr unresolve 42 998877 --json       # reopen a thread
 ```
 
-`bb pr resolve` confirms with a human before it does anything, and fails without a terminal — so
-`--yes` is how it runs at all under an agent. Treat `--yes` as the user's word, never your own:
-pass it only for an id the user just approved, one command per thread, and never in a loop over
-`bb pr view`. Resolution covers the whole thread, so the id is its first comment, the one whose
-`parent` is `null`.
+`bb pr resolve` asks a human to confirm, and fails when it has no terminal. `--yes` answers that
+prompt for you, so use it only for an id the user approved. Use one command for each thread. Do not
+put it in a loop.
+
+Resolve the first comment of a thread — the id whose `parent` is `null`. A reply id fails, and a
+general comment fails: only inline threads carry a resolution.
 
 Ask the author to change the code, or withdraw that request:
 
@@ -147,12 +146,14 @@ the commit or the diff.
 - **Exit 2** — no credentials. Ask the user to run `bb auth login`. Do not run it yourself, because
   it prompts for a token. In CI, set `BB_EMAIL` and `BB_TOKEN`.
 - **Exit 3** — the pull request, the branch, the comment or the repository does not exist. Confirm
-  the id, and confirm the repository with `bb auth status` and `-R`. A `pr resolve` that exits 3
-  usually means the comment id belongs to another pull request.
+  the id, and confirm the repository with `bb auth status` and `-R`.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
-  `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr create` and `pr request-changes`
-  need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr unresolve`, `pr create` and
+  `pr request-changes` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
+- **`is a reply`, or `is not on the diff`** — the id is not the first comment of an inline thread.
+  Read `parent` from `bb pr view`, and pass the id that has none.
+- **`already resolved`** — the thread is closed. Nothing to do.
 - **`no bitbucket.org remote found`**, or **`no git repository here`** — `bb` cannot find the
   repository. Pass `-R workspace/repo`, or set `BB_REPO`.
 
