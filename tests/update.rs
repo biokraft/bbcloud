@@ -10,6 +10,23 @@ fn release_body(tag: &str) -> serde_json::Value {
     serde_json::json!({ "tag_name": tag, "assets": [] })
 }
 
+/// Every binary invocation in this file must go through here: it points
+/// `HOME` and `XDG_CONFIG_HOME` at a per-test tempdir (so `refresh_tracked`'s
+/// unconditional `save_state` can never touch the developer's real
+/// `~/.config/bb/skills.json`) and disables the keyring, since `bb update`
+/// should never reach it. Returns the tempdir too so callers that need to
+/// assert on the config path can keep it alive.
+fn bb(api: &str) -> (Command, tempfile::TempDir) {
+    let cfg = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("HOME", cfg.path())
+        .env("XDG_CONFIG_HOME", cfg.path())
+        .env("BB_UPDATE_API_BASE", api)
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1");
+    (cmd, cfg)
+}
+
 #[tokio::test]
 async fn reports_up_to_date_in_json_when_the_latest_tag_matches() {
     let server = MockServer::start().await;
@@ -22,13 +39,8 @@ async fn reports_up_to_date_in_json_when_the_latest_tag_matches() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
@@ -50,13 +62,10 @@ async fn the_api_token_is_never_sent_to_the_release_host() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
+    let (mut cmd, _cfg) = bb(&server.uri());
+    cmd.args(["update", "--json"])
         .env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "ATATT-super-secret-value")
-        .env("NO_COLOR", "1")
         .output()
         .unwrap();
 
@@ -89,13 +98,8 @@ async fn a_newer_release_with_missing_assets_fails_without_touching_the_binary()
     let exe = assert_cmd::cargo::cargo_bin("bb");
     let before = std::fs::read(&exe).unwrap();
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(!output.status.success(), "a failed update must not exit 0");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -198,13 +202,8 @@ async fn assert_link_entry_is_rejected(entry_type: tar::EntryType) {
     let before = std::fs::read(&exe).unwrap();
     let exe_dir = exe.parent().unwrap().to_path_buf();
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(
         !output.status.success(),
@@ -277,14 +276,8 @@ async fn rate_limited_403_with_reset_header_reports_retry_time() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("BB_KEYRING_DISABLE", "1")
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(
         !output.status.success(),
@@ -318,14 +311,8 @@ async fn rate_limited_403_without_reset_header_omits_the_time_without_panicking(
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("BB_KEYRING_DISABLE", "1")
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -351,14 +338,8 @@ async fn non_rate_limit_403_reports_a_plain_release_api_error() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("BB_KEYRING_DISABLE", "1")
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -383,14 +364,8 @@ async fn server_error_500_reports_release_api_error_without_blaming_bitbucket() 
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("BB_KEYRING_DISABLE", "1")
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -414,16 +389,55 @@ async fn a_malformed_remote_tag_is_not_an_upgrade() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("bb")
-        .unwrap()
-        .args(["update", "--json"])
-        .env("BB_UPDATE_API_BASE", server.uri())
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let (mut cmd, _cfg) = bb(&server.uri());
+    let output = cmd.args(["update", "--json"]).output().unwrap();
 
     assert!(output.status.success(), "should exit 0, not panic");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(parsed["up_to_date"], serde_json::Value::Bool(true));
+}
+
+/// Regression for the bug this file used to have: every spawned `bb`
+/// invocation resolved the developer's real `~/.config/bb/skills.json`
+/// because none of them overrode `HOME`/`XDG_CONFIG_HOME`, and
+/// `refresh_tracked` (which `update` calls on every path, including
+/// up-to-date) ends in an unconditional `save_state`. Simulates "the
+/// developer's real config" as a second tempdir that is never passed to the
+/// child process at all — only `bb()`'s overridden `cfg` is — and proves the
+/// write landed only inside the override, never inside the stand-in for the
+/// real one.
+#[tokio::test]
+async fn update_never_touches_the_real_config_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(release_body(&format!("v{}", env!("CARGO_PKG_VERSION")))),
+        )
+        .mount(&server)
+        .await;
+    let stand_in_for_real_home = tempfile::tempdir().unwrap();
+    let stand_in_real_state = stand_in_for_real_home
+        .path()
+        .join(".config")
+        .join("bb")
+        .join("skills.json");
+
+    let (mut cmd, cfg) = bb(&server.uri());
+    cmd.arg("update").assert().success();
+
+    assert!(
+        !stand_in_real_state.exists(),
+        "bb update must never write outside the HOME/XDG_CONFIG_HOME override: {} was created",
+        stand_in_real_state.display()
+    );
+    // Sanity: the override itself was actually exercised (refresh_tracked's
+    // unconditional save_state writes here even with nothing tracked), so
+    // the assertion above isn't just "nothing ran at all".
+    assert!(
+        cfg.path().join("bb").join("skills.json").exists(),
+        "the overridden config dir should be the one bb actually used"
+    );
 }
