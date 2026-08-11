@@ -125,7 +125,10 @@ fn status_reports_current_then_modified() {
         .args(["skill", "status"])
         .assert()
         .success()
-        .stdout(contains("modified"));
+        // `contains("modified")` would also match `skipped_modified` — the
+        // glyph that matters here is the bare `State::Modified` word, not a
+        // substring of some other state's name.
+        .stdout(contains("modified").and(contains("skipped_modified").not()));
 }
 
 #[test]
@@ -292,6 +295,94 @@ fn global_install_and_uninstall_target_home_not_the_project() {
 /// property is covered by the library-level test in `src/skill.rs`, which
 /// scopes the uninstall to just the Claude entry. Tolerates the platform
 /// falling back to a real file instead of a symlink, same as the Task 2 test.
+/// `install --agent claude` end to end, including a pre-existing hand-made
+/// symlink at the Claude location (what the old README's `ln -s` step told
+/// users to create). This is the exact gap that let Critical 2 slip through:
+/// `--agent claude` alone was never exercised, so `install` recording
+/// `kind: "file"` for a symlink it did not create itself went unnoticed.
+#[test]
+fn install_agent_claude_over_a_hand_made_symlink_then_uninstall_preserves_agents_copy() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    std::fs::create_dir_all(project.path().join(".agents/skills/bitbucket-cloud")).unwrap();
+    std::fs::write(
+        project
+            .path()
+            .join(".agents/skills/bitbucket-cloud/SKILL.md"),
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.agents/skills/bitbucket-cloud/SKILL.md"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let claude_dir = project.path().join(".claude/skills/bitbucket-cloud");
+    std::fs::create_dir_all(claude_dir.parent().unwrap()).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../../.agents/skills/bitbucket-cloud", &claude_dir).unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "install", "--agent", "claude"])
+        .assert()
+        .success();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success();
+
+    let agents_file = project
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md");
+    assert!(
+        agents_file.is_file(),
+        "the .agents copy must survive uninstalling the claude link"
+    );
+    assert!(
+        std::fs::symlink_metadata(&claude_dir).is_err(),
+        "no dangling claude symlink should remain — Path::exists() would wrongly \
+         report false for a dangling link, so this checks symlink_metadata instead"
+    );
+}
+
+/// Important 4: the human-readable uninstall messages must distinguish
+/// "removed", "refused because modified", and "was already gone" rather than
+/// collapsing the latter two into the same `false` boolean.
+#[test]
+fn uninstall_messages_distinguish_removed_refused_and_absent() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "install", "--agent", "all"])
+        .assert()
+        .success();
+
+    let agents_path = project
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md");
+    std::fs::write(&agents_path, "# ours\n").unwrap();
+
+    let claude_dir = project.path().join(".claude/skills/bitbucket-cloud");
+    // Remove the claude side out from under bb, so its tracked entry is
+    // "absent" rather than "removed" or "refused".
+    if claude_dir.exists() || std::fs::symlink_metadata(&claude_dir).is_ok() {
+        let _ = std::fs::remove_dir_all(&claude_dir);
+        let _ = std::fs::remove_file(&claude_dir);
+    }
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success()
+        .stderr(contains(
+            "edited locally — left alone (pass --force to remove)",
+        ))
+        .stdout(contains("already gone — nothing to remove"));
+}
+
 #[test]
 fn uninstall_removes_a_symlinked_claude_entry() {
     let project = tempfile::tempdir().unwrap();
