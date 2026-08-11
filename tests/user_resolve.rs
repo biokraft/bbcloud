@@ -287,9 +287,9 @@ async fn no_match_with_a_members_403_warns_and_errors() {
         other => panic!("unexpected: {other:?}"),
     }
     // The warning itself goes to stderr via `output::warn`, which this
-    // in-process test cannot capture; the branch is covered by the
-    // `members_refused` flag threading verified via the assertions above
-    // (this test only reaches the 0-match arm when `members_refused` is true).
+    // in-process test cannot capture — that's covered at the CLI level in
+    // `tests/user_resolve_cli.rs`, which spawns the real binary and reads its
+    // stderr. This test only pins that the ordinary error still fires here.
 }
 
 /// A person listed in both `/permissions-config/users` and `/default-reviewers`
@@ -317,4 +317,61 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
+}
+
+/// `permissions-config/users` generally needs repo admin, which a CI token or a
+/// less-privileged colleague's token may lack. That must degrade exactly like a
+/// members 403 does, not abort resolution before default-reviewers is even
+/// consulted — otherwise this fix regresses every token that isn't a repo admin.
+#[tokio::test]
+async fn a_403_on_permissions_config_falls_back_to_default_reviewers() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    mount_members(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    mount_default_reviewers(
+        &server,
+        serde_json::json!([{ "uuid": "{p}", "display_name": "Patrick Stein" }]),
+    )
+    .await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "patrick", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.uuid.as_deref(), Some("{p}"));
+}
+
+/// Both lookups refused (members 403, permissions-config 403) plus no match
+/// anywhere still produces the ordinary "no user matching" error rather than
+/// propagating either refusal as a hard failure.
+#[tokio::test]
+async fn both_lookups_refused_with_no_match_still_errors_normally() {
+    std::env::set_var("BB_KEYRING_DISABLE", "1");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+
+    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Config(message) => {
+            assert!(message.contains("nobody"), "{message}");
+            assert!(message.contains("uuid"), "{message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
 }
