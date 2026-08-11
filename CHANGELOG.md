@@ -49,6 +49,10 @@ skill installs itself with a command instead of a `curl` recipe.
   refreshes taps, so a freshly published formula stayed invisible and the command reported "already
   installed" while a newer version existed. It now suggests `brew update && brew upgrade bb`.
 
+Note on scope: resolving a thread is now supported, which the v0.10.0 note said it was not — that
+changed here, deliberately, and it is gated behind a confirmation prompt. Approving, merging and
+declining a pull request remain unsupported and stay human decisions.
+
 ## [0.10.0](https://github.com/biokraft/bbcloud/compare/v0.9.5...v0.10.0) - 2026-08-11
 
 Reviewers become first-class: who is tagged, what each of them decided, and which pull requests are
