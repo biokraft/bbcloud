@@ -228,3 +228,87 @@ fn a_corrupt_state_file_does_not_break_the_command() {
         .assert()
         .success();
 }
+
+/// `status` and `uninstall` must be equally honest about a corrupt state file:
+/// both read through `load_state`, so both should warn on stderr rather than
+/// one going silent about it.
+#[test]
+fn a_corrupt_state_file_warns_on_uninstall_too() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let state = cfg.path().join("bb/skills.json");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(&state, "{not json").unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success()
+        .stderr(contains("skills.json"));
+}
+
+/// `--global` must act on `HOME`, never on the project directory, on both
+/// `install` and `uninstall`.
+#[test]
+fn global_install_and_uninstall_target_home_not_the_project() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "install", "--global"])
+        .assert()
+        .success();
+
+    let global_path = cfg.path().join(".agents/skills/bitbucket-cloud/SKILL.md");
+    let project_path = project
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md");
+    assert!(
+        global_path.is_file(),
+        "global install should write under HOME"
+    );
+    assert!(
+        !project_path.exists(),
+        "global install must not touch the project directory"
+    );
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall", "--global"])
+        .assert()
+        .success();
+    assert!(
+        !global_path.exists(),
+        "global uninstall should remove the HOME copy"
+    );
+}
+
+/// A symlinked Claude entry must be removed as a link, not followed into its
+/// target. Uninstalling both agents naturally removes the `.agents` copy too
+/// (it's tracked in its own right), so this only proves the `.claude` entry
+/// actually disappears — the "did removal follow the link into its target"
+/// property is covered by the library-level test in `src/skill.rs`, which
+/// scopes the uninstall to just the Claude entry. Tolerates the platform
+/// falling back to a real file instead of a symlink, same as the Task 2 test.
+#[test]
+fn uninstall_removes_a_symlinked_claude_entry() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "install", "--agent", "all"])
+        .assert()
+        .success();
+
+    let claude_dir = project.path().join(".claude/skills/bitbucket-cloud");
+    assert!(claude_dir.join("SKILL.md").exists() || claude_dir.exists());
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success();
+
+    assert!(
+        !claude_dir.exists() && !claude_dir.join("SKILL.md").exists(),
+        "the claude entry (link or file) should be gone"
+    );
+}

@@ -195,7 +195,10 @@ pub fn status() -> (Vec<StatusRow>, Option<String>) {
 /// Removes what bb recorded. A customized file is left in place unless `force`,
 /// and an untracked file is never touched at all.
 pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)>> {
-    let (entries, _warning) = load_state();
+    let (entries, warning) = load_state();
+    if let Some(warning) = warning {
+        crate::output::warn(&warning);
+    }
     let wanted = content_hash(SKILL_MD.as_bytes());
     let mut results = Vec::new();
     let mut keep = Vec::new();
@@ -212,8 +215,18 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)
             keep.push(entry);
             continue;
         }
-        let existed = entry.path.exists() || std::fs::symlink_metadata(&entry.path).is_ok();
-        remove_existing(&entry.path)?;
+        // A symlinked Claude entry's `path` is `SKILL.md` *inside* the linked
+        // directory, so removing it directly would follow the link and delete
+        // the `.agents` copy it points at. The thing actually on disk at the
+        // Claude location is the symlink one level up — remove that instead,
+        // and don't recurse into what it points to.
+        let removal_target: &Path = if entry.kind == "symlink" {
+            entry.path.parent().unwrap_or(&entry.path)
+        } else {
+            &entry.path
+        };
+        let existed = removal_target.exists() || std::fs::symlink_metadata(removal_target).is_ok();
+        remove_existing(removal_target)?;
         results.push((entry.path.clone(), existed));
     }
 
@@ -458,6 +471,103 @@ mod tests {
                 let (loaded, warning) = load_state();
                 assert!(loaded.is_empty());
                 assert!(warning.is_some(), "corrupt state should warn");
+            },
+        );
+    }
+
+    /// Drives `Stale` (and `Current`) through `status()` end to end, not just
+    /// through `install()`'s refresh path. A tracked entry whose sha256 matches
+    /// what's on disk, but not what the binary ships now, is stale; a tracked
+    /// entry whose sha256 matches the binary's current text is current.
+    #[test]
+    #[serial_test::serial]
+    fn status_reports_stale_when_the_binary_shipped_newer_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(dir.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let old = "---\nname: bitbucket-cloud\n---\nold text\n";
+                std::fs::write(&path, old).unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(old.as_bytes()),
+                    version: "0.0.1".into(),
+                }])
+                .unwrap();
+
+                let (rows, warning) = status();
+                assert!(warning.is_none());
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    rows[0].state,
+                    State::Stale,
+                    "on-disk text matches the recorded sha256, just not the binary's current text"
+                );
+
+                // Same entry, but now the file holds exactly what the binary ships:
+                // that must read as Current, not Stale.
+                std::fs::write(&path, SKILL_MD).unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(SKILL_MD.as_bytes()),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                }])
+                .unwrap();
+                let (rows, _) = status();
+                assert_eq!(rows[0].state, State::Current);
+            },
+        );
+    }
+
+    /// Uninstalling a symlinked Claude entry must remove the link itself, not
+    /// follow it into the `.agents` copy it points at. Scopes the uninstall to
+    /// just the Claude subtree so the `.agents` entry is never itself in scope
+    /// for removal — the only way to prove the target survives *because* the
+    /// link wasn't followed, rather than because it was also being deleted on
+    /// its own account.
+    #[test]
+    #[serial_test::serial]
+    fn uninstall_removes_the_claude_link_without_deleting_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
+                let agents_path = skill_file(dir.path(), Agent::Agents);
+                let claude_root = dir.path().join(".claude");
+                assert!(agents_path.is_file(), "sanity: agents copy installed");
+
+                let results = uninstall(Some(&claude_root), false).unwrap();
+                assert_eq!(results.len(), 1, "only the claude entry was in scope");
+                assert!(results[0].1, "the claude entry should report removed");
+
+                let claude_dir = dir.path().join(".claude/skills/bitbucket-cloud");
+                assert!(
+                    !claude_dir.exists(),
+                    "the claude link (or fallback file) should be gone"
+                );
+                assert!(
+                    agents_path.is_file(),
+                    "removing the claude link must not delete the agents copy it points at"
+                );
+
+                let (remaining, _) = load_state();
+                assert_eq!(remaining.len(), 1, "the agents entry stays tracked");
+                assert_eq!(remaining[0].agent, "agents");
             },
         );
     }
