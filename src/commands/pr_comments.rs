@@ -1,5 +1,5 @@
 use crate::api::models::{Comment, PullRequest};
-use crate::commands::pr::Ctx;
+use crate::commands::pr::{self, Ctx};
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
 use serde::Serialize;
@@ -13,6 +13,7 @@ pub struct CommentView {
     pub file: Option<String>,
     pub line: Option<u64>,
     pub resolved: bool,
+    pub parent: Option<u64>,
 }
 
 fn to_view(comment: &Comment) -> CommentView {
@@ -29,6 +30,7 @@ fn to_view(comment: &Comment) -> CommentView {
         file: inline.and_then(|i| i.path.clone()),
         line: inline.and_then(|i| i.to.or(i.from)),
         resolved: comment.is_resolved(),
+        parent: comment.parent_id(),
     }
 }
 
@@ -135,7 +137,13 @@ pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> 
                     _ => "-".to_string(),
                 };
                 let marker = if c.resolved { " [resolved]" } else { "" };
-                println!("  {location}{marker}  (comment {})", c.id);
+                match c.parent {
+                    Some(parent) => println!(
+                        "  {location}{marker}  (comment {} · reply to {parent})",
+                        c.id
+                    ),
+                    None => println!("  {location}{marker}  (comment {})", c.id),
+                }
                 println!("  {} ({}):", c.author, c.timestamp);
                 for line in c.body.lines() {
                     println!("    {line}");
@@ -253,6 +261,35 @@ pub async fn comment(ctx: &Ctx, args: CommentArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Marks a comment thread as resolved. Bitbucket resolves the whole thread, so
+/// `comment` is the id of its root — the entry `bb pr view` reports without a
+/// `parent`. The response body carries only the resolution, which adds nothing
+/// the caller does not already know, so it is discarded.
+pub async fn resolve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
+    ctx.client
+        .post_empty(&resolve_path(ctx, id, comment))
+        .await?;
+    pr::report(
+        ctx,
+        &format!("comment {comment} resolved on #{id}"),
+        serde_json::json!({ "resolved": comment, "pull_request": id }),
+    )
+}
+
+/// Reopens a resolved thread.
+pub async fn unresolve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
+    ctx.client.delete(&resolve_path(ctx, id, comment)).await?;
+    pr::report(
+        ctx,
+        &format!("comment {comment} reopened on #{id}"),
+        serde_json::json!({ "unresolved": comment, "pull_request": id }),
+    )
+}
+
+fn resolve_path(ctx: &Ctx, id: u64, comment: u64) -> String {
+    ctx.path(&format!("/pullrequests/{id}/comments/{comment}/resolve"))
 }
 
 #[cfg(test)]

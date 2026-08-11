@@ -239,6 +239,51 @@ async fn an_inline_comment_without_a_line_renders_just_the_path() {
         .stdout(contains("whole-file note"));
 }
 
+/// Resolution acts on the thread root, so a reply must report the id it answers
+/// and the root must report none — that is how a caller picks the id to resolve.
+#[tokio::test]
+async fn view_reports_the_thread_root_of_a_reply() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(
+        &server,
+        serde_json::json!({
+            "values": [
+                {
+                    "id": 600,
+                    "content": { "raw": "this drops the error" },
+                    "user": { "display_name": "Reviewer" },
+                    "created_on": "2026-08-04T10:00:00+00:00",
+                    "inline": { "path": "src/auth.rs", "to": 88 }
+                },
+                {
+                    "id": 601,
+                    "content": { "raw": "fixed" },
+                    "user": { "display_name": "Me" },
+                    "created_on": "2026-08-04T11:00:00+00:00",
+                    "inline": { "path": "src/auth.rs", "to": 88 },
+                    "parent": { "id": 600 }
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let inline = value["inline"].as_array().unwrap();
+    assert!(inline[0]["parent"].is_null(), "root: {:?}", inline[0]);
+    assert_eq!(inline[1]["parent"], 600);
+
+    bb(&server)
+        .args(["pr", "view", "7"])
+        .assert()
+        .success()
+        .stdout(contains("reply to 600"));
+}
+
 // NOTE: the brief's fourth test — an inline comment with neither path nor
 // line, expecting the dash fallback at pr_comments.rs:135 — is not included.
 // `Comment::is_inline()` (src/api/models.rs:110-114) only classifies a

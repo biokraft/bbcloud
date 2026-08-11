@@ -73,7 +73,7 @@ scopes are enough:
 |---|---|
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits` |
-| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr request-changes` |
+| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr request-changes` |
 | `read:repository:bitbucket` | `branch list`, and the default-reviewer lookup `pr create` does |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
@@ -109,6 +109,7 @@ bb pr list                                # open PRs, with reviewers and approva
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
+bb pr resolve 42 998877                   # mark a review thread as done
 bb branch list --user alice
 bb update                                 # check for a newer release and update
 ```

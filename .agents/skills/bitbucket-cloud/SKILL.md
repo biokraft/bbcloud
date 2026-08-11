@@ -33,8 +33,9 @@ bb pr commits 42 --json                 # commits, short hashes
 ```
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
-`timestamp`, `body`, `file`, `line` and `resolved`. Use the comment `id` to answer in the correct
-thread.
+`timestamp`, `body`, `file`, `line`, `resolved` and `parent`. Use the comment `id` to answer in the
+correct thread. `parent` holds the comment answered, and is `null` on the first comment of a
+thread — that first `id` is the one to resolve.
 
 Find the pull request for the current branch:
 
@@ -58,6 +59,26 @@ printf 'Refactored as suggested.\n\nThe parser is now its own module.\n' \
 
 `--line` needs `--file`. `--reply-to` accepts neither, because a reply inherits the location of its
 parent.
+
+## Close a thread
+
+Answer the point first, then resolve the thread. Resolution covers the whole thread, so pass the
+`id` of its first comment — the one whose `parent` is `null`:
+
+```bash
+bb pr comment 42 --reply-to 998877 --body "Fixed in 1a2b3c4." --json
+bb pr resolve 42 998877 --json     # {resolved,pull_request}
+bb pr unresolve 42 998877 --json   # reopen it
+```
+
+Resolve only what you answered. Leave a thread open when the point still stands. To see what is
+left, read `bb pr view 42 --unresolved --json`.
+
+Find every thread that still needs an answer, root comments only:
+
+```bash
+bb pr view 42 --unresolved --json | jq '.inline[] | select(.parent == null)'
+```
 
 Ask the author to change the code, or withdraw that request:
 
@@ -99,6 +120,8 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
+| `bb pr resolve <id> <comment>` | `{resolved,pull_request}` |
+| `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
 | `bb pr request-changes <id>` | `{requested_changes:<id>}` |
 | `bb pr no-request-changes <id>` | `{unrequested_changes:<id>}` |
@@ -113,11 +136,12 @@ the commit or the diff.
 
 - **Exit 2** — no credentials. Ask the user to run `bb auth login`. Do not run it yourself, because
   it prompts for a token. In CI, set `BB_EMAIL` and `BB_TOKEN`.
-- **Exit 3** — the pull request, the branch or the repository does not exist. Confirm the id, and
-  confirm the repository with `bb auth status` and `-R`.
+- **Exit 3** — the pull request, the branch, the comment or the repository does not exist. Confirm
+  the id, and confirm the repository with `bb auth status` and `-R`. A `pr resolve` that exits 3
+  usually means the comment id belongs to another pull request.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
-  `read:pullrequest:bitbucket`. `pr comment`, `pr create` and `pr request-changes` need
-  `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr create` and `pr request-changes`
+  need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
 - **`no bitbucket.org remote found`**, or **`no git repository here`** — `bb` cannot find the
   repository. Pass `-R workspace/repo`, or set `BB_REPO`.

@@ -166,6 +166,94 @@ async fn reply_cannot_be_combined_with_inline_location() {
 }
 
 #[tokio::test]
+async fn resolve_and_its_reversal_hit_the_right_verbs() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/900/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "user": { "display_name": "Me" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/901/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "resolve", "7", "900"])
+        .assert()
+        .success()
+        .stdout(contains("900"));
+    bb(&server)
+        .args(["pr", "unresolve", "7", "901"])
+        .assert()
+        .success()
+        .stdout(contains("901"));
+}
+
+#[tokio::test]
+async fn resolve_json_names_the_comment_and_the_pull_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/900/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/900/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "resolve", "7", "900", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["resolved"], 900);
+    assert_eq!(value["pull_request"], 7);
+
+    let out = bb(&server)
+        .args(["pr", "unresolve", "7", "900", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["unresolved"], 900);
+    assert_eq!(value["pull_request"], 7);
+}
+
+/// A thread that was already resolved answers 404, which must surface as exit 3
+/// rather than a success the caller would read as "done".
+#[tokio::test]
+async fn resolving_an_unknown_comment_exits_three() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/404/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "resolve", "7", "404"])
+        .assert()
+        .code(3);
+}
+
+#[tokio::test]
 async fn comment_json_reports_the_new_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

@@ -156,6 +156,11 @@ drive-by change since several modules depend on the path.
 **Always build API URLs through `ctx.path(suffix)`.** It delegates to `api::repo_path` and applies
 percent-encoding exactly once. Do not concatenate URLs by hand.
 
+**Comment resolution is thread-scoped.** `POST` and `DELETE` on `…/comments/{id}/resolve` act on the
+whole thread, so the id has to be the thread root — the comment with no `parent`. `bb pr view`
+exposes `parent` for exactly that reason, and the resolve endpoint's response body carries only the
+resolution, which is why `pr_comments::resolve` discards it.
+
 **Use `Client::paginate`** rather than hand-rolling a page loop. It follows `next` and caps at 100 pages.
 
 ## JSON output
