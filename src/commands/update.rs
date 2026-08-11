@@ -183,6 +183,15 @@ fn header_str<'a>(response: &'a reqwest::Response, name: &str) -> Option<&'a str
 /// falling back to the Unix epoch (`1970-01-01`), which would be a lie.
 fn retry_time(response: &reqwest::Response) -> Option<String> {
     let epoch: i64 = header_str(response, "x-ratelimit-reset")?.parse().ok()?;
+    format_epoch_local(epoch)
+}
+
+/// Renders a Unix epoch as a local `HH:MM`, rejecting negative values rather
+/// than letting them render as a pre-1970 clock.
+fn format_epoch_local(epoch: i64) -> Option<String> {
+    if epoch < 0 {
+        return None;
+    }
     let utc = chrono::DateTime::from_timestamp(epoch, 0)?;
     Some(
         utc.with_timezone(&chrono::Local)
@@ -602,6 +611,18 @@ mod tests {
         assert!(
             checked_asset_url("bb.tar.gz", "http://127.0.0.1:1234/bb.tar.gz".into(), false).is_ok()
         );
+    }
+
+    /// A negative epoch must never render a pre-1970 clock.
+    #[test]
+    fn negative_epoch_is_rejected() {
+        assert_eq!(format_epoch_local(-1), None);
+        assert_eq!(format_epoch_local(-1_000_000), None);
+    }
+
+    #[test]
+    fn a_valid_epoch_still_formats() {
+        assert!(format_epoch_local(1_786_452_151).is_some());
     }
 
     #[test]
