@@ -3,8 +3,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 pub struct User {
     pub uuid: Option<String>,
+    pub account_id: Option<String>,
     pub display_name: Option<String>,
     pub nickname: Option<String>,
+}
+
+impl User {
+    /// The name a human recognizes. `display_name` is what the Bitbucket web ui
+    /// shows, so it is preferred over the nickname.
+    pub fn name(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .or(self.nickname.as_deref())
+            .unwrap_or("-")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +43,42 @@ pub struct Links {
 pub struct Participant {
     pub user: Option<User>,
     pub state: Option<String>,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Pending,
+}
+
+impl ReviewState {
+    pub fn from_api(state: Option<&str>) -> Self {
+        match state {
+            Some("approved") => Self::Approved,
+            Some("changes_requested") => Self::ChangesRequested,
+            _ => Self::Pending,
+        }
+    }
+
+    pub fn mark(self) -> &'static str {
+        match self {
+            Self::Approved => "✓",
+            Self::ChangesRequested => "✗",
+            Self::Pending => "·",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewerState {
+    pub name: String,
+    pub uuid: Option<String>,
+    pub state: ReviewState,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +94,8 @@ pub struct PullRequest {
     pub reviewers: Vec<User>,
     #[serde(default)]
     pub participants: Vec<Participant>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 impl PullRequest {
@@ -78,6 +128,65 @@ impl PullRequest {
             .as_ref()
             .and_then(|a| a.nickname.as_deref().or(a.display_name.as_deref()))
             .unwrap_or("-")
+    }
+
+    /// Who is on the hook for this pull request, and what each has decided.
+    ///
+    /// `reviewers[]` is the tagged set but carries no decision; `participants[]`
+    /// carries the decision but also includes people who only commented. So
+    /// participants with the REVIEWER role are the primary source, and anyone
+    /// tagged who has not shown up there yet is appended as Pending.
+    pub fn reviewer_states(&self) -> Vec<ReviewerState> {
+        let mut out: Vec<ReviewerState> = self
+            .participants
+            .iter()
+            .filter(|p| p.role.as_deref() == Some("REVIEWER"))
+            .filter_map(|p| {
+                p.user.as_ref().map(|u| ReviewerState {
+                    name: u.name().to_string(),
+                    uuid: u.uuid.clone(),
+                    state: ReviewState::from_api(p.state.as_deref()),
+                })
+            })
+            .collect();
+
+        for reviewer in &self.reviewers {
+            let already = out.iter().any(|seen| {
+                match (seen.uuid.as_deref(), reviewer.uuid.as_deref()) {
+                    (Some(a), Some(b)) => a == b,
+                    // One side has no uuid, so the name is all there is to match on.
+                    _ => seen.name == reviewer.name(),
+                }
+            });
+            if !already {
+                out.push(ReviewerState {
+                    name: reviewer.name().to_string(),
+                    uuid: reviewer.uuid.clone(),
+                    state: ReviewState::Pending,
+                });
+            }
+        }
+
+        out
+    }
+
+    /// Bitbucket keeps `draft` as a boolean while `state` stays OPEN, so the two
+    /// have to be folded into one word for the table.
+    pub fn display_state(&self) -> String {
+        if self.draft {
+            return "Draft".to_string();
+        }
+        match self.state.as_deref() {
+            Some(state) if !state.is_empty() => {
+                let lower = state.to_lowercase();
+                let mut chars = lower.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => "-".to_string(),
+                }
+            }
+            _ => "-".to_string(),
+        }
     }
 }
 
@@ -207,4 +316,148 @@ impl DiffStatEntry {
 #[derive(Debug, Serialize)]
 pub struct ReviewerRef {
     pub uuid: String,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn pr_from(json: serde_json::Value) -> PullRequest {
+        serde_json::from_value(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn reviewer_states_reads_state_from_participants() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "reviewers": [
+                { "uuid": "{a}", "display_name": "Ana" },
+                { "uuid": "{b}", "display_name": "Bo" },
+                { "uuid": "{c}", "display_name": "Cy" }
+            ],
+            "participants": [
+                { "role": "REVIEWER", "state": "approved", "user": { "uuid": "{a}", "display_name": "Ana" } },
+                { "role": "REVIEWER", "state": "changes_requested", "user": { "uuid": "{b}", "display_name": "Bo" } },
+                { "role": "REVIEWER", "state": null, "user": { "uuid": "{c}", "display_name": "Cy" } }
+            ]
+        }));
+
+        let states = pr.reviewer_states();
+        assert_eq!(states.len(), 3);
+        assert_eq!(states[0].name, "Ana");
+        assert_eq!(states[0].state, ReviewState::Approved);
+        assert_eq!(states[1].state, ReviewState::ChangesRequested);
+        assert_eq!(states[2].state, ReviewState::Pending);
+    }
+
+    /// A tagged reviewer who has not opened the pull request at all is absent from
+    /// `participants`. They must still be listed, or the column under-reports who is
+    /// on the hook.
+    #[test]
+    fn reviewer_states_includes_a_reviewer_missing_from_participants() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "reviewers": [{ "uuid": "{a}", "display_name": "Ana" }],
+            "participants": []
+        }));
+
+        let states = pr.reviewer_states();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].name, "Ana");
+        assert_eq!(states[0].state, ReviewState::Pending);
+    }
+
+    /// Someone who merely commented has role PARTICIPANT. Counting them as a
+    /// reviewer would invent reviewers nobody tagged.
+    #[test]
+    fn reviewer_states_excludes_plain_participants() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "reviewers": [],
+            "participants": [
+                { "role": "PARTICIPANT", "state": "approved", "user": { "uuid": "{z}", "display_name": "Zed" } }
+            ]
+        }));
+
+        assert!(pr.reviewer_states().is_empty());
+    }
+
+    /// The same person appears in both arrays; they must be listed once, with the
+    /// participant state rather than a duplicate Pending row.
+    #[test]
+    fn reviewer_states_does_not_duplicate_across_both_arrays() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "reviewers": [{ "uuid": "{a}", "display_name": "Ana" }],
+            "participants": [
+                { "role": "REVIEWER", "state": "approved", "user": { "uuid": "{a}", "display_name": "Ana" } }
+            ]
+        }));
+
+        let states = pr.reviewer_states();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].state, ReviewState::Approved);
+    }
+
+    /// Dedup must survive a missing uuid on one side by falling back to the name.
+    #[test]
+    fn reviewer_states_dedups_by_name_when_a_uuid_is_absent() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "reviewers": [{ "display_name": "Ana" }],
+            "participants": [
+                { "role": "REVIEWER", "state": "approved", "user": { "display_name": "Ana" } }
+            ]
+        }));
+
+        assert_eq!(pr.reviewer_states().len(), 1);
+    }
+
+    #[test]
+    fn marks_are_stable_glyphs() {
+        assert_eq!(ReviewState::Approved.mark(), "✓");
+        assert_eq!(ReviewState::ChangesRequested.mark(), "✗");
+        assert_eq!(ReviewState::Pending.mark(), "·");
+    }
+
+    #[test]
+    fn review_state_serializes_in_snake_case() {
+        let json = serde_json::to_string(&ReviewState::ChangesRequested).unwrap();
+        assert_eq!(json, "\"changes_requested\"");
+    }
+
+    #[test]
+    fn draft_wins_over_open_state() {
+        let pr = pr_from(serde_json::json!({ "id": 1, "state": "OPEN", "draft": true }));
+        assert_eq!(pr.display_state(), "Draft");
+    }
+
+    #[test]
+    fn display_state_title_cases_the_api_value() {
+        let pr = pr_from(serde_json::json!({ "id": 1, "state": "DECLINED" }));
+        assert_eq!(pr.display_state(), "Declined");
+    }
+
+    #[test]
+    fn display_state_without_a_state_is_a_dash() {
+        let pr = pr_from(serde_json::json!({ "id": 1 }));
+        assert_eq!(pr.display_state(), "-");
+    }
+
+    #[test]
+    fn user_name_prefers_display_name_then_nickname() {
+        let full: User = serde_json::from_value(
+            serde_json::json!({ "display_name": "Ana Cruz", "nickname": "ana" }),
+        )
+        .unwrap();
+        assert_eq!(full.name(), "Ana Cruz");
+
+        let nick_only: User =
+            serde_json::from_value(serde_json::json!({ "nickname": "ana" })).unwrap();
+        assert_eq!(nick_only.name(), "ana");
+
+        let empty: User = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(empty.name(), "-");
+    }
 }
