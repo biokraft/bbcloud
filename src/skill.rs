@@ -225,13 +225,33 @@ mod tests {
         );
     }
 
-    /// Sets env vars for the closure and restores them afterwards. `None` removes.
-    /// Tests that call this must be `#[serial]`, because process env is global.
+    /// Restores saved env vars on drop, so a panic inside `temp_env`'s closure
+    /// still puts `HOME`/`XDG_CONFIG_HOME` back rather than leaking a
+    /// soon-to-be-dropped tempdir path into whichever `#[serial]` test runs next.
+    struct EnvGuard {
+        saved: Vec<(String, Option<String>)>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Sets env vars for the closure and restores them afterwards, even if the
+    /// closure panics. `None` removes. Tests that call this must be `#[serial]`,
+    /// because process env is global.
     fn temp_env(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
         let saved: Vec<(String, Option<String>)> = vars
             .iter()
             .map(|(k, _)| ((*k).to_string(), std::env::var(k).ok()))
             .collect();
+        let _guard = EnvGuard { saved };
         for (k, v) in vars {
             match v {
                 Some(val) => std::env::set_var(k, val),
@@ -239,11 +259,36 @@ mod tests {
             }
         }
         f();
-        for (k, v) in saved {
-            match v {
-                Some(val) => std::env::set_var(&k, val),
-                None => std::env::remove_var(&k),
-            }
-        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn temp_env_restores_vars_even_if_the_closure_panics() {
+        std::env::set_var("XDG_CONFIG_HOME", "/before/panic");
+        std::env::remove_var("HOME");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            temp_env(
+                &[
+                    ("XDG_CONFIG_HOME", Some("/tmp/during-panic")),
+                    ("HOME", Some("/tmp/home")),
+                ],
+                || panic!("simulated test failure inside temp_env"),
+            );
+        }));
+        assert!(result.is_err(), "closure should have panicked");
+
+        assert_eq!(
+            std::env::var("XDG_CONFIG_HOME").ok(),
+            Some("/before/panic".to_string()),
+            "XDG_CONFIG_HOME must be restored even after a panic"
+        );
+        assert_eq!(
+            std::env::var("HOME").ok(),
+            None,
+            "HOME must be restored to unset even after a panic"
+        );
+
+        std::env::remove_var("XDG_CONFIG_HOME");
     }
 }
