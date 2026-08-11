@@ -38,7 +38,15 @@ fn pr_help_lists_read_and_write_commands() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     for expected in [
-        "list", "view", "create", "comment", "diff", "files", "commits",
+        "list",
+        "view",
+        "create",
+        "comment",
+        "resolve",
+        "unresolve",
+        "diff",
+        "files",
+        "commits",
     ] {
         assert!(
             text.contains(expected),
