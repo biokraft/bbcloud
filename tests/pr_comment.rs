@@ -165,6 +165,8 @@ async fn reply_cannot_be_combined_with_inline_location() {
         .stderr(contains("--reply-to"));
 }
 
+/// `--yes` is the approval, so the request goes out and nothing else is fetched:
+/// the comment lookup exists only to fill the prompt a human would have seen.
 #[tokio::test]
 async fn resolve_and_its_reversal_hit_the_right_verbs() {
     let server = MockServer::start().await;
@@ -178,6 +180,14 @@ async fn resolve_and_its_reversal_hit_the_right_verbs() {
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/900",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(created(900)))
+        .expect(0)
+        .mount(&server)
+        .await;
     Mock::given(method("DELETE"))
         .and(path(
             "/repositories/acme/widgets/pullrequests/7/comments/901/resolve",
@@ -188,15 +198,59 @@ async fn resolve_and_its_reversal_hit_the_right_verbs() {
         .await;
 
     bb(&server)
-        .args(["pr", "resolve", "7", "900"])
+        .args(["pr", "resolve", "7", "900", "--yes"])
         .assert()
         .success()
         .stdout(contains("900"));
+    // Reopening restores a reviewer's point rather than hiding one, so it needs
+    // no approval.
     bb(&server)
         .args(["pr", "unresolve", "7", "901"])
         .assert()
         .success()
         .stdout(contains("901"));
+}
+
+/// The gate: with no terminal there is nobody to approve, so the command must
+/// name the flag and leave the thread alone. `expect(0)` is the real assertion —
+/// a gate that errors *after* resolving would be no gate at all.
+#[tokio::test]
+async fn resolve_without_approval_sends_no_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/repositories/acme/widgets/pullrequests/7/comments/900/resolve",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "resolve", "7", "900"])
+        .write_stdin("y\n") // a piped `yes` must not count as approval either
+        .assert()
+        .failure()
+        .stderr(contains("--yes"));
+}
+
+/// The prompt describes the thread, so declining leaves nothing resolved — the
+/// same guarantee, one step later. Approving cannot be driven from a piped stdin
+/// (that is the point of the gate), so the terminal branch is covered by the
+/// unit tests over `describe` in `src/commands/pr_comments.rs`.
+#[tokio::test]
+async fn resolve_json_stays_pure_when_the_gate_rejects() {
+    let server = MockServer::start().await;
+    let out = bb(&server)
+        .args(["pr", "resolve", "7", "900", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        out.stdout.is_empty(),
+        "stdout must stay empty in json mode: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
 }
 
 #[tokio::test]
@@ -218,7 +272,7 @@ async fn resolve_json_names_the_comment_and_the_pull_request() {
         .await;
 
     let out = bb(&server)
-        .args(["pr", "resolve", "7", "900", "--json"])
+        .args(["pr", "resolve", "7", "900", "--yes", "--json"])
         .output()
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -248,7 +302,7 @@ async fn resolving_an_unknown_comment_exits_three() {
         .await;
 
     bb(&server)
-        .args(["pr", "resolve", "7", "404"])
+        .args(["pr", "resolve", "7", "404", "--yes"])
         .assert()
         .code(3);
 }

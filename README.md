@@ -109,7 +109,7 @@ bb pr list                                # open PRs, with reviewers and approva
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
-bb pr resolve 42 998877                   # mark a review thread as done
+bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb branch list --user alice
 bb update                                 # check for a newer release and update
 ```
@@ -127,6 +127,12 @@ tables, whose layout is not a contract. Scripts and agents should default to it.
 bb pr list --json | jq -r '.[] | select(.approvals == []) | "\(.id)\t\(.title)"'
 ```
 
+**Resolving asks first.** `bb pr resolve` prints the thread it is about to close — where it sits, who
+raised it, what it says — and waits for a yes. With no terminal it fails naming `--yes` rather than
+prompting, so nothing resolves in a script or under an agent unless the command line says so
+explicitly. Closing a reviewer's point is a decision, not a formality; `bb pr unresolve` reopens a
+thread and needs no confirmation.
+
 Shell completions make the rest discoverable:
 
 ```bash
@@ -138,7 +144,8 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
 `SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
 review pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
-comment and reply flags, the exit codes, and what to do when a scope is missing.
+comment and reply flags, the exit codes, and what to do when a scope is missing. It also draws the
+line the CLI cannot: the agent answers comment threads and reports them, and leaves resolving to you.
 
 Install it into a project:
 

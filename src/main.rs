@@ -162,11 +162,14 @@ enum PrCommand {
         #[arg(long, short = 'w')]
         web: bool,
     },
-    /// Mark a comment thread as resolved
+    /// Mark a comment thread as resolved, after confirming
     Resolve {
         id: u64,
         /// Id of the thread's first comment
         comment: u64,
+        /// Approve without the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Reopen a resolved comment thread
     Unresolve {
@@ -269,8 +272,8 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
-                PrCommand::Resolve { id, comment } => {
-                    commands::pr_comments::resolve(&ctx, id, comment).await
+                PrCommand::Resolve { id, comment, yes } => {
+                    commands::pr_comments::resolve(&ctx, id, comment, yes).await
                 }
                 PrCommand::Unresolve { id, comment } => {
                     commands::pr_comments::unresolve(&ctx, id, comment).await

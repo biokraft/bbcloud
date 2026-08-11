@@ -34,6 +34,16 @@ fn to_view(comment: &Comment) -> CommentView {
     }
 }
 
+/// `file:line`, or the bare file when the comment sits on no single line.
+/// `None` when the comment is not inline, leaving the fallback to the caller.
+fn location(file: Option<&str>, line: Option<u64>) -> Option<String> {
+    match (file, line) {
+        (Some(file), Some(line)) => Some(format!("{file}:{line}")),
+        (Some(file), None) => Some(file.to_string()),
+        _ => None,
+    }
+}
+
 /// Splits comments into general and inline buckets, oldest first. The
 /// `unresolved` filter applies only to inline threads — general comments are
 /// not resolvable in the Bitbucket API and are always kept.
@@ -131,11 +141,8 @@ pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> 
                 output::info("none");
             }
             for c in &inline {
-                let location = match (c.file.as_deref(), c.line) {
-                    (Some(file), Some(line)) => format!("{file}:{line}"),
-                    (Some(file), None) => file.to_string(),
-                    _ => "-".to_string(),
-                };
+                let location =
+                    location(c.file.as_deref(), c.line).unwrap_or_else(|| "-".to_string());
                 let marker = if c.resolved { " [resolved]" } else { "" };
                 match c.parent {
                     Some(parent) => println!(
@@ -267,7 +274,14 @@ pub async fn comment(ctx: &Ctx, args: CommentArgs) -> Result<()> {
 /// `comment` is the id of its root — the entry `bb pr view` reports without a
 /// `parent`. The response body carries only the resolution, which adds nothing
 /// the caller does not already know, so it is discarded.
-pub async fn resolve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
+///
+/// Resolving hides a reviewer's point from the pull request, and nothing in the
+/// api asks whether that point was actually addressed. So a human does: the
+/// command confirms first, and `yes` is the only way past it.
+pub async fn resolve(ctx: &Ctx, id: u64, comment: u64, yes: bool) -> Result<()> {
+    if !yes {
+        approve(ctx, id, comment).await?;
+    }
     ctx.client
         .post_empty(&resolve_path(ctx, id, comment))
         .await?;
@@ -278,7 +292,71 @@ pub async fn resolve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
     )
 }
 
-/// Reopens a resolved thread.
+/// Puts the thread in front of a human and waits for a yes. The prompt renders
+/// on stderr, so `--json` stdout stays pure.
+///
+/// With no terminal there is nobody to ask, so this names the flag rather than
+/// blocking on input that will not arrive. That also means an agent or a CI job
+/// cannot resolve anything unless whoever wrote the command line said `--yes`.
+async fn approve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(BbError::Config(
+            "resolving needs approval — answer the prompt in a terminal, or pass --yes to approve up front".into(),
+        ));
+    }
+
+    // Fetched only on this path: `--yes` must cost no extra request.
+    let thread: Comment = ctx
+        .client
+        .get_json(&ctx.path(&format!("/pullrequests/{id}/comments/{comment}")))
+        .await?;
+
+    match inquire::Confirm::new(&format!("resolve {}?", describe(&thread)))
+        .with_default(false)
+        .prompt()
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(BbError::Config(format!("comment {comment} left open"))),
+        Err(e) => Err(BbError::Config(format!("cancelled: {e}"))),
+    }
+}
+
+/// One line naming what the approval covers: where the thread sits, who raised
+/// it, and what it says.
+fn describe(thread: &Comment) -> String {
+    let inline = thread.inline.as_ref();
+    let where_ = location(
+        inline.and_then(|i| i.path.as_deref()),
+        inline.and_then(|i| i.to.or(i.from)),
+    )
+    .unwrap_or_else(|| format!("comment {}", thread.id));
+
+    let mut line = format!(
+        "the thread at {where_} by {} — \"{}\"",
+        thread.author(),
+        summarize(&thread.body())
+    );
+    if let Some(root) = thread.parent_id() {
+        line.push_str(&format!(
+            " (comment {} is a reply, so this resolves the thread rooted at {root})",
+            thread.id
+        ));
+    }
+    line
+}
+
+/// First line of a comment, short enough to sit inside a prompt.
+fn summarize(body: &str) -> String {
+    const MAX: usize = 72;
+    let first = body.lines().next().unwrap_or_default().trim();
+    if first.chars().count() <= MAX {
+        return first.to_string();
+    }
+    format!("{}…", first.chars().take(MAX).collect::<String>())
+}
+
+/// Reopens a resolved thread. This is not gated: it restores a reviewer's point
+/// rather than hiding one, so the worst case is noise a human can see.
 pub async fn unresolve(ctx: &Ctx, id: u64, comment: u64) -> Result<()> {
     ctx.client.delete(&resolve_path(ctx, id, comment)).await?;
     pr::report(
@@ -357,6 +435,71 @@ mod build_payload_tests {
             ..args()
         };
         assert!(build_payload(&a, "hi").is_err());
+    }
+}
+
+/// The confirmation prompt cannot be driven from a piped stdin — that is what
+/// makes it a gate — so what a human is asked is asserted here instead.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod describe_tests {
+    use super::*;
+
+    fn comment(json: serde_json::Value) -> Comment {
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn inline_thread() -> serde_json::Value {
+        serde_json::json!({
+            "id": 600,
+            "content": { "raw": "this drops the error\nsecond line" },
+            "user": { "display_name": "Reviewer" },
+            "inline": { "path": "src/auth.rs", "to": 88 },
+        })
+    }
+
+    #[test]
+    fn names_the_place_the_author_and_the_point() {
+        let shown = describe(&comment(inline_thread()));
+        assert!(shown.contains("src/auth.rs:88"), "{shown}");
+        assert!(shown.contains("Reviewer"), "{shown}");
+        assert!(shown.contains("this drops the error"), "{shown}");
+        assert!(!shown.contains("second line"), "one line only: {shown}");
+    }
+
+    #[test]
+    fn a_reply_warns_that_the_whole_thread_resolves() {
+        let mut json = inline_thread();
+        json["id"] = serde_json::Value::from(601);
+        json["parent"] = serde_json::json!({ "id": 600 });
+        let shown = describe(&comment(json));
+        assert!(shown.contains("reply"), "{shown}");
+        assert!(shown.contains("600"), "must name the root: {shown}");
+    }
+
+    #[test]
+    fn a_general_comment_falls_back_to_its_id() {
+        let shown = describe(&comment(serde_json::json!({
+            "id": 42,
+            "content": { "raw": "a general remark" },
+            "user": { "display_name": "Reviewer" },
+        })));
+        assert!(shown.contains("comment 42"), "{shown}");
+    }
+
+    #[test]
+    fn a_long_point_is_truncated_on_a_char_boundary() {
+        let body = "ü".repeat(200);
+        let shown = summarize(&body);
+        assert!(shown.ends_with('…'), "{shown}");
+        assert_eq!(shown.chars().count(), 73);
+    }
+
+    #[test]
+    fn location_is_none_when_the_comment_is_not_inline() {
+        assert_eq!(location(None, Some(9)), None);
+        assert_eq!(location(Some("a.rs"), None).unwrap(), "a.rs");
+        assert_eq!(location(Some("a.rs"), Some(9)).unwrap(), "a.rs:9");
     }
 }
 

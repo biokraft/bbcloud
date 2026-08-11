@@ -13,12 +13,14 @@ Do not use `gh`. Do not ask the user to open the web UI.
 
 1. Add `--json` to every command, and parse the JSON. The tables are for humans, and their layout
    can change. One exception: read `bb pr diff <id>` as plain text.
-2. Do not pass `-w` or `--web`. These flags start a browser.
-3. Use the exit code, not the error text: `0` success, `1` error, `2` not authenticated,
+2. Do not resolve a comment thread unless the user asks you to. Reply, then report what you
+   answered. See [Report threads, do not close them](#report-threads-do-not-close-them).
+3. Do not pass `-w` or `--web`. These flags start a browser.
+4. Use the exit code, not the error text: `0` success, `1` error, `2` not authenticated,
    `3` not found.
-4. Give a body to every comment. Use `--body` for one line. Use `--body-stdin` for more than one
+5. Give a body to every comment. Use `--body` for one line. Use `--body-stdin` for more than one
    paragraph. Without a body and without a terminal, the command fails.
-5. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
+6. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
 
 ## Read a pull request
 
@@ -35,7 +37,8 @@ bb pr commits 42 --json                 # commits, short hashes
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
 `timestamp`, `body`, `file`, `line`, `resolved` and `parent`. Use the comment `id` to answer in the
 correct thread. `parent` holds the comment answered, and is `null` on the first comment of a
-thread — that first `id` is the one to resolve.
+thread — that first `id` is the one that identifies the thread, and `resolved` tells you whether it
+is already closed.
 
 Find the pull request for the current branch:
 
@@ -60,25 +63,32 @@ printf 'Refactored as suggested.\n\nThe parser is now its own module.\n' \
 `--line` needs `--file`. `--reply-to` accepts neither, because a reply inherits the location of its
 parent.
 
-## Close a thread
+## Report threads, do not close them
 
-Answer the point first, then resolve the thread. Resolution covers the whole thread, so pass the
-`id` of its first comment — the one whose `parent` is `null`:
+**Never resolve a thread on your own initiative.** Answering a comment is your job. Deciding that
+the point is settled is the user's, the same as approving or merging. A thread you resolve is a
+thread reviewers stop reading.
 
-```bash
-bb pr comment 42 --reply-to 998877 --body "Fixed in 1a2b3c4." --json
-bb pr resolve 42 998877 --json     # {resolved,pull_request}
-bb pr unresolve 42 998877 --json   # reopen it
-```
-
-Resolve only what you answered. Leave a thread open when the point still stands. To see what is
-left, read `bb pr view 42 --unresolved --json`.
-
-Find every thread that still needs an answer, root comments only:
+So after you reply, report — do not resolve. Say which threads you answered, and let the user close
+them. List what is still open, root comments only:
 
 ```bash
 bb pr view 42 --unresolved --json | jq '.inline[] | select(.parent == null)'
 ```
+
+Resolve only when the user asks you to, in that turn, for threads they name. If you believe a thread
+is settled, say so and ask; a reply from you is not an answer to that question. Then:
+
+```bash
+bb pr resolve 42 998877 --yes --json   # {resolved,pull_request}
+bb pr unresolve 42 998877 --json       # reopen it
+```
+
+`bb pr resolve` confirms with a human before it does anything, and fails without a terminal — so
+`--yes` is how it runs at all under an agent. Treat `--yes` as the user's word, never your own:
+pass it only for an id the user just approved, one command per thread, and never in a loop over
+`bb pr view`. Resolution covers the whole thread, so the id is its first comment, the one whose
+`parent` is `null`.
 
 Ask the author to change the code, or withdraw that request:
 
@@ -120,7 +130,7 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
-| `bb pr resolve <id> <comment>` | `{resolved,pull_request}` |
+| `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
 | `bb pr request-changes <id>` | `{requested_changes:<id>}` |

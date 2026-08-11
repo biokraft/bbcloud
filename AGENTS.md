@@ -161,6 +161,16 @@ whole thread, so the id has to be the thread root — the comment with no `paren
 exposes `parent` for exactly that reason, and the resolve endpoint's response body carries only the
 resolution, which is why `pr_comments::resolve` discards it.
 
+**Resolving is gated, and the gate is deliberate.** `bb pr resolve` confirms with a human unless
+`--yes` is passed, and with no terminal it errors instead of prompting. Resolving hides a reviewer's
+point, and the api cannot tell whether the point was addressed — so it stays a human decision, like
+approving or merging. Two consequences to preserve: the confirmation must happen **before** the
+`POST` (a gate that fires afterwards is not a gate — `tests/pr_comment.rs` asserts this with
+`expect(0)`), and the comment lookup that fills the prompt must not run under `--yes`. The
+`inquire` prompt renders on stderr, which is what keeps `--json` stdout pure. The agent skill
+carries the matching rule — never resolve on the agent's own initiative — and it must stay in step
+with this behaviour. `unresolve` is not gated: reopening restores a point rather than hiding one.
+
 **Use `Client::paginate`** rather than hand-rolling a page loop. It follows `next` and caps at 100 pages.
 
 ## JSON output
