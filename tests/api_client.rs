@@ -378,6 +378,8 @@ async fn stops_a_redirect_loop_at_the_hop_cap() {
         matches!(err, BbError::Api { status: 302, .. }),
         "expected the hop cap to stop the loop, got {err:?}"
     );
+    // MAX_REDIRECTS is 5 in src/api/mod.rs, so the server sees the original
+    // request plus five followed redirects and nothing more.
     let hops = server.received_requests().await.unwrap_or_default().len();
-    assert!((2..=6).contains(&hops), "unexpected hop count: {hops}");
+    assert_eq!(hops, 6, "expected exactly 5 followed redirects");
 }
