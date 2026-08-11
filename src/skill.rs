@@ -1,7 +1,7 @@
 use crate::error::{BbError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const SKILL_NAME: &str = "bitbucket-cloud";
 
@@ -99,6 +99,175 @@ pub fn save_state(entries: &[Entry]) -> Result<()> {
     let json = serde_json::to_string_pretty(entries)?;
     std::fs::write(&path, json).map_err(BbError::Io)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Installed,
+    Refreshed,
+    Unchanged,
+    SkippedModified,
+}
+
+impl Action {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Refreshed => "refreshed",
+            Self::Unchanged => "unchanged",
+            Self::SkippedModified => "skipped_modified",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Outcome {
+    pub path: PathBuf,
+    pub agent: String,
+    pub action: Action,
+}
+
+/// Where the real file lives for each agent.
+pub fn skill_file(root: &Path, agent: Agent) -> PathBuf {
+    let base = match agent {
+        Agent::Agents => root.join(".agents").join("skills"),
+        Agent::Claude => root.join(".claude").join("skills"),
+    };
+    base.join(SKILL_NAME).join("SKILL.md")
+}
+
+/// `.cursor/` and `.opencode/` both read `.agents/skills/`, so their presence
+/// asks for the `.agents` write rather than a location of their own.
+pub fn detect_agents(root: &Path) -> Vec<Agent> {
+    let mut found = Vec::new();
+    let shares_agents = [".agents", ".cursor", ".opencode"]
+        .iter()
+        .any(|d| root.join(d).is_dir());
+    if shares_agents {
+        found.push(Agent::Agents);
+    }
+    if root.join(".claude").is_dir() {
+        found.push(Agent::Claude);
+    }
+    found
+}
+
+fn write_file(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(BbError::Io)?;
+    }
+    std::fs::write(path, contents).map_err(BbError::Io)?;
+    Ok(())
+}
+
+/// Removes whatever is at `path` — file, dir, or symlink — without following a
+/// symlink into its target. `remove_file` handles symlinks-to-files and plain
+/// files; a symlink-to-directory needs `remove_dir_all` refusing to peek inside
+/// on most platforms, but to be safe we check `symlink_metadata` first.
+fn remove_existing(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                std::fs::remove_file(path).map_err(BbError::Io)?;
+            } else {
+                std::fs::remove_dir_all(path).map_err(BbError::Io)?;
+            }
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(BbError::Io(err)),
+    }
+}
+
+/// Installs the Claude copy as a relative symlink to the `.agents` skill
+/// directory when both are present, falling back to a real file otherwise.
+/// Returns the `kind` that was actually written ("symlink" or "file").
+fn install_claude_dir(root: &Path, agents_installed: bool) -> Result<&'static str> {
+    let claude_dir = root.join(".claude").join("skills").join(SKILL_NAME);
+    let claude_file = claude_dir.join("SKILL.md");
+
+    if agents_installed {
+        #[cfg(unix)]
+        {
+            if let Some(parent) = claude_dir.parent() {
+                std::fs::create_dir_all(parent).map_err(BbError::Io)?;
+            }
+            remove_existing(&claude_dir)?;
+            let target = Path::new("..")
+                .join("..")
+                .join(".agents")
+                .join("skills")
+                .join(SKILL_NAME);
+            if std::os::unix::fs::symlink(&target, &claude_dir).is_ok() {
+                return Ok("symlink");
+            }
+        }
+    }
+
+    remove_existing(&claude_dir)?;
+    write_file(&claude_file, SKILL_MD)?;
+    Ok("file")
+}
+
+pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome>> {
+    let (mut state, _warning) = load_state();
+    let wanted = content_hash(SKILL_MD.as_bytes());
+    let mut outcomes = Vec::new();
+
+    let agents_dir_present = root
+        .join(".agents")
+        .join("skills")
+        .join(SKILL_NAME)
+        .join("SKILL.md")
+        .exists()
+        || agents.contains(&Agent::Agents);
+
+    for agent in agents {
+        let path = skill_file(root, *agent);
+        let recorded = state.iter().find(|e| e.path == path).cloned();
+        let on_disk = std::fs::read(&path).ok();
+
+        let action = match (&on_disk, &recorded) {
+            (None, _) => Action::Installed,
+            (Some(bytes), _) if content_hash(bytes) == wanted => Action::Unchanged,
+            // We wrote it and the binary now carries newer text.
+            (Some(bytes), Some(entry)) if content_hash(bytes) == entry.sha256 => Action::Refreshed,
+            // Either untracked or edited since we wrote it — someone's own work.
+            (Some(_), _) if force => Action::Refreshed,
+            (Some(_), _) => Action::SkippedModified,
+        };
+
+        let mut kind = "file".to_string();
+        if action != Action::SkippedModified && action != Action::Unchanged {
+            if *agent == Agent::Claude {
+                kind = install_claude_dir(root, agents_dir_present)?.to_string();
+            } else {
+                write_file(&path, SKILL_MD)?;
+            }
+        } else if let Some(entry) = &recorded {
+            kind = entry.kind.clone();
+        }
+
+        if action != Action::SkippedModified {
+            state.retain(|e| e.path != path);
+            state.push(Entry {
+                path: path.clone(),
+                agent: agent.as_str().to_string(),
+                kind,
+                sha256: wanted.clone(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            });
+        }
+
+        outcomes.push(Outcome {
+            path,
+            agent: agent.as_str().to_string(),
+            action,
+        });
+    }
+
+    save_state(&state)?;
+    Ok(outcomes)
 }
 
 #[cfg(test)]
@@ -290,5 +459,186 @@ mod tests {
         );
 
         std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn install_writes_the_embedded_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                assert_eq!(outcomes.len(), 1);
+                assert!(matches!(outcomes[0].action, Action::Installed));
+
+                let written =
+                    std::fs::read_to_string(skill_file(dir.path(), Agent::Agents)).unwrap();
+                assert_eq!(
+                    written, SKILL_MD,
+                    "installed content must equal the embedded skill"
+                );
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1);
+                assert_eq!(state[0].sha256, content_hash(SKILL_MD.as_bytes()));
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_second_install_reports_unchanged_and_rewrites_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                assert!(
+                    matches!(outcomes[0].action, Action::Unchanged),
+                    "{:?}",
+                    outcomes[0].action
+                );
+            },
+        );
+    }
+
+    /// A local edit is somebody's deliberate customization. It must survive.
+    #[test]
+    #[serial_test::serial]
+    fn a_modified_file_is_refused_and_left_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents], false).unwrap();
+                let path = skill_file(dir.path(), Agent::Agents);
+                std::fs::write(&path, "# my own notes\n").unwrap();
+
+                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                assert!(matches!(outcomes[0].action, Action::SkippedModified));
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "# my own notes\n");
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn force_overwrites_a_modified_file_and_updates_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents], false).unwrap();
+                let path = skill_file(dir.path(), Agent::Agents);
+                std::fs::write(&path, "# my own notes\n").unwrap();
+
+                let outcomes = install(dir.path(), &[Agent::Agents], true).unwrap();
+                assert!(matches!(
+                    outcomes[0].action,
+                    Action::Refreshed | Action::Installed
+                ));
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), SKILL_MD);
+                let (state, _) = load_state();
+                assert_eq!(state[0].sha256, content_hash(SKILL_MD.as_bytes()));
+            },
+        );
+    }
+
+    /// Stale means "we wrote it, and the binary has newer text now". It refreshes
+    /// without asking, because nobody customized it.
+    #[test]
+    #[serial_test::serial]
+    fn a_stale_file_is_refreshed_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(dir.path(), Agent::Agents);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let old = "---\nname: bitbucket-cloud\n---\nold text\n";
+                std::fs::write(&path, old).unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(old.as_bytes()),
+                    version: "0.0.1".into(),
+                }])
+                .unwrap();
+
+                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                assert!(
+                    matches!(outcomes[0].action, Action::Refreshed),
+                    "{:?}",
+                    outcomes[0].action
+                );
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), SKILL_MD);
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn claude_install_links_to_the_agents_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
+                let claude = dir.path().join(".claude/skills").join(SKILL_NAME);
+                // Either a symlink resolving to the .agents copy, or a real file with
+                // the same content when the platform refused a symlink.
+                let content = std::fs::read_to_string(claude.join("SKILL.md"))
+                    .or_else(|_| std::fs::read_to_string(&claude))
+                    .unwrap();
+                assert_eq!(content, SKILL_MD);
+            },
+        );
+    }
+
+    #[test]
+    fn detect_finds_each_agent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            detect_agents(dir.path()).is_empty(),
+            "nothing present means nothing detected"
+        );
+
+        std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        assert_eq!(
+            detect_agents(dir.path()),
+            vec![Agent::Agents],
+            "cursor reads .agents"
+        );
+
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        let found = detect_agents(dir.path());
+        assert!(found.contains(&Agent::Agents) && found.contains(&Agent::Claude));
     }
 }
