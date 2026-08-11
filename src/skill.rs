@@ -368,6 +368,40 @@ pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome
     Ok(outcomes)
 }
 
+/// A tracked Claude entry's recorded `path` is `SKILL.md` *inside* the linked
+/// directory (see `uninstall`'s comment on the same shape), so the project
+/// root sits four components above it: `SKILL.md`, `SKILL_NAME`, `skills`,
+/// `.claude`.
+fn claude_root_from_entry_path(path: &Path) -> Result<&Path> {
+    path.parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            BbError::Config(format!(
+                "cannot determine the project root from {}",
+                path.display()
+            ))
+        })
+}
+
+/// Recreates a Claude entry whose recorded `kind` is `"symlink"` but whose
+/// link (or fallback file) is missing from disk. Delegates to
+/// `install_claude_dir` so the same relative-symlink-with-fallback logic that
+/// `install` uses is not duplicated here, and returns the `kind` that was
+/// actually written so the caller can keep the recorded state honest even
+/// when the platform refuses a symlink and falls back to a real file.
+fn restore_claude_link(entry_path: &Path) -> Result<String> {
+    let root = claude_root_from_entry_path(entry_path)?;
+    let agents_installed = root
+        .join(".agents")
+        .join("skills")
+        .join(SKILL_NAME)
+        .join("SKILL.md")
+        .exists();
+    Ok(install_claude_dir(root, agents_installed)?.to_string())
+}
+
 /// Refreshes every tracked entry against the currently-running binary's
 /// embedded text. Driven by the recorded entries rather than a root and an
 /// agent list, so a single call spans every project the user has installed
@@ -385,8 +419,26 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
 
     for entry in &mut state {
         let action = match state_of(entry, &wanted) {
-            State::Stale | State::Missing => {
+            // The link is intact — writing to `entry.path` follows it straight
+            // into the `.agents` file it points at, refreshing the shared
+            // content without disturbing the link itself.
+            State::Stale => {
                 write_file(&entry.path, SKILL_MD)?;
+                entry.sha256 = wanted.clone();
+                entry.version = env!("CARGO_PKG_VERSION").to_string();
+                Action::Refreshed
+            }
+            // The link (or file) itself is gone. A plain `write_file` here
+            // would create a *real* file where a symlink used to be, leaving
+            // state still claiming `"symlink"` while disk disagrees. Restore
+            // the same kind of thing that used to be there instead.
+            State::Missing => {
+                entry.kind = if entry.kind == "symlink" {
+                    restore_claude_link(&entry.path)?
+                } else {
+                    write_file(&entry.path, SKILL_MD)?;
+                    "file".to_string()
+                };
                 entry.sha256 = wanted.clone();
                 entry.version = env!("CARGO_PKG_VERSION").to_string();
                 Action::Refreshed
@@ -873,5 +925,199 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         let found = detect_agents(dir.path());
         assert!(found.contains(&Agent::Agents) && found.contains(&Agent::Claude));
+    }
+
+    /// A deleted Claude symlink with no `.agents` copy to point at falls back
+    /// to a real file — same as `install_claude_dir` would on a fresh
+    /// install — and the recorded `kind` must follow disk down to `"file"`,
+    /// not keep claiming `"symlink"`.
+    #[test]
+    #[serial_test::serial]
+    fn refresh_recreates_a_deleted_symlink_as_a_file_when_no_agents_copy_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
+                let claude_path = skill_file(dir.path(), Agent::Claude);
+                let claude_dir = claude_path.parent().unwrap();
+
+                // Only the claude entry is tracked, and its target is gone —
+                // the state this test wants to force is "link recorded, but
+                // nothing left to link to".
+                let (state, _) = load_state();
+                let claude_entry = state.iter().find(|e| e.agent == "claude").cloned().unwrap();
+                assert_eq!(claude_entry.kind, "symlink", "sanity: install made a link");
+                save_state(&[claude_entry]).unwrap();
+
+                remove_existing(claude_dir).unwrap();
+                std::fs::remove_dir_all(dir.path().join(".agents")).unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes.len(), 1);
+                assert!(matches!(outcomes[0].action, Action::Refreshed));
+
+                assert_eq!(std::fs::read_to_string(&claude_path).unwrap(), SKILL_MD);
+                let (state, _) = load_state();
+                assert_eq!(
+                    state[0].kind, "file",
+                    "disk fell back to a real file, so state must say so too"
+                );
+            },
+        );
+    }
+
+    /// A deleted Claude symlink is recreated as a symlink, not a file, when
+    /// the `.agents` copy it used to point at is still there.
+    #[test]
+    #[serial_test::serial]
+    fn refresh_recreates_a_deleted_symlink_as_a_symlink_when_the_agents_copy_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
+                let claude_dir = skill_file(dir.path(), Agent::Claude)
+                    .parent()
+                    .unwrap()
+                    .to_path_buf();
+
+                remove_existing(&claude_dir).unwrap();
+                assert!(!claude_dir.exists(), "sanity: the link is gone");
+
+                let outcomes = refresh_tracked().unwrap();
+                let claude_outcome = outcomes.iter().find(|o| o.agent == "claude").unwrap();
+                assert!(matches!(claude_outcome.action, Action::Refreshed));
+
+                assert!(
+                    std::fs::symlink_metadata(&claude_dir)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink(),
+                    "the agents copy was still there, so a link should come back, not a file"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(claude_dir.join("SKILL.md")).unwrap(),
+                    SKILL_MD
+                );
+                let (state, _) = load_state();
+                let claude_entry = state.iter().find(|e| e.agent == "claude").unwrap();
+                assert_eq!(claude_entry.kind, "symlink");
+            },
+        );
+    }
+
+    /// A stale Claude symlink whose link is still intact refreshes the
+    /// shared `.agents` content in place — `write_file` follows the link
+    /// rather than replacing it — so the link itself must survive untouched.
+    #[test]
+    #[serial_test::serial]
+    fn refresh_updates_content_through_an_intact_symlink_without_replacing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
+                let claude_path = skill_file(dir.path(), Agent::Claude);
+                let claude_dir = claude_path.parent().unwrap().to_path_buf();
+
+                let old = "---\nname: bitbucket-cloud\n---\nold text\n";
+                std::fs::write(&claude_path, old).unwrap();
+
+                // Only the claude entry is tracked, so the refresh's only
+                // write comes from the `Stale` branch on this entry, not from
+                // an `.agents` entry rewriting the same underlying file.
+                let (state, _) = load_state();
+                let mut claude_entry = state.iter().find(|e| e.agent == "claude").cloned().unwrap();
+                claude_entry.sha256 = content_hash(old.as_bytes());
+                save_state(&[claude_entry]).unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes.len(), 1);
+                assert!(matches!(outcomes[0].action, Action::Refreshed));
+
+                assert!(
+                    std::fs::symlink_metadata(&claude_dir)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink(),
+                    "an intact link must not be replaced by a file just to refresh content"
+                );
+                assert_eq!(std::fs::read_to_string(&claude_path).unwrap(), SKILL_MD);
+                let (state, _) = load_state();
+                assert_eq!(state[0].kind, "symlink");
+            },
+        );
+    }
+
+    /// The design's core claim: one customized skill must not block another
+    /// tracked skill's refresh, and the skipped one must be named in the
+    /// output rather than silently dropped.
+    #[test]
+    #[serial_test::serial]
+    fn refresh_rewrites_a_stale_entry_while_leaving_a_modified_one_alone() {
+        let stale_root = tempfile::tempdir().unwrap();
+        let modified_root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let old = "---\nname: bitbucket-cloud\n---\nold text\n";
+                let stale_path = skill_file(stale_root.path(), Agent::Agents);
+                std::fs::create_dir_all(stale_path.parent().unwrap()).unwrap();
+                std::fs::write(&stale_path, old).unwrap();
+
+                let modified_path = skill_file(modified_root.path(), Agent::Agents);
+                std::fs::create_dir_all(modified_path.parent().unwrap()).unwrap();
+                let ours = "# our own version\n";
+                std::fs::write(&modified_path, ours).unwrap();
+
+                save_state(&[
+                    Entry {
+                        path: stale_path.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        sha256: content_hash(old.as_bytes()),
+                        version: "0.0.1".into(),
+                    },
+                    Entry {
+                        path: modified_path.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        // Recorded hash disagrees with what's on disk now —
+                        // someone edited it after bb wrote it.
+                        sha256: content_hash(old.as_bytes()),
+                        version: "0.0.1".into(),
+                    },
+                ])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes.len(), 2);
+
+                let stale_outcome = outcomes.iter().find(|o| o.path == stale_path).unwrap();
+                assert!(matches!(stale_outcome.action, Action::Refreshed));
+                assert_eq!(std::fs::read_to_string(&stale_path).unwrap(), SKILL_MD);
+
+                let modified_outcome = outcomes.iter().find(|o| o.path == modified_path).unwrap();
+                assert!(matches!(modified_outcome.action, Action::SkippedModified));
+                assert_eq!(std::fs::read_to_string(&modified_path).unwrap(), ours);
+            },
+        );
     }
 }
