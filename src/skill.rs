@@ -368,6 +368,44 @@ pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome
     Ok(outcomes)
 }
 
+/// Refreshes every tracked entry against the currently-running binary's
+/// embedded text. Driven by the recorded entries rather than a root and an
+/// agent list, so a single call spans every project the user has installed
+/// into. Uses the same drift rules as `install`, via `state_of`: `Stale` or
+/// `Missing` rewrites the file and updates the recorded hash, `Modified` is
+/// left byte-identical and reported as `SkippedModified`, and `Current` is
+/// reported as `Unchanged` without touching anything.
+pub fn refresh_tracked() -> Result<Vec<Outcome>> {
+    let (mut state, warning) = load_state();
+    if let Some(warning) = warning {
+        crate::output::warn(&warning);
+    }
+    let wanted = content_hash(SKILL_MD.as_bytes());
+    let mut outcomes = Vec::new();
+
+    for entry in &mut state {
+        let action = match state_of(entry, &wanted) {
+            State::Stale | State::Missing => {
+                write_file(&entry.path, SKILL_MD)?;
+                entry.sha256 = wanted.clone();
+                entry.version = env!("CARGO_PKG_VERSION").to_string();
+                Action::Refreshed
+            }
+            State::Modified => Action::SkippedModified,
+            State::Current => Action::Unchanged,
+        };
+
+        outcomes.push(Outcome {
+            path: entry.path.clone(),
+            agent: entry.agent.clone(),
+            action,
+        });
+    }
+
+    save_state(&state)?;
+    Ok(outcomes)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

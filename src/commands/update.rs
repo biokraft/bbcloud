@@ -184,27 +184,50 @@ pub async fn run(format: Format, base_url: &str) -> Result<()> {
     let release: Release = serde_json::from_slice(&body)?;
     let latest = release.tag_name.clone();
 
-    if !is_newer(&latest, current) {
-        return report(format, current, &latest, true, "none");
-    }
+    let (action, up_to_date) = if !is_newer(&latest, current) {
+        ("none", true)
+    } else {
+        let exe = std::env::current_exe().map_err(BbError::Io)?;
+        let action = match classify_install(&exe) {
+            InstallKind::Homebrew => "brew upgrade bb",
+            InstallKind::Cargo => "cargo install bbcloud --locked --force",
+            InstallKind::Standalone => {
+                // The https-only requirement below is scoped to real usage: it
+                // only applies when the release api itself is https (the
+                // production default). The `BB_UPDATE_API_BASE` test override
+                // that points at a local http wiremock server also relaxes the
+                // asset-url check, so integration tests can exercise the
+                // download-and-unpack path without standing up TLS.
+                let require_https = base_url.starts_with("https://");
+                self_update(&http, &release, &exe, require_https).await?;
+                "self-updated"
+            }
+        };
+        (action, false)
+    };
 
-    let exe = std::env::current_exe().map_err(BbError::Io)?;
-    let action = match classify_install(&exe) {
-        InstallKind::Homebrew => "brew upgrade bb",
-        InstallKind::Cargo => "cargo install bbcloud --locked --force",
-        InstallKind::Standalone => {
-            // The https-only requirement below is scoped to real usage: it
-            // only applies when the release api itself is https (the
-            // production default). The `BB_UPDATE_API_BASE` test override
-            // that points at a local http wiremock server also relaxes the
-            // asset-url check, so integration tests can exercise the
-            // download-and-unpack path without standing up TLS.
-            let require_https = base_url.starts_with("https://");
-            self_update(&http, &release, &exe, require_https).await?;
-            "self-updated"
+    // `brew upgrade bb` and `cargo install` never run our code, so this is the
+    // only moment we can bring skill files up to date with the running binary.
+    // Refreshing runs on every path `run()` can take, including up-to-date,
+    // since that is the only path most Homebrew/Cargo users ever hit.
+    let skill_outcomes = match crate::skill::refresh_tracked() {
+        Ok(outcomes) => outcomes,
+        // The binary upgrade already succeeded and is what the user actually
+        // wanted; a filesystem problem here is a warning, not an exit code.
+        Err(err) => {
+            output::warn(&format!("could not refresh agent skills: {err}"));
+            Vec::new()
         }
     };
-    report(format, current, &latest, false, action)
+
+    report(
+        format,
+        current,
+        &latest,
+        up_to_date,
+        action,
+        &skill_outcomes,
+    )
 }
 
 fn report(
@@ -213,14 +236,33 @@ fn report(
     latest: &str,
     up_to_date: bool,
     action: &str,
+    skill_outcomes: &[crate::skill::Outcome],
 ) -> Result<()> {
+    let refreshed: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::Refreshed)
+        .collect();
+    let skipped: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::SkippedModified)
+        .collect();
+
     match format {
-        Format::Json => output::print_json(&serde_json::json!({
-            "current": current,
-            "latest": latest,
-            "up_to_date": up_to_date,
-            "action": action,
-        })),
+        Format::Json => {
+            let mut payload = serde_json::json!({
+                "current": current,
+                "latest": latest,
+                "up_to_date": up_to_date,
+                "action": action,
+            });
+            if !skill_outcomes.is_empty() {
+                payload["skills"] = serde_json::json!({
+                    "refreshed": refreshed.len(),
+                    "skipped_modified": skipped.iter().map(|o| &o.path).collect::<Vec<_>>(),
+                });
+            }
+            output::print_json(&payload)
+        }
         Format::Human => {
             if up_to_date {
                 output::success(&format!("bb {current} is up to date"));
@@ -231,6 +273,19 @@ fn report(
                 } else {
                     output::info(&format!("this install is managed elsewhere; run: {action}"));
                 }
+            }
+            if !refreshed.is_empty() {
+                output::success(&format!(
+                    "refreshed {} tracked agent skill{}",
+                    refreshed.len(),
+                    if refreshed.len() == 1 { "" } else { "s" }
+                ));
+            }
+            for outcome in &skipped {
+                output::info(&format!(
+                    "skipped modified skill (customized locally): {}",
+                    outcome.path.display()
+                ));
             }
             Ok(())
         }
