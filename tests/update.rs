@@ -260,6 +260,150 @@ async fn a_hard_link_bb_entry_is_rejected_and_leaves_everything_untouched() {
     assert_link_entry_is_rejected(tar::EntryType::Link).await;
 }
 
+/// 403 with `x-ratelimit-remaining: 0` and a valid reset header must be
+/// reported as a rate limit, with the retry time derived from the header
+/// (not hardcoded, so the assertion holds in any timezone).
+#[tokio::test]
+async fn rate_limited_403_with_reset_header_reports_retry_time() {
+    let server = MockServer::start().await;
+    let reset_epoch: i64 = 1_786_452_151;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("x-ratelimit-remaining", "0")
+                .insert_header("x-ratelimit-reset", reset_epoch.to_string().as_str()),
+        )
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["update", "--json"])
+        .env("BB_UPDATE_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "a rate-limited update must not exit 0"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rate limit"),
+        "stderr should name the rate limit, got: {stderr}"
+    );
+
+    let expected_time = chrono::DateTime::from_timestamp(reset_epoch, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%H:%M")
+        .to_string();
+    assert!(
+        stderr.contains(&expected_time),
+        "stderr should contain the retry time {expected_time}, got: {stderr}"
+    );
+}
+
+/// A missing or unparseable reset header must never yield a bogus 1970
+/// timestamp or a panic — the retry time is simply omitted.
+#[tokio::test]
+async fn rate_limited_403_without_reset_header_omits_the_time_without_panicking() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(ResponseTemplate::new(403).insert_header("x-ratelimit-remaining", "0"))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["update", "--json"])
+        .env("BB_UPDATE_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rate limit"),
+        "stderr should still name the rate limit, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("1970"),
+        "stderr must never show a 1970 fallback timestamp, got: {stderr}"
+    );
+}
+
+/// A 403 that carries no rate-limit signal (or a non-zero remaining count)
+/// must be reported as a plain release-api error, and must not falsely
+/// claim a rate limit.
+#[tokio::test]
+async fn non_rate_limit_403_reports_a_plain_release_api_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["update", "--json"])
+        .env("BB_UPDATE_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("release api error 403"),
+        "stderr should name the release api error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("rate limit"),
+        "a plain 403 must not falsely claim a rate limit, got: {stderr}"
+    );
+}
+
+/// A 500 must be reported honestly as a release-api error, and must never
+/// blame Bitbucket — the request went to GitHub.
+#[tokio::test]
+async fn server_error_500_reports_release_api_error_without_blaming_bitbucket() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["update", "--json"])
+        .env("BB_UPDATE_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("release api error 500"),
+        "stderr should say release api error 500, got: {stderr}"
+    );
+    assert!(
+        !stderr.to_lowercase().contains("bitbucket"),
+        "stderr must never blame bitbucket for a release-api failure, got: {stderr}"
+    );
+}
+
 /// A malformed tag must not be treated as an upgrade, and must not panic.
 #[tokio::test]
 async fn a_malformed_remote_tag_is_not_an_upgrade() {

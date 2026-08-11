@@ -8,6 +8,8 @@ pub enum BbError {
     NotFound,
     #[error("bitbucket api error {status}: {message}")]
     Api { status: u16, message: String },
+    #[error("release api error {status}: {message}")]
+    Release { status: u16, message: String },
     #[error("config error: {0}")]
     Config(String),
     #[error("git error: {0}")]
