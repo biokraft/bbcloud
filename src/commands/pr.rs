@@ -137,7 +137,7 @@ pub async fn unrequest_changes(ctx: &Ctx, id: u64) -> Result<()> {
     )
 }
 
-fn report(ctx: &Ctx, human: &str, json: serde_json::Value) -> Result<()> {
+pub fn report(ctx: &Ctx, human: &str, json: serde_json::Value) -> Result<()> {
     match ctx.format {
         Format::Json => output::print_json(&json),
         Format::Human => {

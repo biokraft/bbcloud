@@ -206,12 +206,19 @@ pub struct Inline {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CommentParent {
+    pub id: u64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Comment {
     pub id: u64,
     pub content: Option<CommentContent>,
     pub user: Option<User>,
     pub created_on: Option<String>,
     pub inline: Option<Inline>,
+    /// Set on a reply, holding the comment it answers.
+    pub parent: Option<CommentParent>,
     #[serde(default)]
     pub deleted: bool,
     /// Present (even as `{}`) when the inline thread has been resolved.
@@ -228,6 +235,10 @@ impl Comment {
 
     pub fn is_resolved(&self) -> bool {
         self.resolution.is_some()
+    }
+
+    pub fn parent_id(&self) -> Option<u64> {
+        self.parent.as_ref().map(|p| p.id)
     }
 
     pub fn body(&self) -> String {

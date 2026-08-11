@@ -13,12 +13,14 @@ Do not use `gh`. Do not ask the user to open the web UI.
 
 1. Add `--json` to every command, and parse the JSON. The tables are for humans, and their layout
    can change. One exception: read `bb pr diff <id>` as plain text.
-2. Do not pass `-w` or `--web`. These flags start a browser.
-3. Use the exit code, not the error text: `0` success, `1` error, `2` not authenticated,
+2. Do not resolve a comment thread unless the user asks you to. Reply, then report what you
+   answered. See [Report threads, do not close them](#report-threads-do-not-close-them).
+3. Do not pass `-w` or `--web`. These flags start a browser.
+4. Use the exit code, not the error text: `0` success, `1` error, `2` not authenticated,
    `3` not found.
-4. Give a body to every comment. Use `--body` for one line. Use `--body-stdin` for more than one
+5. Give a body to every comment. Use `--body` for one line. Use `--body-stdin` for more than one
    paragraph. Without a body and without a terminal, the command fails.
-5. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
+6. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
 
 ## Read a pull request
 
@@ -38,8 +40,9 @@ bb pr commits 42 --json                    # commits, short hashes
 ```
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
-`timestamp`, `body`, `file`, `line` and `resolved`. Use the comment `id` to answer in the correct
-thread.
+`timestamp`, `body`, `file`, `line`, `resolved` and `parent`. Use the comment `id` to answer in the
+correct thread. `parent` is `null` on the first comment of a thread, and holds that comment's id on
+a reply. `resolved` tells you whether the thread is closed.
 
 `bb pr list` returns `state` (raw API value, e.g. `"OPEN"`), `draft` (bool), and `reviewers`, an
 array of `{name, uuid, state}` where `state` is `approved`, `changes_requested` or `pending`.
@@ -68,6 +71,33 @@ printf 'Refactored as suggested.\n\nThe parser is now its own module.\n' \
 `--line` needs `--file`. `--reply-to` accepts neither, because a reply inherits the location of its
 parent.
 
+## Report threads, do not close them
+
+Answer the comments. Report what you answered. Let the user close the threads.
+
+Never resolve a thread on your own initiative. A resolved thread hides a reviewer's point, and only
+the user can decide that the point is settled. This is the rule for approval and merge too.
+
+List the threads that are still open, root comments only:
+
+```bash
+bb pr view 42 --unresolved --json | jq '.inline[] | select(.parent == null)'
+```
+
+You can recommend a thread to close. Wait for the answer, then resolve only the ids the user names:
+
+```bash
+bb pr resolve 42 998877 --yes --json   # {resolved,pull_request}
+bb pr unresolve 42 998877 --json       # reopen a thread
+```
+
+`bb pr resolve` asks a human to confirm, and fails when it has no terminal. `--yes` answers that
+prompt for you, so use it only for an id the user approved. Use one command for each thread. Do not
+put it in a loop.
+
+Resolve the first comment of a thread — the id whose `parent` is `null`. A reply id fails, and a
+general comment fails: only inline threads carry a resolution.
+
 Ask the author to change the code, or withdraw that request:
 
 ```bash
@@ -93,8 +123,9 @@ someone already tagged makes no write and exits 0. Removing someone not tagged i
 1, with no write. Bitbucket rejects the PR's author as a reviewer (400, exit 1) — that's the
 API's rule.
 
-Approving, merging, declining and resolving comment threads are not supported. Do not attempt
-them.
+Approving, merging and declining are not supported. Do not attempt them. Resolving a comment
+thread is supported, but only on the user's request — see
+[Report threads, do not close them](#report-threads-do-not-close-them).
 
 ## Open a pull request
 
@@ -129,6 +160,8 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
+| `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
+| `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
@@ -145,12 +178,15 @@ the commit or the diff.
 
 - **Exit 2** — no credentials. Ask the user to run `bb auth login`. Do not run it yourself, because
   it prompts for a token. In CI, set `BB_EMAIL` and `BB_TOKEN`.
-- **Exit 3** — the pull request, the branch or the repository does not exist. Confirm the id, and
-  confirm the repository with `bb auth status` and `-R`.
+- **Exit 3** — the pull request, the branch, the comment or the repository does not exist. Confirm
+  the id, and confirm the repository with `bb auth status` and `-R`.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
-  `read:pullrequest:bitbucket`. `pr comment`, `pr create` and `pr request-changes` need
-  `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr unresolve`, `pr create` and
+  `pr request-changes` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
+- **`is a reply`, or `is not on the diff`** — the id is not the first comment of an inline thread.
+  Read `parent` from `bb pr view`, and pass the id that has none.
+- **`already resolved`** — the thread is closed. Nothing to do.
 - **`no bitbucket.org remote found`**, or **`no git repository here`** — `bb` cannot find the
   repository. Pass `-R workspace/repo`, or set `BB_REPO`.
 
