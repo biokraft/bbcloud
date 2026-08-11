@@ -136,6 +136,91 @@ pub fn skill_file(root: &Path, agent: Agent) -> PathBuf {
     base.join(SKILL_NAME).join("SKILL.md")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Current,
+    Stale,
+    Modified,
+    Missing,
+}
+
+impl State {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Stale => "stale",
+            Self::Modified => "modified",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StatusRow {
+    pub path: PathBuf,
+    pub agent: String,
+    pub state: State,
+}
+
+fn state_of(entry: &Entry, wanted: &str) -> State {
+    match std::fs::read(&entry.path) {
+        Err(_) => State::Missing,
+        Ok(bytes) => {
+            let actual = content_hash(&bytes);
+            if actual == wanted {
+                State::Current
+            } else if actual == entry.sha256 {
+                State::Stale
+            } else {
+                State::Modified
+            }
+        }
+    }
+}
+
+pub fn status() -> (Vec<StatusRow>, Option<String>) {
+    let (entries, warning) = load_state();
+    let wanted = content_hash(SKILL_MD.as_bytes());
+    let rows = entries
+        .iter()
+        .map(|e| StatusRow {
+            path: e.path.clone(),
+            agent: e.agent.clone(),
+            state: state_of(e, &wanted),
+        })
+        .collect();
+    (rows, warning)
+}
+
+/// Removes what bb recorded. A customized file is left in place unless `force`,
+/// and an untracked file is never touched at all.
+pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, bool)>> {
+    let (entries, _warning) = load_state();
+    let wanted = content_hash(SKILL_MD.as_bytes());
+    let mut results = Vec::new();
+    let mut keep = Vec::new();
+
+    for entry in entries {
+        let in_scope = root.is_none_or(|r| entry.path.starts_with(r));
+        if !in_scope {
+            keep.push(entry);
+            continue;
+        }
+        let modified = matches!(state_of(&entry, &wanted), State::Modified);
+        if modified && !force {
+            results.push((entry.path.clone(), false));
+            keep.push(entry);
+            continue;
+        }
+        let existed = entry.path.exists() || std::fs::symlink_metadata(&entry.path).is_ok();
+        remove_existing(&entry.path)?;
+        results.push((entry.path.clone(), existed));
+    }
+
+    save_state(&keep)?;
+    Ok(results)
+}
+
 /// `.cursor/` and `.opencode/` both read `.agents/skills/`, so their presence
 /// asks for the `.agents` write rather than a location of their own.
 pub fn detect_agents(root: &Path) -> Vec<Agent> {
