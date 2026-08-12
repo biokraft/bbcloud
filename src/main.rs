@@ -150,6 +150,8 @@ enum PrCommand {
     /// List commits in a pull request
     #[command(alias = "c")]
     Commits { id: u64 },
+    /// Show the build statuses reported on a pull request
+    Build { id: u64 },
     /// Request changes on a pull request
     #[command(name = "request-changes", alias = "rc")]
     RequestChanges { id: u64 },
@@ -315,6 +317,7 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
                 PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
+                PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
                 PrCommand::RequestChanges { id } => commands::pr::request_changes(&ctx, id).await,
                 PrCommand::NoRequestChanges { id } => {
                     commands::pr::unrequest_changes(&ctx, id).await

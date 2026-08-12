@@ -1,7 +1,9 @@
-use crate::api::models::BuildStatus;
+use crate::api::models::{BuildState, BuildStatus};
 use crate::commands::pr::Ctx;
 use crate::error::Result;
+use crate::output::{self, Format, Tone};
 use futures::stream::{self, StreamExt, TryStreamExt};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Bitbucket exposes build status only per pull request, so a column over N rows
@@ -21,4 +23,61 @@ pub async fn statuses_for(ctx: &Ctx, ids: &[u64]) -> Result<HashMap<u64, Vec<Bui
         .buffer_unordered(MAX_IN_FLIGHT)
         .try_collect()
         .await
+}
+
+#[derive(Debug, Serialize)]
+struct BuildReport {
+    build_state: BuildState,
+    statuses: Vec<BuildStatus>,
+}
+
+fn tone(state: BuildState) -> Tone {
+    match state {
+        BuildState::Failed => Tone::Bad,
+        BuildState::Stopped | BuildState::InProgress => Tone::Warn,
+        BuildState::Successful => Tone::Good,
+        BuildState::None => Tone::Dim,
+    }
+}
+
+pub async fn run(ctx: &Ctx, id: u64) -> Result<()> {
+    let spinner = output::spinner("fetching build statuses");
+    let found = statuses(ctx, id).await?;
+    spinner.finish_and_clear();
+
+    let report = BuildReport {
+        build_state: BuildState::rollup(&found),
+        statuses: found,
+    };
+
+    match ctx.format {
+        Format::Json => output::print_json(&report)?,
+        Format::Human => {
+            output::heading(&format!(
+                "build: {}",
+                output::colored_cell(report.build_state.label(), tone(report.build_state))
+            ));
+            if report.statuses.is_empty() {
+                output::info("no build statuses");
+            } else {
+                output::print_table(
+                    &["KEY", "NAME", "STATE", "URL"],
+                    report
+                        .statuses
+                        .iter()
+                        .map(|s| {
+                            let state = BuildState::from_api(s.state.as_deref());
+                            vec![
+                                s.key.clone().unwrap_or_else(|| "-".into()),
+                                s.name.clone().unwrap_or_else(|| "-".into()),
+                                output::colored_cell(state.label(), tone(state)),
+                                s.url.clone().unwrap_or_else(|| "-".into()),
+                            ]
+                        })
+                        .collect(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
