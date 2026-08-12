@@ -110,6 +110,31 @@ pub fn heading(msg: &str) {
     println!("{}", heading_line(msg, color_enabled()));
 }
 
+/// The meaning a cell carries, so callers pick intent rather than a colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Bad,
+    Warn,
+    Good,
+    Dim,
+}
+
+fn colored_cell_with(text: &str, tone: Tone, color: bool) -> String {
+    if !color {
+        return text.to_string();
+    }
+    match tone {
+        Tone::Bad => text.red().to_string(),
+        Tone::Warn => text.yellow().to_string(),
+        Tone::Good => text.green().to_string(),
+        Tone::Dim => text.dimmed().to_string(),
+    }
+}
+
+pub fn colored_cell(text: &str, tone: Tone) -> String {
+    colored_cell_with(text, tone, color_enabled())
+}
+
 pub fn spinner(msg: &str) -> indicatif::ProgressBar {
     if !std::io::stderr().is_terminal() {
         return indicatif::ProgressBar::hidden();
@@ -293,5 +318,18 @@ mod tests {
         let line = heading_line("Title", true);
         assert!(line.contains('\x1b'));
         assert!(line.contains("Title"));
+    }
+
+    #[test]
+    fn colored_cell_is_plain_without_color() {
+        assert_eq!(colored_cell_with("FAILED", Tone::Bad, false), "FAILED");
+        assert_eq!(colored_cell_with("-", Tone::Dim, false), "-");
+    }
+
+    #[test]
+    fn colored_cell_wraps_when_color_is_on() {
+        let painted = colored_cell_with("FAILED", Tone::Bad, true);
+        assert!(painted.contains("FAILED"));
+        assert_ne!(painted, "FAILED", "expected an ansi escape around the text");
     }
 }
