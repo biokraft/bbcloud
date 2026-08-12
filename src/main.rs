@@ -135,6 +135,12 @@ enum PrCommand {
         /// Only pull requests waiting on your review
         #[arg(long)]
         needs_my_review: bool,
+        /// Show the build status column (one extra request per pull request)
+        #[arg(long)]
+        build: bool,
+        /// Only pull requests whose build rolls up to this state
+        #[arg(long, value_enum)]
+        build_status: Option<commands::pr_list::BuildStateArg>,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -288,6 +294,8 @@ async fn run(cli: Cli) -> Result<()> {
                     author,
                     review_state,
                     needs_my_review,
+                    build,
+                    build_status,
                 } => {
                     commands::pr_list::list(
                         &ctx,
@@ -298,6 +306,8 @@ async fn run(cli: Cli) -> Result<()> {
                             author,
                             review_state,
                             needs_my_review,
+                            build,
+                            build_status,
                         },
                     )
                     .await
