@@ -43,6 +43,7 @@ urlencoding = "2"
 flate2 = "1"
 tar = "0.4"
 sha2 = "0.10"
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 wiremock = "0.6"
