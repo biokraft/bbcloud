@@ -249,6 +249,19 @@ echoes a raw response body.
 - Write tests that would actually fail if the behaviour regressed. A test that passes against the
   un-fixed code proves nothing.
 
+### Live smoke test
+
+The mocked suite proves the code calls an endpoint correctly, never that the endpoint still
+exists — wiremock serves whatever path is mounted, retired or not. That gap is exactly how
+`bb pr mine` shipped completely broken in v0.13.0: it called four endpoints Atlassian had already
+removed, and the wiremock suite stayed green the entire time. `tests/live.rs` closes it with a
+credential-gated, opt-in smoke test against the real API. Before releasing any change that adds or
+moves an API call, run it:
+
+```
+BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
+```
+
 ## Environment variables
 
 | Variable | Purpose |
