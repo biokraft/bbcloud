@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bb_cli::commands;
-use bb_cli::error::Result;
+use bb_cli::error::{BbError, Result};
 use bb_cli::output::Format;
 use clap::{Parser, Subcommand};
 
@@ -237,6 +237,24 @@ enum PrCommand {
         /// Id of the thread's first comment
         comment: u64,
     },
+    /// List your pull requests across every repository you can see
+    Mine {
+        /// Which pull requests: author, reviewer or all
+        #[arg(long, value_enum, default_value = "all")]
+        role: commands::pr_mine::RoleArg,
+        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED or ALL
+        #[arg(long, default_value = "OPEN")]
+        state: String,
+        /// Only scan this workspace
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Most recently updated repositories to scan per workspace
+        #[arg(long, default_value_t = 30)]
+        repo_limit: usize,
+        /// Show the build status column (one extra request per pull request)
+        #[arg(long)]
+        build: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -287,6 +305,26 @@ async fn run(cli: Cli) -> Result<()> {
             AuthCommand::Logout => commands::auth::logout(format),
         },
         Command::Pr { command } => {
+            if let PrCommand::Mine {
+                role,
+                state,
+                workspace,
+                repo_limit,
+                build,
+            } = command
+            {
+                return commands::pr_mine::run(
+                    format,
+                    commands::pr_mine::MineArgs {
+                        role,
+                        state,
+                        workspace,
+                        repo_limit,
+                        build,
+                    },
+                )
+                .await;
+            }
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
                 PrCommand::List {
@@ -395,6 +433,9 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 PrCommand::Unresolve { id, comment } => {
                     commands::pr_comments::unresolve(&ctx, id, comment).await
+                }
+                PrCommand::Mine { .. } => {
+                    Err(BbError::Config("pr mine does not take a repository".into()))
                 }
             }
         }

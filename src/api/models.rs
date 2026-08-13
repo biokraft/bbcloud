@@ -75,6 +75,14 @@ impl ReviewState {
             Self::Pending => "·",
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes_requested",
+            Self::Pending => "pending",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
