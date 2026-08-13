@@ -243,14 +243,21 @@ pub fn status() -> (Vec<StatusRow>, Option<String>) {
     let rows = entries
         .iter()
         .map(|e| {
-            let wanted = skill_by_name(&e.skill)
-                .map(|s| content_hash(s.content.as_bytes()))
-                .unwrap_or_default();
+            // An unknown skill name (a state file written by a newer `bb`, or
+            // hand-edited) has no wanted hash to compare against. It must not
+            // be able to reach `Stale` — that state promises "the binary has
+            // newer text, a refresh will fix it", which is untrue here, since
+            // nothing in this binary knows what this entry's content should
+            // be. `Modified` correctly refuses to touch it.
+            let state = match skill_by_name(&e.skill) {
+                Some(skill) => state_of(e, &content_hash(skill.content.as_bytes())),
+                None => State::Modified,
+            };
             StatusRow {
                 path: e.path.clone(),
                 agent: e.agent.clone(),
                 skill: e.skill.clone(),
-                state: state_of(e, &wanted),
+                state,
             }
         })
         .collect();
@@ -348,7 +355,7 @@ pub fn uninstall(
         let existed = removal_target.exists() || std::fs::symlink_metadata(removal_target).is_ok();
         remove_existing(removal_target)?;
         // A `kind: "file"` Claude fallback can leave an empty
-        // `.claude/skills/<SKILL_NAME>/` directory behind once `SKILL.md`
+        // `.claude/skills/<skill name>/` directory behind once `SKILL.md`
         // inside it is gone. Clean up that one directory — never a parent,
         // and never one that still has something in it.
         if !is_symlinked_dir {
@@ -589,8 +596,9 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
             continue;
         }
         // A hand-edited or badly-merged state file could name a skill this
-        // binary doesn't know. Leave it untouched here; `status` reports it
-        // as `Modified` since it can never hash equal to an unknown wanted.
+        // binary doesn't know. Leave it untouched here; `status` explicitly
+        // reports an unknown skill name as `Modified`, since this binary has
+        // no wanted content to compare it against or refresh it with.
         let Some(skill) = skill_by_name(&entry.skill) else {
             continue;
         };
@@ -1606,6 +1614,52 @@ mod tests {
         assert_eq!(
             state_of(&entry, &content_hash(brief.content.as_bytes())),
             State::Current
+        );
+    }
+
+    /// An entry naming a skill this binary does not know — a `skills.json`
+    /// written by a newer `bb`, or a hand-edited file — must never read as
+    /// `Stale`: that state promises "the binary has newer text, a refresh
+    /// will fix it", which is not true when there is no wanted content to
+    /// compare against at all. It must report `Modified` so nothing rewrites
+    /// or removes it.
+    #[test]
+    fn status_reports_modified_for_an_unknown_skill_name_even_when_disk_matches_the_recorded_hash()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = dir.path().join(".agents/skills/some-future-skill/SKILL.md");
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let content = "---\nname: some-future-skill\n---\nfrom a newer bb\n";
+                std::fs::write(&path, content).unwrap();
+
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    // On-disk content hashes equal to the recorded sha256 —
+                    // exactly what would make a *known* skill read as Stale.
+                    sha256: content_hash(content.as_bytes()),
+                    version: "9.9.9".into(),
+                    skill: "some-future-skill".into(),
+                }])
+                .unwrap();
+
+                let (rows, warning) = status();
+                assert!(warning.is_none());
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    rows[0].state,
+                    State::Modified,
+                    "an unknown skill name must never be reported as Stale"
+                );
+            },
         );
     }
 }

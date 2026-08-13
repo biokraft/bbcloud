@@ -31,7 +31,7 @@ bb pr mine --build --json
 
 Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`, `id`, `title`,
 `url`, `state`, `draft`, `author`, `my_role` (`author` | `reviewer` | `both`), `my_review_state`
-(`approved` | `changes_requested` | `pending`, or absent when I am not a reviewer), `reviewers[]`,
+(`approved` | `changes_requested` | `pending`, or `null` when I am not a reviewer), `reviewers[]`,
 `updated_on` (rfc3339), and — because `--build` was passed — `build_state` (worst-wins rollup:
 `failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for the individual
 checks.
