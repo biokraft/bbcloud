@@ -161,3 +161,305 @@ async fn human_output_names_the_repository() {
     assert!(stdout.contains("acme/api"), "got {stdout}");
     assert!(stdout.contains("REPO"), "got {stdout}");
 }
+
+fn repos_page(names: &[&str]) -> serde_json::Value {
+    page(
+        names
+            .iter()
+            .map(|n| serde_json::json!({ "full_name": n }))
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn reviewer_side_keeps_only_pull_requests_i_review() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![
+            pr(7, "acme/api", "{other}", Some("{me}")),
+            pr(8, "acme/api", "{other}", Some("{someone-else}")),
+        ])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let rows = value["pull_requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "only the pr I review may survive: {stdout}");
+    assert_eq!(rows[0]["id"], 7);
+    assert_eq!(rows[0]["my_role"], "reviewer");
+    assert_eq!(rows[0]["my_review_state"], "pending");
+}
+
+#[tokio::test]
+async fn authored_and_reviewed_dedupes_into_one_row_marked_both() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{me}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{me}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let rows = value["pull_requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "the same pr must appear once: {stdout}");
+    assert_eq!(rows[0]["my_role"], "both");
+}
+
+#[tokio::test]
+async fn workspace_flag_skips_workspace_enumeration() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn repo_limit_caps_the_fan_out() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api", "acme/web"])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Second repository is beyond the limit and must never be asked.
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/web/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme",
+            "--repo-limit",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn repositories_are_requested_newest_first() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .and(query_param("role", "member"))
+        .and(query_param("sort", "-updated_on"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn an_unreadable_workspace_is_reported_not_fatal() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![
+            serde_json::json!({ "slug": "acme" }),
+            serde_json::json!({ "slug": "locked" }),
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{other}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/locked"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["pull_requests"].as_array().unwrap().len(), 1);
+    assert_eq!(value["partial"], serde_json::json!(["locked"]));
+}
+
+#[tokio::test]
+async fn build_is_fetched_once_for_a_deduped_row() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{me}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{me}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests/7/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![
+            serde_json::json!({ "key": "PIPE", "name": "p", "state": "FAILED" }),
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--build", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let rows = value["pull_requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["build_state"], "failed");
+    assert_eq!(rows[0]["build"].as_array().unwrap().len(), 1);
+}

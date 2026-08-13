@@ -1,10 +1,15 @@
-use crate::api::models::{BuildState, BuildStatus, PullRequest, ReviewState, ReviewerState};
+use crate::api;
+use crate::api::models::{
+    BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState, Workspace,
+};
 use crate::api::Client;
+use crate::commands::pr_list::REVIEWER_FIELDS;
 use crate::credentials;
 use crate::error::Result;
 use crate::output::{self, Format};
 use crate::repo::RepoSlug;
 use crate::users::current_user;
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -128,6 +133,65 @@ fn repo_of(pr: &PullRequest) -> String {
     }
 }
 
+/// Same bound as the build-status fan-out: fast on a busy morning, clear of the
+/// rate limit.
+const MAX_IN_FLIGHT: usize = 8;
+
+/// The workspaces to scan. `--workspace` short-circuits the lookup entirely,
+/// which is the cheap path a narrowed brief uses.
+async fn workspaces(client: &Client, explicit: Option<&str>) -> Result<Vec<String>> {
+    if let Some(slug) = explicit {
+        return Ok(vec![slug.to_string()]);
+    }
+    let found: Vec<Workspace> = client.paginate("/workspaces?pagelen=50").await?;
+    Ok(found.into_iter().filter_map(|w| w.slug).collect())
+}
+
+/// The `--repo-limit` most recently updated repositories in one workspace.
+/// Sorting by recency and capping is the bound on the whole reviewer half: a
+/// repository nobody has touched in months cannot hold a review waiting on you.
+async fn repositories(client: &Client, workspace: &str, limit: usize) -> Result<Vec<String>> {
+    let found: Vec<Repository> = client
+        .paginate(&format!(
+            "/repositories/{}?role=member&sort=-updated_on&pagelen=50",
+            urlencoding::encode(workspace)
+        ))
+        .await?;
+    Ok(found
+        .into_iter()
+        .filter_map(|r| r.full_name)
+        .take(limit)
+        .collect())
+}
+
+/// Pull requests in one repository where I am a reviewer.
+async fn reviewing_in(
+    client: &Client,
+    repo: &str,
+    state: &str,
+    my_uuid: &str,
+) -> Result<Vec<(String, PullRequest)>> {
+    let slug = RepoSlug::parse(repo)?;
+    let prs: Vec<PullRequest> = client
+        .paginate(&api::repo_path(
+            &slug,
+            &format!(
+                "/pullrequests?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+                urlencoding::encode(&state_query(state))
+            ),
+        ))
+        .await?;
+    Ok(prs
+        .into_iter()
+        .filter(|pr| {
+            pr.reviewer_states()
+                .iter()
+                .any(|r| r.uuid.as_deref() == Some(my_uuid))
+        })
+        .map(|pr| (repo.to_string(), pr))
+        .collect())
+}
+
 pub async fn run(format: Format, args: MineArgs) -> Result<()> {
     let creds = credentials::load()?;
     let client = Client::from_env(creds)?;
@@ -137,10 +201,35 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
 
     let spinner = output::spinner("scanning your pull requests");
     let mut found: Vec<(String, PullRequest)> = Vec::new();
-    let partial: Vec<String> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
 
     if args.role != RoleArg::Reviewer {
         found.extend(authored(&client, &my_uuid, &args.state).await?);
+    }
+
+    if args.role != RoleArg::Author {
+        for workspace in workspaces(&client, args.workspace.as_deref()).await? {
+            // A token without scope on one workspace must not sink the whole
+            // scan; the slug is reported instead, so a brief built from a
+            // partial view can say so.
+            let repos = match repositories(&client, &workspace, args.repo_limit).await {
+                Ok(repos) => repos,
+                Err(_) => {
+                    partial.push(workspace);
+                    continue;
+                }
+            };
+            let batches: Vec<Vec<(String, PullRequest)>> = stream::iter(repos.iter())
+                .map(|repo| reviewing_in(&client, repo, &args.state, &my_uuid))
+                .buffer_unordered(MAX_IN_FLIGHT)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            for batch in batches {
+                found.extend(batch);
+            }
+        }
     }
     spinner.finish_and_clear();
 
