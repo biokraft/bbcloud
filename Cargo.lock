@@ -136,6 +136,7 @@ dependencies = [
  "clap_complete",
  "comfy-table",
  "flate2",
+ "futures",
  "indicatif",
  "inquire",
  "keyring",

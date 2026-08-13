@@ -84,6 +84,72 @@ pub struct ReviewerState {
     pub state: ReviewState,
 }
 
+/// One entry from `…/pullrequests/{id}/statuses`. Every field is optional
+/// because a reporter may omit any of them, and a missing name must not cost
+/// us the row.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildStatus {
+    pub key: Option<String>,
+    pub name: Option<String>,
+    pub state: Option<String>,
+    pub url: Option<String>,
+}
+
+/// A pull request can carry one status per reporting tool, so the table needs a
+/// single word. `None` covers both "no checks reported" and "a state this
+/// version does not recognise" — an unknown future state must never fail a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildState {
+    Failed,
+    Stopped,
+    InProgress,
+    Successful,
+    None,
+}
+
+impl BuildState {
+    pub fn from_api(state: Option<&str>) -> Self {
+        match state.map(str::to_ascii_uppercase).as_deref() {
+            Some("FAILED") => Self::Failed,
+            Some("STOPPED") => Self::Stopped,
+            Some("INPROGRESS") => Self::InProgress,
+            Some("SUCCESSFUL") => Self::Successful,
+            _ => Self::None,
+        }
+    }
+
+    /// Worst first. Used only for the rollup ordering.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Failed => 0,
+            Self::Stopped => 1,
+            Self::InProgress => 2,
+            Self::Successful => 3,
+            Self::None => 4,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Failed => "FAILED",
+            Self::Stopped => "STOPPED",
+            Self::InProgress => "INPROGRESS",
+            Self::Successful => "SUCCESSFUL",
+            Self::None => "-",
+        }
+    }
+
+    /// Worst-wins: one failing check needs attention whatever else passed.
+    pub fn rollup(statuses: &[BuildStatus]) -> Self {
+        statuses
+            .iter()
+            .map(|s| Self::from_api(s.state.as_deref()))
+            .min_by_key(|s| s.rank())
+            .unwrap_or(Self::None)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PullRequest {
     pub id: u64,
@@ -482,5 +548,101 @@ mod tests {
         let uuid_only: User =
             serde_json::from_value(serde_json::json!({ "uuid": "{5f3a}" })).unwrap();
         assert_eq!(uuid_only.name(), "{5f3a}");
+    }
+
+    fn status(state: Option<&str>) -> BuildStatus {
+        BuildStatus {
+            key: Some("PIPELINE".into()),
+            name: Some("Pipeline #1".into()),
+            state: state.map(str::to_string),
+            url: None,
+        }
+    }
+
+    #[test]
+    fn build_state_from_api_is_case_insensitive() {
+        assert_eq!(
+            BuildState::from_api(Some("SUCCESSFUL")),
+            BuildState::Successful
+        );
+        assert_eq!(
+            BuildState::from_api(Some("successful")),
+            BuildState::Successful
+        );
+        assert_eq!(
+            BuildState::from_api(Some("InProgress")),
+            BuildState::InProgress
+        );
+        assert_eq!(BuildState::from_api(Some("FAILED")), BuildState::Failed);
+        assert_eq!(BuildState::from_api(Some("STOPPED")), BuildState::Stopped);
+    }
+
+    #[test]
+    fn build_state_from_api_degrades_on_unknown_and_missing() {
+        assert_eq!(BuildState::from_api(Some("TELEPORTED")), BuildState::None);
+        assert_eq!(BuildState::from_api(None), BuildState::None);
+    }
+
+    #[test]
+    fn rollup_of_empty_is_none() {
+        assert_eq!(BuildState::rollup(&[]), BuildState::None);
+    }
+
+    #[test]
+    fn rollup_is_worst_wins() {
+        // Every state loses to a failure, whichever order they arrive in.
+        for other in ["SUCCESSFUL", "INPROGRESS", "STOPPED"] {
+            assert_eq!(
+                BuildState::rollup(&[status(Some(other)), status(Some("FAILED"))]),
+                BuildState::Failed
+            );
+            assert_eq!(
+                BuildState::rollup(&[status(Some("FAILED")), status(Some(other))]),
+                BuildState::Failed
+            );
+        }
+        assert_eq!(
+            BuildState::rollup(&[status(Some("SUCCESSFUL")), status(Some("STOPPED"))]),
+            BuildState::Stopped
+        );
+        assert_eq!(
+            BuildState::rollup(&[status(Some("SUCCESSFUL")), status(Some("INPROGRESS"))]),
+            BuildState::InProgress
+        );
+        assert_eq!(
+            BuildState::rollup(&[status(Some("SUCCESSFUL")), status(Some("SUCCESSFUL"))]),
+            BuildState::Successful
+        );
+    }
+
+    /// An unrecognised state must not be treated as worse than everything else,
+    /// or one unknown reporter would paint every pull request red.
+    #[test]
+    fn rollup_ignores_unknown_states_next_to_a_real_one() {
+        assert_eq!(
+            BuildState::rollup(&[status(None), status(Some("SUCCESSFUL"))]),
+            BuildState::Successful
+        );
+    }
+
+    #[test]
+    fn build_state_serialises_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&BuildState::InProgress).unwrap(),
+            "\"inprogress\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BuildState::None).unwrap(),
+            "\"none\""
+        );
+    }
+
+    #[test]
+    fn build_state_labels_match_bitbucket_wording() {
+        assert_eq!(BuildState::Failed.label(), "FAILED");
+        assert_eq!(BuildState::Stopped.label(), "STOPPED");
+        assert_eq!(BuildState::InProgress.label(), "INPROGRESS");
+        assert_eq!(BuildState::Successful.label(), "SUCCESSFUL");
+        assert_eq!(BuildState::None.label(), "-");
     }
 }

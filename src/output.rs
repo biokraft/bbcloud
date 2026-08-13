@@ -1,3 +1,4 @@
+use crate::api::models::BuildState;
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_BORDERS_ONLY;
@@ -110,6 +111,41 @@ pub fn heading(msg: &str) {
     println!("{}", heading_line(msg, color_enabled()));
 }
 
+/// The meaning a cell carries, so callers pick intent rather than a colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Bad,
+    Warn,
+    Good,
+    Dim,
+}
+
+fn colored_cell_with(text: &str, tone: Tone, color: bool) -> String {
+    if !color {
+        return text.to_string();
+    }
+    match tone {
+        Tone::Bad => text.red().to_string(),
+        Tone::Warn => text.yellow().to_string(),
+        Tone::Good => text.green().to_string(),
+        Tone::Dim => text.dimmed().to_string(),
+    }
+}
+
+pub fn colored_cell(text: &str, tone: Tone) -> String {
+    colored_cell_with(text, tone, color_enabled())
+}
+
+/// The single source of truth for how a build state maps to a colour intent.
+pub fn tone_for(state: BuildState) -> Tone {
+    match state {
+        BuildState::Failed => Tone::Bad,
+        BuildState::Stopped | BuildState::InProgress => Tone::Warn,
+        BuildState::Successful => Tone::Good,
+        BuildState::None => Tone::Dim,
+    }
+}
+
 pub fn spinner(msg: &str) -> indicatif::ProgressBar {
     if !std::io::stderr().is_terminal() {
         return indicatif::ProgressBar::hidden();
@@ -220,6 +256,15 @@ mod tests {
     }
 
     #[test]
+    fn tone_for_maps_every_build_state() {
+        assert_eq!(tone_for(BuildState::Failed), Tone::Bad);
+        assert_eq!(tone_for(BuildState::Stopped), Tone::Warn);
+        assert_eq!(tone_for(BuildState::InProgress), Tone::Warn);
+        assert_eq!(tone_for(BuildState::Successful), Tone::Good);
+        assert_eq!(tone_for(BuildState::None), Tone::Dim);
+    }
+
+    #[test]
     fn color_from_tty_without_no_color_is_true() {
         assert!(color_from(true, false));
     }
@@ -293,5 +338,18 @@ mod tests {
         let line = heading_line("Title", true);
         assert!(line.contains('\x1b'));
         assert!(line.contains("Title"));
+    }
+
+    #[test]
+    fn colored_cell_is_plain_without_color() {
+        assert_eq!(colored_cell_with("FAILED", Tone::Bad, false), "FAILED");
+        assert_eq!(colored_cell_with("-", Tone::Dim, false), "-");
+    }
+
+    #[test]
+    fn colored_cell_wraps_when_color_is_on() {
+        let painted = colored_cell_with("FAILED", Tone::Bad, true);
+        assert!(painted.contains("FAILED"));
+        assert_ne!(painted, "FAILED", "expected an ansi escape around the text");
     }
 }

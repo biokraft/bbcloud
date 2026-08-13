@@ -509,3 +509,253 @@ async fn a_filter_matching_nothing_prints_an_empty_json_array() {
         .unwrap_or_else(|e| panic!("stdout did not parse as JSON: {e}\nstdout: {stdout}"));
     assert_eq!(value, serde_json::json!([]));
 }
+
+/// Two open pull requests by two different authors, so the "only fetch what
+/// survived the other filters" behaviour is testable.
+fn two_prs() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "id": 7,
+            "title": "fix the thing",
+            "state": "OPEN",
+            "author": { "uuid": "{sean}", "nickname": "sean", "display_name": "Sean B" },
+            "source": { "branch": { "name": "feature/a" } },
+            "destination": { "branch": { "name": "main" } },
+            "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/7" } }
+        },
+        {
+            "id": 9,
+            "title": "add the other thing",
+            "state": "OPEN",
+            "author": { "uuid": "{ana}", "nickname": "ana", "display_name": "Ana" },
+            "source": { "branch": { "name": "feature/b" } },
+            "destination": { "branch": { "name": "main" } },
+            "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/9" } }
+        }
+    ])
+}
+
+async fn mount_statuses(server: &MockServer, id: u64, states: &[&str]) -> () {
+    let values: Vec<serde_json::Value> = states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            serde_json::json!({
+                "key": format!("KEY{i}"),
+                "name": format!("Check {i}"),
+                "state": s,
+                "url": format!("https://bitbucket.org/build/{id}/{i}")
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repositories/acme/widgets/pullrequests/{id}/statuses"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": values })),
+        )
+        .mount(server)
+        .await;
+}
+
+/// The whole point of making the column opt-in: the default path must stay a
+/// single request, however many pull requests come back.
+#[tokio::test]
+async fn list_without_build_never_touches_the_statuses_endpoint() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/statuses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "list", "--json"])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn build_flag_adds_the_column_with_the_rollup() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["SUCCESSFUL", "FAILED"]).await;
+    mount_statuses(&server, 9, &["SUCCESSFUL"]).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--build"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+
+    assert!(text.contains("BUILD"), "missing column header:\n{text}");
+    assert!(text.contains("FAILED"), "missing rollup for pr 7:\n{text}");
+    assert!(
+        text.contains("SUCCESSFUL"),
+        "missing rollup for pr 9:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn build_json_carries_rollup_and_every_status() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["SUCCESSFUL", "FAILED"]).await;
+    mount_statuses(&server, 9, &["SUCCESSFUL"]).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--build", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+    let seven = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == 7)
+        .unwrap();
+    assert_eq!(seven["build_state"], "failed");
+    assert_eq!(seven["build"].as_array().unwrap().len(), 2);
+    assert_eq!(seven["build"][1]["key"], "KEY1");
+}
+
+/// `statuses_for` uses `try_collect`: the first failing status request aborts
+/// the whole listing rather than rendering partial rows with blank cells.
+#[tokio::test]
+async fn build_flag_fails_the_whole_list_when_one_status_request_fails() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["SUCCESSFUL"]).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/9/statuses"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "list", "--build", "--json"])
+        .assert()
+        .failure();
+}
+
+/// Existing callers must see the same shape they see today.
+#[tokio::test]
+async fn json_without_build_has_no_build_fields() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+    let first = &rows.as_array().unwrap()[0];
+    assert!(first.get("build").is_none(), "leaked build: {first}");
+    assert!(
+        first.get("build_state").is_none(),
+        "leaked build_state: {first}"
+    );
+}
+
+#[tokio::test]
+async fn build_status_filter_keeps_only_matching_prs_and_implies_the_column() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["FAILED"]).await;
+    mount_statuses(&server, 9, &["SUCCESSFUL"]).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--build-status", "failed", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["id"], 7);
+    // implied column: the fields are present without --build
+    assert_eq!(rows[0]["build_state"], "failed");
+}
+
+#[tokio::test]
+async fn build_status_none_matches_a_pr_with_no_checks() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["FAILED"]).await;
+    mount_statuses(&server, 9, &[]).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--build-status", "none", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&out).unwrap();
+
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["id"], 9);
+    assert_eq!(rows[0]["build_state"], "none");
+}
+
+/// Statuses are fetched after the other filters, so a pull request filtered out
+/// by `--author` must cost no request at all.
+#[tokio::test]
+async fn statuses_are_fetched_only_for_surviving_rows() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{sean}", "nickname": "sean", "display_name": "Sean B"
+        })))
+        .mount(&server)
+        .await;
+    mount_statuses(&server, 7, &["FAILED"]).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/9/statuses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "list", "--author", "@me", "--build", "--json"])
+        .assert()
+        .success();
+}
+
+/// JSON purity on the empty path: `print_table`'s "nothing to show" line must
+/// not escape, and neither must a spinner.
+#[tokio::test]
+async fn empty_result_with_build_prints_only_an_empty_json_array() {
+    let server = MockServer::start().await;
+    mount_list(&server, serde_json::json!([])).await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--build", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+
+    assert_eq!(text.trim(), "[]");
+}

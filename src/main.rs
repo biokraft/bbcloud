@@ -135,6 +135,12 @@ enum PrCommand {
         /// Only pull requests waiting on your review
         #[arg(long)]
         needs_my_review: bool,
+        /// Show the build status column (one extra request per pull request)
+        #[arg(long)]
+        build: bool,
+        /// Only pull requests whose build rolls up to this state
+        #[arg(long, value_enum)]
+        build_status: Option<commands::pr_list::BuildStateArg>,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -144,6 +150,8 @@ enum PrCommand {
     /// List commits in a pull request
     #[command(alias = "c")]
     Commits { id: u64 },
+    /// Show the build statuses reported on a pull request
+    Build { id: u64 },
     /// Request changes on a pull request
     #[command(name = "request-changes", alias = "rc")]
     RequestChanges { id: u64 },
@@ -288,6 +296,8 @@ async fn run(cli: Cli) -> Result<()> {
                     author,
                     review_state,
                     needs_my_review,
+                    build,
+                    build_status,
                 } => {
                     commands::pr_list::list(
                         &ctx,
@@ -298,6 +308,8 @@ async fn run(cli: Cli) -> Result<()> {
                             author,
                             review_state,
                             needs_my_review,
+                            build,
+                            build_status,
                         },
                     )
                     .await
@@ -305,6 +317,7 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
                 PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
+                PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
                 PrCommand::RequestChanges { id } => commands::pr::request_changes(&ctx, id).await,
                 PrCommand::NoRequestChanges { id } => {
                     commands::pr::unrequest_changes(&ctx, id).await
