@@ -75,6 +75,14 @@ impl ReviewState {
             Self::Pending => "·",
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes_requested",
+            Self::Pending => "pending",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +173,24 @@ pub struct PullRequest {
     pub participants: Vec<Participant>,
     #[serde(default)]
     pub draft: bool,
+    /// The api's own rfc3339 string, passed through unformatted: the consumer is
+    /// usually an agent computing an age, and a pre-formatted "3 days ago" would
+    /// throw away the precision it needs.
+    pub updated_on: Option<String>,
+}
+
+/// A workspace as returned by `GET /workspaces`. Only the slug is used — it is
+/// what the repositories endpoint needs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Workspace {
+    pub slug: Option<String>,
+}
+
+/// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
+/// `"workspace/repo"`, which `RepoSlug::parse` accepts directly.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Repository {
+    pub full_name: Option<String>,
 }
 
 impl PullRequest {
@@ -644,5 +670,32 @@ mod tests {
         assert_eq!(BuildState::InProgress.label(), "INPROGRESS");
         assert_eq!(BuildState::Successful.label(), "SUCCESSFUL");
         assert_eq!(BuildState::None.label(), "-");
+    }
+
+    #[test]
+    fn pull_request_carries_updated_on() {
+        let pr: PullRequest =
+            serde_json::from_str(r#"{"id":1,"updated_on":"2026-08-10T09:00:00+00:00"}"#).unwrap();
+        assert_eq!(pr.updated_on.as_deref(), Some("2026-08-10T09:00:00+00:00"));
+    }
+
+    #[test]
+    fn pull_request_without_updated_on_is_none() {
+        let pr: PullRequest = serde_json::from_str(r#"{"id":1}"#).unwrap();
+        assert!(pr.updated_on.is_none());
+    }
+
+    #[test]
+    fn workspace_and_repository_deserialise() {
+        let ws: Workspace = serde_json::from_str(r#"{"slug":"acme"}"#).unwrap();
+        assert_eq!(ws.slug.as_deref(), Some("acme"));
+        let repo: Repository = serde_json::from_str(r#"{"full_name":"acme/api"}"#).unwrap();
+        assert_eq!(repo.full_name.as_deref(), Some("acme/api"));
+    }
+
+    #[test]
+    fn repository_tolerates_a_missing_full_name() {
+        let repo: Repository = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(repo.full_name.is_none());
     }
 }

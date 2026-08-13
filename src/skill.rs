@@ -3,13 +3,35 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub const SKILL_NAME: &str = "bitbucket-cloud";
+/// One embedded skill. The text ships *inside* the binary, so every upgrade
+/// path — brew, cargo, `bb update` — carries new content as an inherent
+/// consequence rather than needing a separate sync. It also means an installed
+/// skill can never describe a flag this binary lacks.
+pub struct Skill {
+    pub name: &'static str,
+    pub content: &'static str,
+}
 
-/// The skill text ships *inside* the binary, so every upgrade path — brew,
-/// cargo, `bb update` — carries new content as an inherent consequence rather
-/// than needing a separate sync. It also means the installed skill can never
-/// describe a flag this binary lacks.
-pub const SKILL_MD: &str = include_str!("../.agents/skills/bitbucket-cloud/SKILL.md");
+pub const SKILLS: [Skill; 2] = [
+    Skill {
+        name: "bitbucket-cloud",
+        content: include_str!("../.agents/skills/bitbucket-cloud/SKILL.md"),
+    },
+    Skill {
+        name: "bbc-daily-brief",
+        content: include_str!("../.agents/skills/bbc-daily-brief/SKILL.md"),
+    },
+];
+
+pub fn skill_by_name(name: &str) -> Option<&'static Skill> {
+    SKILLS.iter().find(|s| s.name == name)
+}
+
+/// State files written before the second skill existed carry no `skill` field.
+/// They can only have described the first one.
+fn default_skill_name() -> String {
+    "bitbucket-cloud".to_string()
+}
 
 pub fn content_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -49,6 +71,8 @@ pub struct Entry {
     /// how a local edit is detected and protected.
     pub sha256: String,
     pub version: String,
+    #[serde(default = "default_skill_name")]
+    pub skill: String,
 }
 
 pub fn state_path() -> PathBuf {
@@ -124,16 +148,17 @@ impl Action {
 pub struct Outcome {
     pub path: PathBuf,
     pub agent: String,
+    pub skill: String,
     pub action: Action,
 }
 
 /// Where the real file lives for each agent.
-pub fn skill_file(root: &Path, agent: Agent) -> PathBuf {
+pub fn skill_file(root: &Path, agent: Agent, skill: &Skill) -> PathBuf {
     let base = match agent {
         Agent::Agents => root.join(".agents").join("skills"),
         Agent::Claude => root.join(".claude").join("skills"),
     };
-    base.join(SKILL_NAME).join("SKILL.md")
+    base.join(skill.name).join("SKILL.md")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,11 +184,12 @@ impl State {
 pub struct StatusRow {
     pub path: PathBuf,
     pub agent: String,
+    pub skill: String,
     pub state: State,
 }
 
-/// Refuses any path that does not end in `.agents/skills/<SKILL_NAME>/SKILL.md`
-/// or `.claude/skills/<SKILL_NAME>/SKILL.md`. Every removal or write driven by
+/// Refuses any path that does not end in `.agents/skills/<name>/SKILL.md`
+/// or `.claude/skills/<name>/SKILL.md`, where `<name>` is a known skill. Every removal or write driven by
 /// a state entry must go through this first: the state file is user-editable
 /// (by hand or by a bad merge), and nothing it names should let `bb` touch an
 /// arbitrary path on disk. Deliberately checks shape, not existence or type —
@@ -181,7 +207,7 @@ fn is_shaped_like_a_skill_path(path: &Path) -> bool {
     let Some(skill_dir) = components.pop() else {
         return false;
     };
-    if skill_dir.as_os_str() != SKILL_NAME {
+    if skill_by_name(&skill_dir.as_os_str().to_string_lossy()).is_none() {
         return false;
     }
     let Some(skills_dir) = components.pop() else {
@@ -214,13 +240,25 @@ fn state_of(entry: &Entry, wanted: &str) -> State {
 
 pub fn status() -> (Vec<StatusRow>, Option<String>) {
     let (entries, warning) = load_state();
-    let wanted = content_hash(SKILL_MD.as_bytes());
     let rows = entries
         .iter()
-        .map(|e| StatusRow {
-            path: e.path.clone(),
-            agent: e.agent.clone(),
-            state: state_of(e, &wanted),
+        .map(|e| {
+            // An unknown skill name (a state file written by a newer `bb`, or
+            // hand-edited) has no wanted hash to compare against. It must not
+            // be able to reach `Stale` — that state promises "the binary has
+            // newer text, a refresh will fix it", which is untrue here, since
+            // nothing in this binary knows what this entry's content should
+            // be. `Modified` correctly refuses to touch it.
+            let state = match skill_by_name(&e.skill) {
+                Some(skill) => state_of(e, &content_hash(skill.content.as_bytes())),
+                None => State::Modified,
+            };
+            StatusRow {
+                path: e.path.clone(),
+                agent: e.agent.clone(),
+                skill: e.skill.clone(),
+                state,
+            }
         })
         .collect();
     (rows, warning)
@@ -263,17 +301,22 @@ fn parent_is_symlink(path: &Path) -> bool {
 
 /// Removes what bb recorded. A customized file is left in place unless `force`,
 /// and an untracked file is never touched at all.
-pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, RemovalOutcome)>> {
+pub fn uninstall(
+    root: Option<&Path>,
+    skills: &[&'static Skill],
+    force: bool,
+) -> Result<Vec<(PathBuf, String, RemovalOutcome)>> {
     let (entries, warning) = load_state();
     if let Some(warning) = warning {
         crate::output::warn(&warning);
     }
-    let wanted = content_hash(SKILL_MD.as_bytes());
+    let in_scope_skill_names: Vec<&str> = skills.iter().map(|s| s.name).collect();
     let mut results = Vec::new();
     let mut keep = Vec::new();
 
     for entry in entries {
-        let in_scope = root.is_none_or(|r| entry.path.starts_with(r));
+        let in_scope = root.is_none_or(|r| entry.path.starts_with(r))
+            && in_scope_skill_names.contains(&entry.skill.as_str());
         if !in_scope {
             keep.push(entry);
             continue;
@@ -283,13 +326,24 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, Remov
                 "refusing to touch {} — does not look like a skill path bb would have written",
                 entry.path.display()
             ));
-            results.push((entry.path.clone(), RemovalOutcome::RefusedUnsafePath));
+            results.push((
+                entry.path.clone(),
+                entry.skill.clone(),
+                RemovalOutcome::RefusedUnsafePath,
+            ));
             keep.push(entry);
             continue;
         }
+        let wanted = skill_by_name(&entry.skill)
+            .map(|s| content_hash(s.content.as_bytes()))
+            .unwrap_or_default();
         let modified = matches!(state_of(&entry, &wanted), State::Modified);
         if modified && !force {
-            results.push((entry.path.clone(), RemovalOutcome::RefusedModified));
+            results.push((
+                entry.path.clone(),
+                entry.skill.clone(),
+                RemovalOutcome::RefusedModified,
+            ));
             keep.push(entry);
             continue;
         }
@@ -309,7 +363,7 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, Remov
         let existed = removal_target.exists() || std::fs::symlink_metadata(removal_target).is_ok();
         remove_existing(removal_target)?;
         // A `kind: "file"` Claude fallback can leave an empty
-        // `.claude/skills/<SKILL_NAME>/` directory behind once `SKILL.md`
+        // `.claude/skills/<skill name>/` directory behind once `SKILL.md`
         // inside it is gone. Clean up that one directory — never a parent,
         // and never one that still has something in it.
         if !is_symlinked_dir {
@@ -327,7 +381,7 @@ pub fn uninstall(root: Option<&Path>, force: bool) -> Result<Vec<(PathBuf, Remov
         } else {
             RemovalOutcome::Absent
         };
-        results.push((entry.path.clone(), outcome));
+        results.push((entry.path.clone(), entry.skill.clone(), outcome));
     }
 
     save_state(&keep)?;
@@ -380,8 +434,8 @@ fn remove_existing(path: &Path) -> Result<()> {
 /// Installs the Claude copy as a relative symlink to the `.agents` skill
 /// directory when both are present, falling back to a real file otherwise.
 /// Returns the `kind` that was actually written ("symlink" or "file").
-fn install_claude_dir(root: &Path, agents_installed: bool) -> Result<&'static str> {
-    let claude_dir = root.join(".claude").join("skills").join(SKILL_NAME);
+fn install_claude_dir(root: &Path, agents_installed: bool, skill: &Skill) -> Result<&'static str> {
+    let claude_dir = root.join(".claude").join("skills").join(skill.name);
     let claude_file = claude_dir.join("SKILL.md");
 
     if agents_installed {
@@ -395,7 +449,7 @@ fn install_claude_dir(root: &Path, agents_installed: bool) -> Result<&'static st
                 .join("..")
                 .join(".agents")
                 .join("skills")
-                .join(SKILL_NAME);
+                .join(skill.name);
             if std::os::unix::fs::symlink(&target, &claude_dir).is_ok() {
                 return Ok("symlink");
             }
@@ -403,72 +457,84 @@ fn install_claude_dir(root: &Path, agents_installed: bool) -> Result<&'static st
     }
 
     remove_existing(&claude_dir)?;
-    write_file(&claude_file, SKILL_MD)?;
+    write_file(&claude_file, skill.content)?;
     Ok("file")
 }
 
-pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome>> {
+pub fn install(
+    root: &Path,
+    agents: &[Agent],
+    skills: &[&'static Skill],
+    force: bool,
+) -> Result<Vec<Outcome>> {
     let (mut state, _warning) = load_state();
-    let wanted = content_hash(SKILL_MD.as_bytes());
     let mut outcomes = Vec::new();
 
-    let agents_dir_present = root
-        .join(".agents")
-        .join("skills")
-        .join(SKILL_NAME)
-        .join("SKILL.md")
-        .exists()
-        || agents.contains(&Agent::Agents);
+    for skill in skills {
+        let wanted = content_hash(skill.content.as_bytes());
 
-    for agent in agents {
-        let path = skill_file(root, *agent);
-        let recorded = state.iter().find(|e| e.path == path).cloned();
-        let on_disk = std::fs::read(&path).ok();
+        let agents_dir_present = root
+            .join(".agents")
+            .join("skills")
+            .join(skill.name)
+            .join("SKILL.md")
+            .exists()
+            || agents.contains(&Agent::Agents);
 
-        let action = match (&on_disk, &recorded) {
-            (None, _) => Action::Installed,
-            (Some(bytes), _) if content_hash(bytes) == wanted => Action::Unchanged,
-            // We wrote it and the binary now carries newer text.
-            (Some(bytes), Some(entry)) if content_hash(bytes) == entry.sha256 => Action::Refreshed,
-            // Either untracked or edited since we wrote it — someone's own work.
-            (Some(_), _) if force => Action::Refreshed,
-            (Some(_), _) => Action::SkippedModified,
-        };
+        for agent in agents {
+            let path = skill_file(root, *agent, skill);
+            let recorded = state.iter().find(|e| e.path == path).cloned();
+            let on_disk = std::fs::read(&path).ok();
 
-        let mut kind = "file".to_string();
-        if action != Action::SkippedModified && action != Action::Unchanged {
-            if *agent == Agent::Claude {
-                kind = install_claude_dir(root, agents_dir_present)?.to_string();
-            } else {
-                write_file(&path, SKILL_MD)?;
+            let action = match (&on_disk, &recorded) {
+                (None, _) => Action::Installed,
+                (Some(bytes), _) if content_hash(bytes) == wanted => Action::Unchanged,
+                // We wrote it and the binary now carries newer text.
+                (Some(bytes), Some(entry)) if content_hash(bytes) == entry.sha256 => {
+                    Action::Refreshed
+                }
+                // Either untracked or edited since we wrote it — someone's own work.
+                (Some(_), _) if force => Action::Refreshed,
+                (Some(_), _) => Action::SkippedModified,
+            };
+
+            let mut kind = "file".to_string();
+            if action != Action::SkippedModified && action != Action::Unchanged {
+                if *agent == Agent::Claude {
+                    kind = install_claude_dir(root, agents_dir_present, skill)?.to_string();
+                } else {
+                    write_file(&path, skill.content)?;
+                }
+            } else if let Some(entry) = &recorded {
+                kind = entry.kind.clone();
+            } else if parent_is_symlink(&path) {
+                // No prior state entry to inherit `kind` from — e.g. a hand-made
+                // Claude symlink, exactly what older docs told users to create
+                // themselves — so it must be read off disk rather than defaulted
+                // to `"file"`, or a later uninstall would bypass the symlink
+                // guard and follow the link into whatever it points at.
+                kind = "symlink".to_string();
             }
-        } else if let Some(entry) = &recorded {
-            kind = entry.kind.clone();
-        } else if parent_is_symlink(&path) {
-            // No prior state entry to inherit `kind` from — e.g. a hand-made
-            // Claude symlink, exactly what older docs told users to create
-            // themselves — so it must be read off disk rather than defaulted
-            // to `"file"`, or a later uninstall would bypass the symlink
-            // guard and follow the link into whatever it points at.
-            kind = "symlink".to_string();
-        }
 
-        if action != Action::SkippedModified {
-            state.retain(|e| e.path != path);
-            state.push(Entry {
-                path: path.clone(),
+            if action != Action::SkippedModified {
+                state.retain(|e| e.path != path);
+                state.push(Entry {
+                    path: path.clone(),
+                    agent: agent.as_str().to_string(),
+                    kind,
+                    sha256: wanted.clone(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    skill: skill.name.to_string(),
+                });
+            }
+
+            outcomes.push(Outcome {
+                path,
                 agent: agent.as_str().to_string(),
-                kind,
-                sha256: wanted.clone(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                skill: skill.name.to_string(),
+                action,
             });
         }
-
-        outcomes.push(Outcome {
-            path,
-            agent: agent.as_str().to_string(),
-            action,
-        });
     }
 
     save_state(&state)?;
@@ -477,7 +543,7 @@ pub fn install(root: &Path, agents: &[Agent], force: bool) -> Result<Vec<Outcome
 
 /// A tracked Claude entry's recorded `path` is `SKILL.md` *inside* the linked
 /// directory (see `uninstall`'s comment on the same shape), so the project
-/// root sits four components above it: `SKILL.md`, `SKILL_NAME`, `skills`,
+/// root sits four components above it: `SKILL.md`, `<skill name>`, `skills`,
 /// `.claude`.
 fn claude_root_from_entry_path(path: &Path) -> Result<&Path> {
     path.parent()
@@ -498,7 +564,7 @@ fn claude_root_from_entry_path(path: &Path) -> Result<&Path> {
 /// `install` uses is not duplicated here, and returns the `kind` that was
 /// actually written so the caller can keep the recorded state honest even
 /// when the platform refuses a symlink and falls back to a real file.
-fn restore_claude_link(entry_path: &Path) -> Result<String> {
+fn restore_claude_link(entry_path: &Path, skill: &Skill) -> Result<String> {
     if !is_shaped_like_a_skill_path(entry_path) {
         return Err(BbError::Config(format!(
             "refusing to touch {} — does not look like a skill path bb would have written",
@@ -509,10 +575,10 @@ fn restore_claude_link(entry_path: &Path) -> Result<String> {
     let agents_installed = root
         .join(".agents")
         .join("skills")
-        .join(SKILL_NAME)
+        .join(skill.name)
         .join("SKILL.md")
         .exists();
-    Ok(install_claude_dir(root, agents_installed)?.to_string())
+    Ok(install_claude_dir(root, agents_installed, skill)?.to_string())
 }
 
 /// Refreshes every tracked entry against the currently-running binary's
@@ -527,7 +593,6 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
     if let Some(warning) = warning {
         crate::output::warn(&warning);
     }
-    let wanted = content_hash(SKILL_MD.as_bytes());
     let mut outcomes = Vec::new();
 
     for entry in &mut state {
@@ -538,12 +603,20 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
             ));
             continue;
         }
+        // A hand-edited or badly-merged state file could name a skill this
+        // binary doesn't know. Leave it untouched here; `status` explicitly
+        // reports an unknown skill name as `Modified`, since this binary has
+        // no wanted content to compare it against or refresh it with.
+        let Some(skill) = skill_by_name(&entry.skill) else {
+            continue;
+        };
+        let wanted = content_hash(skill.content.as_bytes());
         let action = match state_of(entry, &wanted) {
             // The link is intact — writing to `entry.path` follows it straight
             // into the `.agents` file it points at, refreshing the shared
             // content without disturbing the link itself.
             State::Stale => {
-                write_file(&entry.path, SKILL_MD)?;
+                write_file(&entry.path, skill.content)?;
                 entry.sha256 = wanted.clone();
                 entry.version = env!("CARGO_PKG_VERSION").to_string();
                 Action::Refreshed
@@ -554,9 +627,9 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
             // the same kind of thing that used to be there instead.
             State::Missing => {
                 entry.kind = if entry.kind == "symlink" {
-                    restore_claude_link(&entry.path)?
+                    restore_claude_link(&entry.path, skill)?
                 } else {
-                    write_file(&entry.path, SKILL_MD)?;
+                    write_file(&entry.path, skill.content)?;
                     "file".to_string()
                 };
                 entry.sha256 = wanted.clone();
@@ -570,6 +643,7 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
         outcomes.push(Outcome {
             path: entry.path.clone(),
             agent: entry.agent.clone(),
+            skill: entry.skill.clone(),
             action,
         });
     }
@@ -583,17 +657,21 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
 mod tests {
     use super::*;
 
+    fn bb_skill() -> &'static Skill {
+        skill_by_name("bitbucket-cloud").unwrap()
+    }
+
     /// A packaging regression — an added `exclude` entry in Cargo.toml, or a moved
     /// file — must fail the build rather than ship an empty skill.
     #[test]
     fn embedded_skill_is_present_and_has_frontmatter() {
-        assert!(!SKILL_MD.trim().is_empty());
+        assert!(!bb_skill().content.trim().is_empty());
         assert!(
-            SKILL_MD.starts_with("---"),
+            bb_skill().content.starts_with("---"),
             "skill must open with yaml frontmatter"
         );
         assert!(
-            SKILL_MD.contains("name: bitbucket-cloud"),
+            bb_skill().content.contains("name: bitbucket-cloud"),
             "frontmatter should name the skill"
         );
     }
@@ -651,8 +729,9 @@ mod tests {
                     path: std::path::PathBuf::from("/p/.agents/skills/bitbucket-cloud/SKILL.md"),
                     agent: "agents".into(),
                     kind: "file".into(),
-                    sha256: content_hash(SKILL_MD.as_bytes()),
+                    sha256: content_hash(bb_skill().content.as_bytes()),
                     version: env!("CARGO_PKG_VERSION").into(),
+                    skill: "bitbucket-cloud".into(),
                 }];
                 save_state(&entries).unwrap();
                 let (loaded, warning) = load_state();
@@ -700,7 +779,7 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                let path = skill_file(root.path(), Agent::Agents);
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 let old = "---\nname: bitbucket-cloud\n---\nold text\n";
                 std::fs::write(&path, old).unwrap();
@@ -710,6 +789,7 @@ mod tests {
                     kind: "file".into(),
                     sha256: content_hash(old.as_bytes()),
                     version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
                 }])
                 .unwrap();
 
@@ -724,13 +804,14 @@ mod tests {
 
                 // Same entry, but now the file holds exactly what the binary ships:
                 // that must read as Current, not Stale.
-                std::fs::write(&path, SKILL_MD).unwrap();
+                std::fs::write(&path, bb_skill().content).unwrap();
                 save_state(&[Entry {
                     path: path.clone(),
                     agent: "agents".into(),
                     kind: "file".into(),
-                    sha256: content_hash(SKILL_MD.as_bytes()),
+                    sha256: content_hash(bb_skill().content.as_bytes()),
                     version: env!("CARGO_PKG_VERSION").into(),
+                    skill: "bitbucket-cloud".into(),
                 }])
                 .unwrap();
                 let (rows, _) = status();
@@ -756,15 +837,21 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
-                let agents_path = skill_file(dir.path(), Agent::Agents);
+                install(
+                    dir.path(),
+                    &[Agent::Agents, Agent::Claude],
+                    &[bb_skill()],
+                    false,
+                )
+                .unwrap();
+                let agents_path = skill_file(dir.path(), Agent::Agents, bb_skill());
                 let claude_root = dir.path().join(".claude");
                 assert!(agents_path.is_file(), "sanity: agents copy installed");
 
-                let results = uninstall(Some(&claude_root), false).unwrap();
+                let results = uninstall(Some(&claude_root), &[bb_skill()], false).unwrap();
                 assert_eq!(results.len(), 1, "only the claude entry was in scope");
                 assert_eq!(
-                    results[0].1,
+                    results[0].2,
                     RemovalOutcome::Removed,
                     "the claude entry should report removed"
                 );
@@ -881,20 +968,22 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
                 assert_eq!(outcomes.len(), 1);
                 assert!(matches!(outcomes[0].action, Action::Installed));
 
                 let written =
-                    std::fs::read_to_string(skill_file(dir.path(), Agent::Agents)).unwrap();
+                    std::fs::read_to_string(skill_file(dir.path(), Agent::Agents, bb_skill()))
+                        .unwrap();
                 assert_eq!(
-                    written, SKILL_MD,
+                    written,
+                    bb_skill().content,
                     "installed content must equal the embedded skill"
                 );
 
                 let (state, _) = load_state();
                 assert_eq!(state.len(), 1);
-                assert_eq!(state[0].sha256, content_hash(SKILL_MD.as_bytes()));
+                assert_eq!(state[0].sha256, content_hash(bb_skill().content.as_bytes()));
             },
         );
     }
@@ -910,8 +999,8 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents], false).unwrap();
-                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
                 assert!(
                     matches!(outcomes[0].action, Action::Unchanged),
                     "{:?}",
@@ -933,11 +1022,11 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents], false).unwrap();
-                let path = skill_file(dir.path(), Agent::Agents);
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
                 std::fs::write(&path, "# my own notes\n").unwrap();
 
-                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
                 assert!(matches!(outcomes[0].action, Action::SkippedModified));
                 assert_eq!(std::fs::read_to_string(&path).unwrap(), "# my own notes\n");
             },
@@ -955,18 +1044,18 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents], false).unwrap();
-                let path = skill_file(dir.path(), Agent::Agents);
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
                 std::fs::write(&path, "# my own notes\n").unwrap();
 
-                let outcomes = install(dir.path(), &[Agent::Agents], true).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], &[bb_skill()], true).unwrap();
                 assert!(matches!(
                     outcomes[0].action,
                     Action::Refreshed | Action::Installed
                 ));
-                assert_eq!(std::fs::read_to_string(&path).unwrap(), SKILL_MD);
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), bb_skill().content);
                 let (state, _) = load_state();
-                assert_eq!(state[0].sha256, content_hash(SKILL_MD.as_bytes()));
+                assert_eq!(state[0].sha256, content_hash(bb_skill().content.as_bytes()));
             },
         );
     }
@@ -984,7 +1073,7 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                let path = skill_file(dir.path(), Agent::Agents);
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 let old = "---\nname: bitbucket-cloud\n---\nold text\n";
                 std::fs::write(&path, old).unwrap();
@@ -994,16 +1083,17 @@ mod tests {
                     kind: "file".into(),
                     sha256: content_hash(old.as_bytes()),
                     version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
                 }])
                 .unwrap();
 
-                let outcomes = install(dir.path(), &[Agent::Agents], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
                 assert!(
                     matches!(outcomes[0].action, Action::Refreshed),
                     "{:?}",
                     outcomes[0].action
                 );
-                assert_eq!(std::fs::read_to_string(&path).unwrap(), SKILL_MD);
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), bb_skill().content);
             },
         );
     }
@@ -1019,14 +1109,20 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
-                let claude = dir.path().join(".claude/skills").join(SKILL_NAME);
+                install(
+                    dir.path(),
+                    &[Agent::Agents, Agent::Claude],
+                    &[bb_skill()],
+                    false,
+                )
+                .unwrap();
+                let claude = dir.path().join(".claude/skills").join(bb_skill().name);
                 // Either a symlink resolving to the .agents copy, or a real file with
                 // the same content when the platform refused a symlink.
                 let content = std::fs::read_to_string(claude.join("SKILL.md"))
                     .or_else(|_| std::fs::read_to_string(&claude))
                     .unwrap();
-                assert_eq!(content, SKILL_MD);
+                assert_eq!(content, bb_skill().content);
             },
         );
     }
@@ -1066,8 +1162,14 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
-                let claude_path = skill_file(dir.path(), Agent::Claude);
+                install(
+                    dir.path(),
+                    &[Agent::Agents, Agent::Claude],
+                    &[bb_skill()],
+                    false,
+                )
+                .unwrap();
+                let claude_path = skill_file(dir.path(), Agent::Claude, bb_skill());
                 let claude_dir = claude_path.parent().unwrap();
 
                 // Only the claude entry is tracked, and its target is gone —
@@ -1085,7 +1187,10 @@ mod tests {
                 assert_eq!(outcomes.len(), 1);
                 assert!(matches!(outcomes[0].action, Action::Refreshed));
 
-                assert_eq!(std::fs::read_to_string(&claude_path).unwrap(), SKILL_MD);
+                assert_eq!(
+                    std::fs::read_to_string(&claude_path).unwrap(),
+                    bb_skill().content
+                );
                 let (state, _) = load_state();
                 assert_eq!(
                     state[0].kind, "file",
@@ -1108,8 +1213,14 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
-                let claude_dir = skill_file(dir.path(), Agent::Claude)
+                install(
+                    dir.path(),
+                    &[Agent::Agents, Agent::Claude],
+                    &[bb_skill()],
+                    false,
+                )
+                .unwrap();
+                let claude_dir = skill_file(dir.path(), Agent::Claude, bb_skill())
                     .parent()
                     .unwrap()
                     .to_path_buf();
@@ -1130,7 +1241,7 @@ mod tests {
                 );
                 assert_eq!(
                     std::fs::read_to_string(claude_dir.join("SKILL.md")).unwrap(),
-                    SKILL_MD
+                    bb_skill().content
                 );
                 let (state, _) = load_state();
                 let claude_entry = state.iter().find(|e| e.agent == "claude").unwrap();
@@ -1153,8 +1264,14 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents, Agent::Claude], false).unwrap();
-                let claude_path = skill_file(dir.path(), Agent::Claude);
+                install(
+                    dir.path(),
+                    &[Agent::Agents, Agent::Claude],
+                    &[bb_skill()],
+                    false,
+                )
+                .unwrap();
+                let claude_path = skill_file(dir.path(), Agent::Claude, bb_skill());
                 let claude_dir = claude_path.parent().unwrap().to_path_buf();
 
                 let old = "---\nname: bitbucket-cloud\n---\nold text\n";
@@ -1179,7 +1296,10 @@ mod tests {
                         .is_symlink(),
                     "an intact link must not be replaced by a file just to refresh content"
                 );
-                assert_eq!(std::fs::read_to_string(&claude_path).unwrap(), SKILL_MD);
+                assert_eq!(
+                    std::fs::read_to_string(&claude_path).unwrap(),
+                    bb_skill().content
+                );
                 let (state, _) = load_state();
                 assert_eq!(state[0].kind, "symlink");
             },
@@ -1227,11 +1347,15 @@ mod tests {
                 // Set up the .agents copy the way a real project would have
                 // it, then hand-make the Claude symlink exactly as the old
                 // README instructed, *before* bb has ever recorded anything.
-                let agents_path = skill_file(dir.path(), Agent::Agents);
+                let agents_path = skill_file(dir.path(), Agent::Agents, bb_skill());
                 std::fs::create_dir_all(agents_path.parent().unwrap()).unwrap();
-                std::fs::write(&agents_path, SKILL_MD).unwrap();
+                std::fs::write(&agents_path, bb_skill().content).unwrap();
 
-                let claude_dir = dir.path().join(".claude").join("skills").join(SKILL_NAME);
+                let claude_dir = dir
+                    .path()
+                    .join(".claude")
+                    .join("skills")
+                    .join(bb_skill().name);
                 std::fs::create_dir_all(claude_dir.parent().unwrap()).unwrap();
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(
@@ -1239,23 +1363,23 @@ mod tests {
                         .join("..")
                         .join(".agents")
                         .join("skills")
-                        .join(SKILL_NAME),
+                        .join(bb_skill().name),
                     &claude_dir,
                 )
                 .unwrap();
 
-                let outcomes = install(dir.path(), &[Agent::Claude], false).unwrap();
+                let outcomes = install(dir.path(), &[Agent::Claude], &[bb_skill()], false).unwrap();
                 assert!(
                     matches!(outcomes[0].action, Action::Unchanged),
                     "sanity: content already matches, so install should not rewrite it"
                 );
 
-                let results = uninstall(None, false).unwrap();
+                let results = uninstall(None, &[bb_skill()], false).unwrap();
                 assert_eq!(results.len(), 1);
-                assert_eq!(results[0].1, RemovalOutcome::Removed);
+                assert_eq!(results[0].2, RemovalOutcome::Removed);
 
                 assert!(
-                    std::fs::read_to_string(&agents_path).unwrap() == SKILL_MD,
+                    std::fs::read_to_string(&agents_path).unwrap() == bb_skill().content,
                     "the .agents copy must survive uninstall of the claude link"
                 );
                 assert!(
@@ -1295,6 +1419,7 @@ mod tests {
                         kind: "file".into(),
                         sha256: "deadbeef".into(),
                         version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
                     },
                     Entry {
                         path: victim_file.clone(),
@@ -1302,15 +1427,16 @@ mod tests {
                         kind: "file".into(),
                         sha256: "deadbeef".into(),
                         version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
                     },
                 ])
                 .unwrap();
 
-                let results = uninstall(None, true).unwrap();
+                let results = uninstall(None, &[bb_skill()], true).unwrap();
                 assert_eq!(results.len(), 2);
                 assert!(results
                     .iter()
-                    .all(|(_, o)| *o == RemovalOutcome::RefusedUnsafePath));
+                    .all(|(_, _, o)| *o == RemovalOutcome::RefusedUnsafePath));
 
                 assert!(victim_dir.is_dir(), "unrelated directory must survive");
                 assert!(
@@ -1338,12 +1464,13 @@ mod tests {
                 ("HOME", None),
             ],
             || {
-                install(dir.path(), &[Agent::Agents], false).unwrap();
-                let results = uninstall(None, false).unwrap();
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                let results = uninstall(None, &[bb_skill()], false).unwrap();
                 assert_eq!(
                     results,
                     vec![(
-                        skill_file(dir.path(), Agent::Agents),
+                        skill_file(dir.path(), Agent::Agents, bb_skill()),
+                        bb_skill().name.to_string(),
                         RemovalOutcome::Removed
                     )]
                 );
@@ -1367,11 +1494,11 @@ mod tests {
             ],
             || {
                 let old = "---\nname: bitbucket-cloud\n---\nold text\n";
-                let stale_path = skill_file(stale_root.path(), Agent::Agents);
+                let stale_path = skill_file(stale_root.path(), Agent::Agents, bb_skill());
                 std::fs::create_dir_all(stale_path.parent().unwrap()).unwrap();
                 std::fs::write(&stale_path, old).unwrap();
 
-                let modified_path = skill_file(modified_root.path(), Agent::Agents);
+                let modified_path = skill_file(modified_root.path(), Agent::Agents, bb_skill());
                 std::fs::create_dir_all(modified_path.parent().unwrap()).unwrap();
                 let ours = "# our own version\n";
                 std::fs::write(&modified_path, ours).unwrap();
@@ -1383,6 +1510,7 @@ mod tests {
                         kind: "file".into(),
                         sha256: content_hash(old.as_bytes()),
                         version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
                     },
                     Entry {
                         path: modified_path.clone(),
@@ -1392,6 +1520,7 @@ mod tests {
                         // someone edited it after bb wrote it.
                         sha256: content_hash(old.as_bytes()),
                         version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
                     },
                 ])
                 .unwrap();
@@ -1401,11 +1530,145 @@ mod tests {
 
                 let stale_outcome = outcomes.iter().find(|o| o.path == stale_path).unwrap();
                 assert!(matches!(stale_outcome.action, Action::Refreshed));
-                assert_eq!(std::fs::read_to_string(&stale_path).unwrap(), SKILL_MD);
+                assert_eq!(
+                    std::fs::read_to_string(&stale_path).unwrap(),
+                    bb_skill().content
+                );
 
                 let modified_outcome = outcomes.iter().find(|o| o.path == modified_path).unwrap();
                 assert!(matches!(modified_outcome.action, Action::SkippedModified));
                 assert_eq!(std::fs::read_to_string(&modified_path).unwrap(), ours);
+            },
+        );
+    }
+
+    #[test]
+    fn both_skills_are_registered_and_well_formed() {
+        assert_eq!(SKILLS.len(), 2);
+        let names: Vec<&str> = SKILLS.iter().map(|s| s.name).collect();
+        assert!(names.contains(&"bitbucket-cloud"));
+        assert!(names.contains(&"bbc-daily-brief"));
+        for skill in SKILLS.iter() {
+            assert!(
+                skill.content.starts_with("---"),
+                "{} lacks frontmatter",
+                skill.name
+            );
+            assert!(
+                skill.content.contains(&format!("name: {}", skill.name)),
+                "{} frontmatter name does not match",
+                skill.name
+            );
+        }
+    }
+
+    #[test]
+    fn skill_by_name_resolves_known_and_rejects_unknown() {
+        assert_eq!(
+            skill_by_name("bbc-daily-brief").map(|s| s.name),
+            Some("bbc-daily-brief")
+        );
+        assert!(skill_by_name("nope").is_none());
+    }
+
+    #[test]
+    fn every_skill_path_shape_is_accepted_under_both_layouts() {
+        for skill in SKILLS.iter() {
+            for dir in [".agents", ".claude"] {
+                let path = PathBuf::from(format!("/p/{dir}/skills/{}/SKILL.md", skill.name));
+                assert!(is_shaped_like_a_skill_path(&path), "rejected {path:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_skill_name_is_still_refused() {
+        assert!(!is_shaped_like_a_skill_path(&PathBuf::from(
+            "/p/.agents/skills/other-skill/SKILL.md"
+        )));
+        assert!(!is_shaped_like_a_skill_path(&PathBuf::from(
+            "/p/.agents/bbc-daily-brief/SKILL.md"
+        )));
+        assert!(!is_shaped_like_a_skill_path(&PathBuf::from(
+            "/p/.vscode/skills/bbc-daily-brief/SKILL.md"
+        )));
+    }
+
+    #[test]
+    fn an_entry_without_a_skill_field_defaults_to_the_first_skill() {
+        let entry: Entry = serde_json::from_str(
+            r#"{"path":"/p/.agents/skills/bitbucket-cloud/SKILL.md","agent":"agents",
+                "kind":"file","sha256":"abc","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.skill, "bitbucket-cloud");
+    }
+
+    #[test]
+    fn state_of_compares_against_each_entrys_own_skill() {
+        // A daily-brief file holding daily-brief content is Current, even though
+        // it does not match the bitbucket-cloud hash.
+        let brief = skill_by_name("bbc-daily-brief").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(&path, brief.content).unwrap();
+        let entry = Entry {
+            path: path.clone(),
+            agent: "agents".into(),
+            kind: "file".into(),
+            sha256: content_hash(brief.content.as_bytes()),
+            version: "0.1.0".into(),
+            skill: "bbc-daily-brief".into(),
+        };
+        assert_eq!(
+            state_of(&entry, &content_hash(brief.content.as_bytes())),
+            State::Current
+        );
+    }
+
+    /// An entry naming a skill this binary does not know — a `skills.json`
+    /// written by a newer `bb`, or a hand-edited file — must never read as
+    /// `Stale`: that state promises "the binary has newer text, a refresh
+    /// will fix it", which is not true when there is no wanted content to
+    /// compare against at all. It must report `Modified` so nothing rewrites
+    /// or removes it.
+    #[test]
+    #[serial_test::serial]
+    fn status_reports_modified_for_an_unknown_skill_name_even_when_disk_matches_the_recorded_hash()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = dir.path().join(".agents/skills/some-future-skill/SKILL.md");
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let content = "---\nname: some-future-skill\n---\nfrom a newer bb\n";
+                std::fs::write(&path, content).unwrap();
+
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    // On-disk content hashes equal to the recorded sha256 —
+                    // exactly what would make a *known* skill read as Stale.
+                    sha256: content_hash(content.as_bytes()),
+                    version: "9.9.9".into(),
+                    skill: "some-future-skill".into(),
+                }])
+                .unwrap();
+
+                let (rows, warning) = status();
+                assert!(warning.is_none());
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    rows[0].state,
+                    State::Modified,
+                    "an unknown skill name must never be reported as Stale"
+                );
             },
         );
     }

@@ -65,7 +65,8 @@ pub struct ListArgs {
 /// The `+` must arrive url-encoded as `%2B`: a bare `+` in a query string decodes
 /// as a space and bitbucket then ignores the whole parameter, which is exactly the
 /// silent failure this feature exists to fix.
-const REVIEWER_FIELDS: &str = "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft";
+pub(crate) const REVIEWER_FIELDS: &str =
+    "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft";
 
 const ALL_STATES: &str = "OPEN,MERGED,DECLINED,SUPERSEDED";
 
@@ -121,7 +122,11 @@ fn reviewer_cell(reviewers: &[ReviewerState]) -> String {
 
 /// `all` and `draft` are bb-level conveniences, not bitbucket states. `draft` is a
 /// boolean on an OPEN pull request, so it asks for OPEN and filters afterwards.
-fn state_query(state: &str) -> String {
+///
+/// Shared with `pr_mine`, which has no `draft` boolean to filter on afterwards
+/// (a cross-workspace pull request result carries the same fields either way) —
+/// `pr mine` rejects `--state draft` before this is ever called with it.
+pub(crate) fn state_query(state: &str) -> String {
     if state.eq_ignore_ascii_case("all") {
         ALL_STATES.to_string()
     } else if state.eq_ignore_ascii_case("draft") {
@@ -225,7 +230,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     if want_build {
         let ids: Vec<u64> = rows.iter().map(|r| r.id).collect();
         let spinner = output::spinner("fetching build statuses");
-        let mut statuses = pr_build::statuses_for(ctx, &ids).await?;
+        let mut statuses = pr_build::statuses_for(&ctx.client, &ctx.slug, &ids).await?;
         spinner.finish_and_clear();
         for row in &mut rows {
             let found = statuses.remove(&row.id).unwrap_or_default();

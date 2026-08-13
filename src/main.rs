@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 use bb_cli::commands;
-use bb_cli::error::Result;
+use bb_cli::error::{BbError, Result};
 use bb_cli::output::Format;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -82,6 +82,9 @@ enum SkillCommand {
         /// Overwrite a skill file that was edited locally
         #[arg(long)]
         force: bool,
+        /// Only act on this skill; omit for all of them
+        #[arg(long)]
+        skill: Option<String>,
     },
     /// Show where the skill is installed and whether it is current
     Status,
@@ -93,6 +96,9 @@ enum SkillCommand {
         /// Remove a skill file that was edited locally
         #[arg(long)]
         force: bool,
+        /// Only act on this skill; omit for all of them
+        #[arg(long)]
+        skill: Option<String>,
     },
 }
 
@@ -237,6 +243,24 @@ enum PrCommand {
         /// Id of the thread's first comment
         comment: u64,
     },
+    /// List your pull requests across every repository you can see
+    Mine {
+        /// Which pull requests: author, reviewer or all
+        #[arg(long, value_enum, default_value = "all")]
+        role: commands::pr_mine::RoleArg,
+        /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED or ALL
+        #[arg(long, default_value = "OPEN")]
+        state: String,
+        /// Only scan this workspace
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Most recently updated repositories to scan per workspace
+        #[arg(long, default_value_t = 30)]
+        repo_limit: usize,
+        /// Show the build status column (one extra request per pull request)
+        #[arg(long)]
+        build: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -287,6 +311,26 @@ async fn run(cli: Cli) -> Result<()> {
             AuthCommand::Logout => commands::auth::logout(format),
         },
         Command::Pr { command } => {
+            if let PrCommand::Mine {
+                role,
+                state,
+                workspace,
+                repo_limit,
+                build,
+            } = command
+            {
+                return commands::pr_mine::run(
+                    format,
+                    commands::pr_mine::MineArgs {
+                        role,
+                        state,
+                        workspace,
+                        repo_limit,
+                        build,
+                    },
+                )
+                .await;
+            }
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
                 PrCommand::List {
@@ -396,6 +440,9 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Unresolve { id, comment } => {
                     commands::pr_comments::unresolve(&ctx, id, comment).await
                 }
+                PrCommand::Mine { .. } => {
+                    Err(BbError::Config("pr mine does not take a repository".into()))
+                }
             }
         }
         Command::Branch { command } => {
@@ -432,11 +479,16 @@ async fn run(cli: Cli) -> Result<()> {
                 agent,
                 global,
                 force,
-            } => commands::skill::install(format, agent.as_deref(), global, force),
-            SkillCommand::Status => commands::skill::status(format),
-            SkillCommand::Uninstall { global, force } => {
-                commands::skill::uninstall(format, global, force)
+                skill,
+            } => {
+                commands::skill::install(format, agent.as_deref(), global, force, skill.as_deref())
             }
+            SkillCommand::Status => commands::skill::status(format),
+            SkillCommand::Uninstall {
+                global,
+                force,
+                skill,
+            } => commands::skill::uninstall(format, global, force, skill.as_deref()),
         },
     }
 }
@@ -444,6 +496,21 @@ async fn run(cli: Cli) -> Result<()> {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    // `clap`'s `conflicts_with` cannot span a global, top-level arg and an id
+    // that only exists on one nested subcommand's own `Command` node, so this
+    // is enforced by hand instead, using clap's own error rendering — `pr
+    // mine` is not repository-scoped, and accepting `-R`/`--repo` there would
+    // silently discard it (see `PrCommand::Mine { .. }`'s residual match arm).
+    if cli.repo.is_some()
+        && matches!(&cli.command, Command::Pr { command } if matches!(command, PrCommand::Mine { .. }))
+    {
+        let mut cmd = Cli::command();
+        cmd.error(
+            clap::error::ErrorKind::ArgumentConflict,
+            "the argument '--repo' cannot be used with 'pr mine': it scans every repository, not one",
+        )
+        .exit();
+    }
     if let Err(err) = run(cli).await {
         eprintln!("error: {err}");
         std::process::exit(err.exit_code());
