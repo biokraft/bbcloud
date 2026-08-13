@@ -112,20 +112,30 @@ fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
     }
 }
 
-/// Pull requests I authored, across every workspace, in one paginated call.
-/// `GET /pullrequests/{uuid}` returns the same reduced object as the
-/// paginated per-repository endpoint — see `REVIEWER_FIELDS`'s doc comment —
-/// so this must ask for the same partial-response fields the reviewer half
-/// does, or a row's `draft`, `reviewers` and `my_review_state` all come back
-/// wrong instead of merely missing.
+/// Pull requests I authored, in one workspace, in one paginated call.
+///
+/// `GET /pullrequests/{uuid}` — the cross-workspace form of this endpoint —
+/// was removed by Atlassian on 2025-02-20 and now returns 404. The supported
+/// replacement is workspace-scoped: `GET /workspaces/{workspace}/pullrequests/{uuid}`,
+/// which takes the same `state` (repeatable) and pagination parameters, so the
+/// caller now loops this over every workspace instead of making one
+/// cross-workspace call.
+///
+/// The endpoint returns the same reduced object as the paginated
+/// per-repository endpoint — see `REVIEWER_FIELDS`'s doc comment — so this
+/// must ask for the same partial-response fields the reviewer half does, or a
+/// row's `draft`, `reviewers` and `my_review_state` all come back wrong
+/// instead of merely missing.
 async fn authored(
     client: &Client,
+    workspace: &str,
     my_uuid: &str,
     state: &str,
 ) -> Result<Vec<(String, PullRequest)>> {
     let prs: Vec<PullRequest> = client
         .paginate(&format!(
-            "/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+            "/workspaces/{}/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+            urlencoding::encode(workspace),
             urlencoding::encode(my_uuid),
             urlencoding::encode(&state_query(state))
         ))
@@ -177,9 +187,12 @@ async fn repositories(client: &Client, workspace: &str, limit: usize) -> Result<
         return Ok(Vec::new());
     }
     let pagelen = limit.min(100);
+    // `role=member` was removed by Atlassian on 2026-04-14 under CHANGE-2770
+    // and now returns 410; the unfiltered workspace listing is the supported
+    // replacement.
     let page: api::Page<Repository> = client
         .get_json(&format!(
-            "/repositories/{}?role=member&sort=-updated_on&pagelen={pagelen}",
+            "/repositories/{}?sort=-updated_on&pagelen={pagelen}",
             urlencoding::encode(workspace)
         ))
         .await?;
@@ -247,17 +260,25 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
     let mut found: Vec<(String, PullRequest, Origin)> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
 
-    if args.role != RoleArg::Reviewer {
-        found.extend(
-            authored(&client, &my_uuid, &args.state)
-                .await?
-                .into_iter()
-                .map(|(repo, pr)| (repo, pr, Origin::Authored)),
-        );
-    }
+    // The authored half moved to a workspace-scoped endpoint (see `authored`'s
+    // doc comment), so it now needs the workspace list too — for every role,
+    // not only the reviewer half — and `--workspace <slug>` must still
+    // short-circuit that lookup down to exactly one workspace.
+    for workspace in workspaces(&client, args.workspace.as_deref()).await? {
+        if args.role != RoleArg::Reviewer {
+            match authored(&client, &workspace, &my_uuid, &args.state).await {
+                Ok(prs) => found.extend(
+                    prs.into_iter()
+                        .map(|(repo, pr)| (repo, pr, Origin::Authored)),
+                ),
+                Err(crate::error::BbError::Api { status: 403, .. }) => {
+                    partial.push(workspace.clone());
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
-    if args.role != RoleArg::Author {
-        for workspace in workspaces(&client, args.workspace.as_deref()).await? {
+        if args.role != RoleArg::Author {
             // A 403 means the token has no scope on this workspace, which is
             // expected on a shared account and must not sink the whole scan —
             // the slug is reported instead, so a brief built from a partial
@@ -266,7 +287,9 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
             let repos = match repositories(&client, &workspace, args.repo_limit).await {
                 Ok(repos) => repos,
                 Err(crate::error::BbError::Api { status: 403, .. }) => {
-                    partial.push(workspace);
+                    if !partial.contains(&workspace) {
+                        partial.push(workspace);
+                    }
                     continue;
                 }
                 Err(e) => return Err(e),

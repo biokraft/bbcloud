@@ -88,12 +88,13 @@ It returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `rep
 (`workspace/repo`), `my_role` (`author` | `reviewer` | `both`), `my_review_state`, `updated_on`,
 and — with `--build` — `build_state` and `build[]`.
 
-`--role author` costs two requests: one to find who you are, one paginated call across every
-workspace. The reviewer half costs one request to find who you are, one to list workspaces
-(skipped when `--workspace` is given), one listing call per workspace, then one call per scanned
-repository — narrow it with `--workspace <slug>` or `--repo-limit <n>` when the user asks about
-one workspace. A workspace the token cannot read is listed in `partial` rather than failing the
-command; say so when reporting from a partial scan.
+`--role author` costs one request to find who you are, one to list workspaces (skipped when
+`--workspace` is given), then one paginated call per workspace. The reviewer half costs one
+request to find who you are, one to list workspaces (skipped when `--workspace` is given), one
+listing call per workspace, then one call per scanned repository — narrow it with
+`--workspace <slug>` or `--repo-limit <n>` when the user asks about one workspace. A workspace the
+token cannot read is listed in `partial` rather than failing the command; say so when reporting
+from a partial scan.
 
 For a ranked morning brief built on this command, the separate `bbc-daily-brief` skill carries the
 ranking rules. Use it only when the user explicitly asks for a brief.
