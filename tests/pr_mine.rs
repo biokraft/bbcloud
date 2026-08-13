@@ -454,6 +454,241 @@ async fn an_unreadable_workspace_is_reported_not_fatal() {
     assert_eq!(value["partial"], serde_json::json!(["locked"]));
 }
 
+/// Finding 1: the authored half must carry the same partial-response `fields`
+/// parameter the reviewer half already does, or `draft`, `reviewers` and
+/// `my_review_state` all come back wrong instead of merely absent. The
+/// fixture's `pr()` returns `reviewers`/`draft` regardless of the query
+/// string, so this must assert on the request itself.
+#[tokio::test]
+async fn authored_request_carries_the_reviewer_fields_parameter() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/%7Bme%7D"))
+        .and(query_param(
+            "fields",
+            "+values.reviewers,+values.participants,+values.draft",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args(["pr", "mine", "--role", "author", "--json"])
+        .assert()
+        .success();
+}
+
+/// Finding 2: the merge must land on "both" from provenance, not from
+/// trusting whichever half's pull-request object happened to be seen first.
+/// Here the authored half's fixture is deliberately given no reviewer, so a
+/// naive "keep the first row" dedupe would leave `my_role` as `"author"`.
+#[tokio::test]
+async fn a_pr_found_in_both_halves_is_marked_both_even_when_the_first_seen_row_lacks_a_reviewer() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/%7Bme%7D"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page(vec![pr(7, "acme/api", "{me}", None)])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
+            7,
+            "acme/api",
+            "{me}",
+            Some("{me}"),
+        )])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let rows = value["pull_requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "the same pr must appear once: {stdout}");
+    assert_eq!(rows[0]["my_role"], "both", "got {stdout}");
+}
+
+/// Finding 3: the repository listing must ask for a bounded page rather than
+/// draining every page before `.take(limit)` runs, and must never follow a
+/// second page.
+#[tokio::test]
+async fn repository_listing_request_carries_a_bounded_pagelen_and_fetches_one_page() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .and(query_param("pagelen", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "full_name": "acme/api" }],
+            "next": format!("{}/repositories/acme?page=2", server.uri()),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // A second page must never be fetched: page one is already everything
+    // `--repo-limit` wants, thanks to `sort=-updated_on`.
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/web"])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/api/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme",
+            "--repo-limit",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+/// Finding 3: `--repo-limit 0` must scan nothing, and must not even ask.
+#[tokio::test]
+async fn repo_limit_zero_scans_nothing_and_issues_no_listing_request() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme",
+            "--repo-limit",
+            "0",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(value["pull_requests"].as_array().unwrap().is_empty());
+}
+
+/// Finding 5: a pull request whose `repo` cannot be parsed as a `RepoSlug`
+/// (the link-less `"-"` case) must still carry `build_state`/`build` when
+/// `--build` is passed, so every row has the same JSON shape.
+#[tokio::test]
+async fn a_row_with_no_parseable_repo_still_carries_build_fields_when_build_is_requested() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    let mut linkless = pr(7, "acme/api", "{me}", None);
+    linkless["links"] = serde_json::json!({});
+    Mock::given(method("GET"))
+        .and(path("/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![linkless])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "author", "--build", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let rows = value["pull_requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["repo"], "-");
+    assert_eq!(rows[0]["build_state"], "none", "got {stdout}");
+    assert_eq!(
+        rows[0]["build"].as_array().unwrap().len(),
+        0,
+        "got {stdout}"
+    );
+}
+
+/// Finding 6: `pr mine --state draft` is rejected rather than silently asking
+/// bitbucket for an invalid `DRAFT` state and surfacing a raw api error.
+#[tokio::test]
+async fn state_draft_is_rejected_with_a_config_error() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--state", "draft", "--json"])
+        .assert()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("draft"), "got {stderr}");
+}
+
+/// Finding 7: `-R`/`--repo` is not accepted with `pr mine`, since it is not
+/// repository-scoped and the flag would otherwise be silently discarded.
+#[tokio::test]
+async fn repo_flag_is_rejected_with_pr_mine() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+
+    bb(&server.uri())
+        .args(["--repo", "acme/api", "pr", "mine", "--json"])
+        .assert()
+        .failure();
+}
+
+/// Finding 8: an account with no uuid must fail explicitly rather than
+/// degrading into an empty-uuid request where every row is mislabelled
+/// "reviewer".
+#[tokio::test]
+async fn an_account_with_no_uuid_is_a_config_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "display_name": "Me" })),
+        )
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args(["pr", "mine", "--json"])
+        .assert()
+        .code(1);
+}
+
 #[tokio::test]
 async fn build_is_fetched_once_for_a_deduped_row() {
     let server = MockServer::start().await;

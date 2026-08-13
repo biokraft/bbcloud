@@ -3,9 +3,9 @@ use crate::api::models::{
     BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState, Workspace,
 };
 use crate::api::Client;
-use crate::commands::pr_list::REVIEWER_FIELDS;
+use crate::commands::pr_list::{state_query, REVIEWER_FIELDS};
 use crate::credentials;
-use crate::error::Result;
+use crate::error::{BbError, Result};
 use crate::output::{self, Format};
 use crate::repo::RepoSlug;
 use crate::users::current_user;
@@ -64,6 +64,25 @@ struct MineReport {
     partial: Vec<String>,
 }
 
+/// Which half of the scan a `(repo, pull request)` pair came from, tracked
+/// alongside it so the dedupe merge in `run` can decide `my_role` from where
+/// the row was actually found rather than from re-deriving it off the pull
+/// request's own fields a second time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Authored,
+    Reviewing,
+}
+
+impl Origin {
+    fn as_role(self) -> &'static str {
+        match self {
+            Origin::Authored => "author",
+            Origin::Reviewing => "reviewer",
+        }
+    }
+}
+
 fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
     let reviewers = pr.reviewer_states();
     let my_review_state = reviewers
@@ -93,16 +112,12 @@ fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
     }
 }
 
-/// `all` is a bb-level convenience, matching `bb pr list`.
-fn state_query(state: &str) -> String {
-    if state.eq_ignore_ascii_case("all") {
-        "OPEN,MERGED,DECLINED,SUPERSEDED".to_string()
-    } else {
-        state.to_uppercase()
-    }
-}
-
 /// Pull requests I authored, across every workspace, in one paginated call.
+/// `GET /pullrequests/{uuid}` returns the same reduced object as the
+/// paginated per-repository endpoint — see `REVIEWER_FIELDS`'s doc comment —
+/// so this must ask for the same partial-response fields the reviewer half
+/// does, or a row's `draft`, `reviewers` and `my_review_state` all come back
+/// wrong instead of merely missing.
 async fn authored(
     client: &Client,
     my_uuid: &str,
@@ -110,7 +125,7 @@ async fn authored(
 ) -> Result<Vec<(String, PullRequest)>> {
     let prs: Vec<PullRequest> = client
         .paginate(&format!(
-            "/pullrequests/{}?state={}&pagelen=50",
+            "/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
             urlencoding::encode(my_uuid),
             urlencoding::encode(&state_query(state))
         ))
@@ -150,14 +165,26 @@ async fn workspaces(client: &Client, explicit: Option<&str>) -> Result<Vec<Strin
 /// The `--repo-limit` most recently updated repositories in one workspace.
 /// Sorting by recency and capping is the bound on the whole reviewer half: a
 /// repository nobody has touched in months cannot hold a review waiting on you.
+///
+/// `--repo-limit 0` means scan nothing, and does not even ask — a zero-sized
+/// request is a request purely to discard. Otherwise this fetches exactly one
+/// page, sized to the limit (capped at bitbucket's own page-size ceiling of
+/// 100): `sort=-updated_on` already puts the wanted repositories on page one,
+/// so following `next` here would only pay for rows that `.take(limit)` was
+/// always going to throw away.
 async fn repositories(client: &Client, workspace: &str, limit: usize) -> Result<Vec<String>> {
-    let found: Vec<Repository> = client
-        .paginate(&format!(
-            "/repositories/{}?role=member&sort=-updated_on&pagelen=50",
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let pagelen = limit.min(100);
+    let page: api::Page<Repository> = client
+        .get_json(&format!(
+            "/repositories/{}?role=member&sort=-updated_on&pagelen={pagelen}",
             urlencoding::encode(workspace)
         ))
         .await?;
-    Ok(found
+    Ok(page
+        .values
         .into_iter()
         .filter_map(|r| r.full_name)
         .take(limit)
@@ -193,18 +220,40 @@ async fn reviewing_in(
 }
 
 pub async fn run(format: Format, args: MineArgs) -> Result<()> {
+    // `draft` is a boolean on an individual pull request, not a state the api
+    // will filter on, and there is no per-row `draft` flag here to filter on
+    // afterwards the way `pr list --state draft` does — a cross-workspace row
+    // needs no such degradation, so this is rejected rather than silently
+    // asking bitbucket for an invalid `DRAFT` state.
+    if args.state.eq_ignore_ascii_case("draft") {
+        return Err(BbError::Config(
+            "pr mine does not support --state draft — use `bb pr list --state draft` \
+             inside the repository, or `--role author` and check the `draft` field"
+                .into(),
+        ));
+    }
+
     let creds = credentials::load()?;
     let client = Client::from_env(creds)?;
 
     let me = current_user(&client).await?;
-    let my_uuid = me.uuid.unwrap_or_default();
+    let my_uuid = me.uuid.ok_or_else(|| {
+        BbError::Config(
+            "your bitbucket account has no uuid — cannot identify your pull requests".into(),
+        )
+    })?;
 
     let spinner = output::spinner("scanning your pull requests");
-    let mut found: Vec<(String, PullRequest)> = Vec::new();
+    let mut found: Vec<(String, PullRequest, Origin)> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
 
     if args.role != RoleArg::Reviewer {
-        found.extend(authored(&client, &my_uuid, &args.state).await?);
+        found.extend(
+            authored(&client, &my_uuid, &args.state)
+                .await?
+                .into_iter()
+                .map(|(repo, pr)| (repo, pr, Origin::Authored)),
+        );
     }
 
     if args.role != RoleArg::Author {
@@ -230,18 +279,33 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
                 .into_iter()
                 .collect::<Result<Vec<_>>>()?;
             for batch in batches {
-                found.extend(batch);
+                found.extend(
+                    batch
+                        .into_iter()
+                        .map(|(repo, pr)| (repo, pr, Origin::Reviewing)),
+                );
             }
         }
     }
     spinner.finish_and_clear();
 
+    // Which half a pull request was found in is tracked explicitly rather than
+    // re-derived from `to_row`'s own reading of the pull request's fields —
+    // that way a pull request found by both halves ends as one row marked
+    // "both" regardless of whether the api's own reviewer/author fields agree,
+    // instead of silently depending on the first-seen half having the richer
+    // (or even correct) data.
     let mut rows: Vec<MineRow> = Vec::new();
-    for (repo, pr) in &found {
-        if rows.iter().any(|r| r.repo == *repo && r.id == pr.id) {
-            continue;
+    for (repo, pr, origin) in &found {
+        let this_role = origin.as_role();
+        match rows.iter_mut().find(|r| r.repo == *repo && r.id == pr.id) {
+            Some(existing) => {
+                if existing.my_role != this_role {
+                    existing.my_role = "both".to_string();
+                }
+            }
+            None => rows.push(to_row(repo, pr, &my_uuid)),
         }
-        rows.push(to_row(repo, pr, &my_uuid));
     }
 
     if args.build {
@@ -260,6 +324,15 @@ async fn attach_builds(client: &Client, rows: &mut [MineRow]) -> Result<()> {
     repos.dedup();
     for repo in repos {
         let Ok(slug) = RepoSlug::parse(&repo) else {
+            // A link-less row (`repo == "-"`) still owes every sibling row the
+            // same shape when `--build` was asked for — both fields carry
+            // `skip_serializing_if`, so leaving them `None` here would make
+            // this row's JSON shape differ from every other row's for no
+            // reason a consumer could name.
+            for row in rows.iter_mut().filter(|r| r.repo == repo) {
+                row.build_state = Some(BuildState::None);
+                row.build = Some(Vec::new());
+            }
             continue;
         };
         let ids: Vec<u64> = rows

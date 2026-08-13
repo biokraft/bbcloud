@@ -3,7 +3,7 @@
 use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
 use bb_cli::output::Format;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -496,6 +496,21 @@ async fn run(cli: Cli) -> Result<()> {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    // `clap`'s `conflicts_with` cannot span a global, top-level arg and an id
+    // that only exists on one nested subcommand's own `Command` node, so this
+    // is enforced by hand instead, using clap's own error rendering — `pr
+    // mine` is not repository-scoped, and accepting `-R`/`--repo` there would
+    // silently discard it (see `PrCommand::Mine { .. }`'s residual match arm).
+    if cli.repo.is_some()
+        && matches!(&cli.command, Command::Pr { command } if matches!(command, PrCommand::Mine { .. }))
+    {
+        let mut cmd = Cli::command();
+        cmd.error(
+            clap::error::ErrorKind::ArgumentConflict,
+            "the argument '--repo' cannot be used with 'pr mine': it scans every repository, not one",
+        )
+        .exit();
+    }
     if let Err(err) = run(cli).await {
         eprintln!("error: {err}");
         std::process::exit(err.exit_code());

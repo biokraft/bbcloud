@@ -36,8 +36,11 @@ Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`,
 `failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for the individual
 checks.
 
-`--role author` is two requests; the reviewer half costs one request per scanned repository.
-Narrow with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one workspace.
+`--role author` is two requests: one to find who you are, one paginated call across every
+workspace. The reviewer half is one request to find who you are, one to list workspaces (skipped
+when `--workspace` is given), one listing call per workspace, then one call per scanned
+repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one
+workspace.
 
 ## Phase 2 — enrich only the candidates
 
