@@ -616,6 +616,11 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
                 "refusing to touch {} — does not look like a skill path bb would have written",
                 entry.path.display()
             ));
+            // Bookkeeping only: this entry is never rewritten, but stamping the
+            // running version here still keeps `tracked_version_differs` cheap —
+            // without it, one unshaped entry would make every future invocation
+            // believe a refresh is due, forever.
+            entry.version = env!("CARGO_PKG_VERSION").to_string();
             kept.push(entry);
             continue;
         }
@@ -624,6 +629,8 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
         // reports an unknown skill name as `Modified`, since this binary has
         // no wanted content to compare it against or refresh it with.
         let Some(skill) = skill_by_name(&entry.skill) else {
+            // Same bookkeeping-only stamp as above, for the same reason.
+            entry.version = env!("CARGO_PKG_VERSION").to_string();
             kept.push(entry);
             continue;
         };
@@ -1848,6 +1855,101 @@ mod tests {
                 // The version moves forward even though the file was left alone,
                 // so the auto-refresh check does not re-fire on every command.
                 let (state, _) = load_state();
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_an_unshaped_path_without_creating_it() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // A file named `NOTES.md` instead of `SKILL.md` fails
+                // `is_shaped_like_a_skill_path`'s filename check, so this entry
+                // hits the shape-guard skip branch.
+                let path = root
+                    .path()
+                    .join(".agents")
+                    .join("skills")
+                    .join("bitbucket-cloud")
+                    .join("NOTES.md");
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(
+                    outcomes.len(),
+                    0,
+                    "the shape guard never produces an outcome"
+                );
+                assert!(!path.exists(), "pruning/stamping must not create the file");
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1, "the unshaped entry stays tracked");
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_an_unknown_skill_name_without_touching_the_file() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // The path's skill-name directory ("bitbucket-cloud") is one
+                // `is_shaped_like_a_skill_path` recognises, so the entry clears
+                // the shape guard; it is the `skill` field naming a skill this
+                // binary has never heard of that routes it into the
+                // unknown-skill-name skip branch.
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "whatever was here").unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "some-future-skill".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(
+                    outcomes.len(),
+                    0,
+                    "the unknown-skill skip never produces an outcome"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    "whatever was here",
+                    "the file must be left alone"
+                );
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1, "the unknown-skill entry stays tracked");
                 assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
                 assert!(!tracked_version_differs(&state));
             },
