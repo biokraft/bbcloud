@@ -1633,6 +1633,7 @@ mod tests {
     /// compare against at all. It must report `Modified` so nothing rewrites
     /// or removes it.
     #[test]
+    #[serial_test::serial]
     fn status_reports_modified_for_an_unknown_skill_name_even_when_disk_matches_the_recorded_hash()
     {
         let dir = tempfile::tempdir().unwrap();
