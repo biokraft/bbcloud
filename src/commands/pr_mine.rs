@@ -1,6 +1,7 @@
 use crate::api;
 use crate::api::models::{
-    BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState, Workspace,
+    BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState,
+    WorkspacePermission,
 };
 use crate::api::Client;
 use crate::commands::pr_list::{state_query, REVIEWER_FIELDS};
@@ -164,12 +165,23 @@ const MAX_IN_FLIGHT: usize = 8;
 
 /// The workspaces to scan. `--workspace` short-circuits the lookup entirely,
 /// which is the cheap path a narrowed brief uses.
+///
+/// `GET /workspaces` — the user-scoped listing — was removed by Atlassian
+/// under CHANGE-2770 and now returns 410. The supported replacement is
+/// `GET /user/permissions/workspaces`, which returns one permission object
+/// per workspace rather than the workspace itself, so the slug is read out
+/// of the nested `workspace` field and entries without one are dropped.
 async fn workspaces(client: &Client, explicit: Option<&str>) -> Result<Vec<String>> {
     if let Some(slug) = explicit {
         return Ok(vec![slug.to_string()]);
     }
-    let found: Vec<Workspace> = client.paginate("/workspaces?pagelen=50").await?;
-    Ok(found.into_iter().filter_map(|w| w.slug).collect())
+    let found: Vec<WorkspacePermission> = client
+        .paginate("/user/permissions/workspaces?pagelen=50")
+        .await?;
+    Ok(found
+        .into_iter()
+        .filter_map(|p| p.workspace.and_then(|w| w.slug))
+        .collect())
 }
 
 /// The `--repo-limit` most recently updated repositories in one workspace.

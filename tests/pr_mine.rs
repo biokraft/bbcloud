@@ -51,16 +51,37 @@ async fn mock_user(server: &MockServer) {
 }
 
 async fn mock_workspaces(server: &MockServer, slugs: &[&str]) {
+    mock_removed_workspaces_endpoint(server).await;
     Mock::given(method("GET"))
-        .and(path("/workspaces"))
+        .and(path("/user/permissions/workspaces"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(page(
                 slugs
                     .iter()
-                    .map(|s| serde_json::json!({ "slug": s }))
+                    .map(|s| {
+                        serde_json::json!({
+                            "type": "workspace_membership",
+                            "permission": "member",
+                            "workspace": { "slug": s, "name": s },
+                        })
+                    })
                     .collect(),
             )),
         )
+        .mount(server)
+        .await;
+}
+
+/// The removed user-scoped workspace listing. Mounted with `.expect(0)` in
+/// every test so a regression back to it fails the suite instead of
+/// silently degrading to a 410 in production.
+async fn mock_removed_workspaces_endpoint(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(serde_json::json!({
+            "error": { "message": "CHANGE-2770 - Functionality has been deprecated" }
+        })))
+        .expect(0)
         .mount(server)
         .await;
 }

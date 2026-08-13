@@ -179,11 +179,22 @@ pub struct PullRequest {
     pub updated_on: Option<String>,
 }
 
-/// A workspace as returned by `GET /workspaces`. Only the slug is used — it is
-/// what the repositories endpoint needs.
+/// A workspace, nested inside a `WorkspacePermission`. Only the slug is used —
+/// it is what the repositories endpoint needs.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Workspace {
     pub slug: Option<String>,
+}
+
+/// One entry from `GET /user/permissions/workspaces` — the supported
+/// replacement for the removed `GET /workspaces` listing (Atlassian
+/// deprecated the latter under CHANGE-2770). Each value describes the
+/// caller's permission on one workspace rather than the workspace itself, so
+/// the workspace is nested under `workspace` and, like every other field
+/// here, may be absent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspacePermission {
+    pub workspace: Option<Workspace>,
 }
 
 /// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
