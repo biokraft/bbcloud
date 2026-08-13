@@ -40,6 +40,8 @@ bb pr view 42 --unresolved --json          # only the threads that still need an
 bb pr diff 42                              # raw diff, plain text
 bb pr files 42 --json                      # changed paths
 bb pr commits 42 --json                    # commits, short hashes
+bb pr mine --json                          # my PRs across every repo: authored + I review
+bb pr mine --role reviewer --build --json  # only ones waiting on me, with build state
 ```
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
@@ -78,6 +80,21 @@ carry each individual check — read those to say *what* failed.
 status only per pull request. Combine it with a narrowing filter (`--author @me`,
 `--needs-my-review`, a target branch) rather than running it bare on a busy repository.
 Statuses are fetched only for pull requests that survive the other filters.
+
+## Across repositories
+
+`bb pr mine` is the only command that is not repository-scoped, and it works outside a checkout.
+It returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`
+(`workspace/repo`), `my_role` (`author` | `reviewer` | `both`), `my_review_state`, `updated_on`,
+and — with `--build` — `build_state` and `build[]`.
+
+`--role author` costs two requests. The reviewer half costs one request per scanned repository, so
+narrow it with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one workspace.
+A workspace the token cannot read is listed in `partial` rather than failing the command; say so
+when reporting from a partial scan.
+
+For a ranked morning brief built on this command, the separate `bb-daily-brief` skill carries the
+ranking rules. Use it only when the user explicitly asks for a brief.
 
 ## Answer a review
 
@@ -185,6 +202,7 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr build <id>` | `{build_state,statuses[{key,name,state,url}]}` |
+| `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on}],partial[]}` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |

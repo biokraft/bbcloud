@@ -566,3 +566,13 @@ fn the_brief_skill_states_it_is_invoked_only_on_request() {
     assert!(text.contains("bb pr mine"));
     assert!(text.contains("Never resolve a comment thread"));
 }
+
+#[test]
+fn the_main_skill_documents_the_cross_repository_query() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(text.contains("bb pr mine"));
+    assert!(text.contains("bb-daily-brief"));
+    assert!(text.contains("my_role"));
+}

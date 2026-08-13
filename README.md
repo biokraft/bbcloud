@@ -74,9 +74,9 @@ scopes are enough:
 | Scope | Needed for |
 |---|---|
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
-| `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits` |
+| `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
 | `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes` |
-| `read:repository:bitbucket` | `branch list`, and the default-reviewer lookup `pr create` does |
+| `read:repository:bitbucket` | `branch list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
 `read:repository:bitbucket`, so `pr create` needs both.
@@ -115,6 +115,7 @@ bb pr reviewers add 42 patrick            # tag a reviewer; comma-separate for s
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
+bb pr mine --role reviewer --build        # your PRs across every repo you can see
 bb branch list --user alice
 bb update                                 # check for a newer release and update
 ```
@@ -123,6 +124,12 @@ bb update                                 # check for a newer release and update
 approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
 `--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
 successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
+
+`bb pr mine` is the one command that is not repository-scoped: it scans every repository the
+token can read, not just the current checkout. It takes `--role author|reviewer|all`, `--state`,
+`--workspace <slug>` (narrow the scan to one workspace), `--repo-limit <n>` (most recently updated
+repositories to scan per workspace, default 30), and `--build`. A workspace the token cannot read
+is reported in a `partial` list rather than failing the whole command.
 
 `bb update` compares your version against the latest GitHub release. If Homebrew or cargo installed
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they
@@ -150,23 +157,27 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 
 ## Use it from an AI Agent
 
-This repository ships an [Agent Skill](.agents/skills/bitbucket-cloud/SKILL.md) — the portable
-`SKILL.md` format that Claude Code, Codex, Cursor and OpenCode all read. It teaches the agent to
-review pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
+This repository ships two [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
+Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to review
+pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
 comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
 agent to answer comment threads and report them, and to leave the resolve decision to you.
+`bb-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
+explicitly ask for one.
 
-Install it into a project:
+Install both into a project:
 
 ```bash
 bb skill install
 ```
 
-The skill text ships inside the `bb` binary, so this needs no network and no credentials. It
-detects which agents the project uses — `.claude/` means Claude Code, any of `.agents/`,
-`.cursor/`, `.opencode/` means the portable location — and defaults to `.agents/skills/` if it
-finds none. Pass `--agent agents|claude|all` to pick explicitly, or `--global` to install under
-your home directory instead, so every project picks it up.
+`bb skill install` writes both skills — `bitbucket-cloud` and `bb-daily-brief`. Pass
+`--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
+the `bb` binary, so this needs no network and no credentials. It detects which agents the project
+uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/` means the portable
+location — and defaults to `.agents/skills/` if it finds none. Pass `--agent agents|claude|all` to
+pick explicitly, or `--global` to install under your home directory instead, so every project
+picks it up.
 
 | Agent | Discovers skills in | Extra step |
 | --- | --- | --- |
