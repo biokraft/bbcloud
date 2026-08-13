@@ -1,14 +1,13 @@
 use crate::api;
 use crate::api::models::{
     BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState,
-    WorkspacePermission,
 };
 use crate::api::Client;
 use crate::commands::pr_list::{state_query, REVIEWER_FIELDS};
 use crate::credentials;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::repo::RepoSlug;
+use crate::repo::{self, RepoSlug};
 use crate::users::current_user;
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
@@ -163,25 +162,60 @@ fn repo_of(pr: &PullRequest) -> String {
 /// rate limit.
 const MAX_IN_FLIGHT: usize = 8;
 
-/// The workspaces to scan. `--workspace` short-circuits the lookup entirely,
-/// which is the cheap path a narrowed brief uses.
-///
-/// `GET /workspaces` — the user-scoped listing — was removed by Atlassian
-/// under CHANGE-2770 and now returns 410. The supported replacement is
-/// `GET /user/permissions/workspaces`, which returns one permission object
-/// per workspace rather than the workspace itself, so the slug is read out
-/// of the nested `workspace` field and entries without one are dropped.
-async fn workspaces(client: &Client, explicit: Option<&str>) -> Result<Vec<String>> {
-    if let Some(slug) = explicit {
-        return Ok(vec![slug.to_string()]);
+/// Splits a comma-separated `--workspace`/`BB_WORKSPACE` value into slugs:
+/// trims whitespace, drops empty segments, and deduplicates while preserving
+/// order.
+fn parse_workspace_list(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let slug = part.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|s: &String| s == slug) {
+            out.push(slug.to_string());
+        }
     }
-    let found: Vec<WorkspacePermission> = client
-        .paginate("/user/permissions/workspaces?pagelen=50")
-        .await?;
-    Ok(found
-        .into_iter()
-        .filter_map(|p| p.workspace.and_then(|w| w.slug))
-        .collect())
+    out
+}
+
+/// The workspaces to scan, in precedence order:
+///
+/// 1. `--workspace` (comma-separated).
+/// 2. `BB_WORKSPACE` (same syntax).
+/// 3. The workspace of the git remote in the current checkout, resolved the
+///    same way every other command resolves a repository — but tried rather
+///    than required, since `pr mine` must work outside a checkout as long as
+///    one of the first two sources is given.
+/// 4. Neither present and no checkout: a config error naming both `--workspace`
+///    and `BB_WORKSPACE`, rather than silently scanning nothing.
+///
+/// There is no api call left that discovers a user's workspaces —
+/// `GET /workspaces`, `GET /user/permissions/workspaces` and
+/// `GET /user/permissions/repositories` were all removed by Atlassian under
+/// CHANGE-2770 and now return 410 — so this resolves entirely from local
+/// input.
+fn resolve_workspaces(explicit: Option<&str>) -> Result<Vec<String>> {
+    if let Some(raw) = explicit {
+        let slugs = parse_workspace_list(raw);
+        if !slugs.is_empty() {
+            return Ok(slugs);
+        }
+    }
+    if let Ok(raw) = std::env::var("BB_WORKSPACE") {
+        let slugs = parse_workspace_list(&raw);
+        if !slugs.is_empty() {
+            return Ok(slugs);
+        }
+    }
+    if let Ok(slug) = repo::resolve(None) {
+        return Ok(vec![slug.workspace]);
+    }
+    Err(BbError::Config(
+        "no workspace to scan — pass --workspace <slug>[,<slug>...], set BB_WORKSPACE, \
+         or run inside a bitbucket checkout"
+            .into(),
+    ))
 }
 
 /// The `--repo-limit` most recently updated repositories in one workspace.
@@ -258,6 +292,8 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
         ));
     }
 
+    let workspaces = resolve_workspaces(args.workspace.as_deref())?;
+
     let creds = credentials::load()?;
     let client = Client::from_env(creds)?;
 
@@ -274,9 +310,9 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
 
     // The authored half moved to a workspace-scoped endpoint (see `authored`'s
     // doc comment), so it now needs the workspace list too — for every role,
-    // not only the reviewer half — and `--workspace <slug>` must still
-    // short-circuit that lookup down to exactly one workspace.
-    for workspace in workspaces(&client, args.workspace.as_deref()).await? {
+    // not only the reviewer half. `workspaces` is resolved once above, before
+    // any request, per `resolve_workspaces`'s precedence order.
+    for workspace in workspaces {
         if args.role != RoleArg::Reviewer {
             match authored(&client, &workspace, &my_uuid, &args.state).await {
                 Ok(prs) => found.extend(

@@ -125,11 +125,18 @@ approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DR
 `--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
 successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
 
-`bb pr mine` is the one command that is not repository-scoped: it scans every repository the
-token can read, not just the current checkout. It takes `--role author|reviewer|all`, `--state`,
-`--workspace <slug>` (narrow the scan to one workspace), `--repo-limit <n>` (most recently updated
-repositories to scan per workspace, default 30), and `--build`. A workspace the token cannot read
-is reported in a `partial` list rather than failing the whole command.
+`bb pr mine` is the one command that is not repository-scoped. There is no Bitbucket api left that
+lists which workspaces you belong to, so the workspace(s) to scan are resolved in this order:
+`--workspace <slug>[,<slug>...]` (comma-separated, highest precedence), then the `BB_WORKSPACE`
+env var (same syntax), then the workspace of the git remote in the current checkout. If none of
+those apply — no flag, no env var, and not run inside a Bitbucket checkout — the command errors
+instead of silently scanning nothing.
+
+It also takes `--role author|reviewer|all`, `--state`, `--repo-limit <n>` (the most recently
+updated repositories to scan per workspace, default 30 — a recency window, not the whole
+workspace: a workspace with hundreds of repositories is only ever sampled, not fully covered), and
+`--build`. A workspace the token cannot read is reported in a `partial` list rather than failing
+the whole command.
 
 `bb update` compares your version against the latest GitHub release. If Homebrew or cargo installed
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they
@@ -205,6 +212,7 @@ Each agent loads the skill by itself when a task touches Bitbucket. To force it,
 | `--json` | machine-readable output, on every command |
 | `-R, --repo` | act on `workspace/repo` instead of the current git remote |
 | `BB_REPO` | default repository |
+| `BB_WORKSPACE` | workspace(s) `bb pr mine` scans, comma-separated, when `--workspace` is not given |
 | `BB_EMAIL`, `BB_TOKEN` | credentials for CI and other non-interactive use |
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |

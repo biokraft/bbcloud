@@ -179,24 +179,6 @@ pub struct PullRequest {
     pub updated_on: Option<String>,
 }
 
-/// A workspace, nested inside a `WorkspacePermission`. Only the slug is used —
-/// it is what the repositories endpoint needs.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Workspace {
-    pub slug: Option<String>,
-}
-
-/// One entry from `GET /user/permissions/workspaces` — the supported
-/// replacement for the removed `GET /workspaces` listing (Atlassian
-/// deprecated the latter under CHANGE-2770). Each value describes the
-/// caller's permission on one workspace rather than the workspace itself, so
-/// the workspace is nested under `workspace` and, like every other field
-/// here, may be absent.
-#[derive(Debug, Clone, Deserialize)]
-pub struct WorkspacePermission {
-    pub workspace: Option<Workspace>,
-}
-
 /// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
 /// `"workspace/repo"`, which `RepoSlug::parse` accepts directly.
 #[derive(Debug, Clone, Deserialize)]
@@ -697,9 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_and_repository_deserialise() {
-        let ws: Workspace = serde_json::from_str(r#"{"slug":"acme"}"#).unwrap();
-        assert_eq!(ws.slug.as_deref(), Some("acme"));
+    fn repository_deserialises() {
         let repo: Repository = serde_json::from_str(r#"{"full_name":"acme/api"}"#).unwrap();
         assert_eq!(repo.full_name.as_deref(), Some("acme/api"));
     }
