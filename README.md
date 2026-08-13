@@ -110,6 +110,7 @@ cd any-bitbucket-repo && bb pr list
 bb pr list                                # open PRs, with state and per-reviewer decisions
 bb pr list --needs-my-review              # only PRs waiting on your review
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
+bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 patrick            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
@@ -119,7 +120,9 @@ bb update                                 # check for a newer release and update
 ```
 
 `bb pr list` also takes `--reviewer <name>`, `--author <name|@me>`, `--review-state
-approved|changes-requested|pending`, and `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`.
+approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
+`--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
+successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
 
 `bb update` compares your version against the latest GitHub release. If Homebrew or cargo installed
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they

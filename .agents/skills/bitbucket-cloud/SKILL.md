@@ -33,6 +33,8 @@ bb pr list --needs-my-review --json        # I'm a reviewer and haven't approved
 bb pr list --reviewer patrick --json       # PRs that person is tagged on
 bb pr list --author @me --json             # PRs I opened; @me resolves the authenticated account
 bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
+bb pr list --build --json                  # add BUILD column: worst-wins rollup per PR
+bb pr list --build-status failed --json     # only PRs whose build rolls up to FAILED
 bb pr view 42 --json                       # the pull request, plus all comments
 bb pr view 42 --unresolved --json          # only the threads that still need an answer
 bb pr diff 42                              # raw diff, plain text
@@ -54,6 +56,26 @@ Find the pull request for the current branch:
 ```bash
 bb pr list --json | jq --arg b "$(git branch --show-current)" '.[] | select(.source == $b)'
 ```
+
+## Build status
+
+```bash
+bb pr build 42 --json           # every check on one PR: key, name, state, url
+bb pr list --build --json       # a BUILD column across a list
+```
+
+States: `successful | failed | inprogress | stopped | none`. `none` means no check ever
+reported — not that a check passed.
+
+`build_state` is a worst-wins rollup over every check on the pull request
+(`failed` > `stopped` > `inprogress` > `successful` > `none`), so asking "did anything
+fail" is one field read. `build[]` on a list row, and `statuses[]` on `bb pr build`,
+carry each individual check — read those to say *what* failed.
+
+`--build` costs one extra request per pull request, because Bitbucket exposes build
+status only per pull request. Combine it with a narrowing filter (`--author @me`,
+`--needs-my-review`, a target branch) rather than running it bare on a busy repository.
+Statuses are fetched only for pull requests that survive the other filters.
 
 ## Answer a review
 
@@ -155,11 +177,12 @@ Both filters match a substring, and ignore case.
 
 | Command | Result |
 |---|---|
-| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]` |
+| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
 | `bb pr view <id> [--unresolved] [--comments-only]` | `{pull_request,general[],inline[]}` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
+| `bb pr build <id>` | `{build_state,statuses[{key,name,state,url}]}` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
