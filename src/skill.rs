@@ -39,6 +39,16 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// True when any tracked entry was written by a different build than the one
+/// running now. This is the whole auto-refresh trigger: a string compare over a
+/// handful of entries, so the common case — everything current — costs nothing
+/// beyond reading the state file.
+pub fn tracked_version_differs(entries: &[Entry]) -> bool {
+    entries
+        .iter()
+        .any(|e| e.version != env!("CARGO_PKG_VERSION"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     /// `.agents/skills/` — read by Codex, Cursor and OpenCode.
@@ -131,6 +141,9 @@ pub enum Action {
     Refreshed,
     Unchanged,
     SkippedModified,
+    /// The entry named a path whose directory tree no longer exists, so it was
+    /// dropped from the state file rather than recreated.
+    Pruned,
 }
 
 impl Action {
@@ -140,6 +153,7 @@ impl Action {
             Self::Refreshed => "refreshed",
             Self::Unchanged => "unchanged",
             Self::SkippedModified => "skipped_modified",
+            Self::Pruned => "pruned",
         }
     }
 }
@@ -589,18 +603,20 @@ fn restore_claude_link(entry_path: &Path, skill: &Skill) -> Result<String> {
 /// left byte-identical and reported as `SkippedModified`, and `Current` is
 /// reported as `Unchanged` without touching anything.
 pub fn refresh_tracked() -> Result<Vec<Outcome>> {
-    let (mut state, warning) = load_state();
+    let (state, warning) = load_state();
     if let Some(warning) = warning {
         crate::output::warn(&warning);
     }
     let mut outcomes = Vec::new();
+    let mut kept: Vec<Entry> = Vec::new();
 
-    for entry in &mut state {
+    for mut entry in state {
         if !is_shaped_like_a_skill_path(&entry.path) {
             crate::output::warn(&format!(
                 "refusing to touch {} — does not look like a skill path bb would have written",
                 entry.path.display()
             ));
+            kept.push(entry);
             continue;
         }
         // A hand-edited or badly-merged state file could name a skill this
@@ -608,17 +624,43 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
         // reports an unknown skill name as `Modified`, since this binary has
         // no wanted content to compare it against or refresh it with.
         let Some(skill) = skill_by_name(&entry.skill) else {
+            kept.push(entry);
             continue;
         };
+
+        // An entry whose whole directory tree is gone is not a skill waiting to
+        // be restored — it is residue from a temp directory or a deleted
+        // checkout. Recreating it would materialise a file inside a path nobody
+        // asked for, so drop the entry instead. A missing file whose directory
+        // still exists is the opposite case and is restored below. The check
+        // looks two levels up (past the skill-name folder itself, which
+        // `write_file`/`restore_claude_link` happily recreate) so deleting just
+        // the one skill's own folder still restores it — only a vanished parent
+        // tree above that (the agent's whole `skills/` directory, or higher)
+        // counts as residue.
+        if entry
+            .path
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|ancestor| !ancestor.exists())
+        {
+            outcomes.push(Outcome {
+                path: entry.path.clone(),
+                agent: entry.agent.clone(),
+                skill: entry.skill.clone(),
+                action: Action::Pruned,
+            });
+            continue;
+        }
+
         let wanted = content_hash(skill.content.as_bytes());
-        let action = match state_of(entry, &wanted) {
+        let action = match state_of(&entry, &wanted) {
             // The link is intact — writing to `entry.path` follows it straight
             // into the `.agents` file it points at, refreshing the shared
             // content without disturbing the link itself.
             State::Stale => {
                 write_file(&entry.path, skill.content)?;
                 entry.sha256 = wanted.clone();
-                entry.version = env!("CARGO_PKG_VERSION").to_string();
                 Action::Refreshed
             }
             // The link (or file) itself is gone. A plain `write_file` here
@@ -633,12 +675,16 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
                     "file".to_string()
                 };
                 entry.sha256 = wanted.clone();
-                entry.version = env!("CARGO_PKG_VERSION").to_string();
                 Action::Refreshed
             }
             State::Modified => Action::SkippedModified,
             State::Current => Action::Unchanged,
         };
+
+        // Every entry we looked at records this build, including one we skipped.
+        // Without this, a single locally edited file would leave the state file
+        // permanently "behind" and re-trigger the auto-refresh on every command.
+        entry.version = env!("CARGO_PKG_VERSION").to_string();
 
         outcomes.push(Outcome {
             path: entry.path.clone(),
@@ -646,9 +692,10 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
             skill: entry.skill.clone(),
             action,
         });
+        kept.push(entry);
     }
 
-    save_state(&state)?;
+    save_state(&kept)?;
     Ok(outcomes)
 }
 
@@ -1669,6 +1716,140 @@ mod tests {
                     State::Modified,
                     "an unknown skill name must never be reported as Stale"
                 );
+            },
+        );
+    }
+
+    #[test]
+    fn tracked_version_differs_only_when_an_entry_is_behind() {
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        assert!(
+            !tracked_version_differs(&[]),
+            "nothing tracked means nothing to do"
+        );
+
+        let up_to_date = Entry {
+            path: PathBuf::from("/p/.agents/skills/bitbucket-cloud/SKILL.md"),
+            agent: "agents".into(),
+            kind: "file".into(),
+            sha256: "abc".into(),
+            version: current.clone(),
+            skill: "bitbucket-cloud".into(),
+        };
+        assert!(!tracked_version_differs(std::slice::from_ref(&up_to_date)));
+
+        let mut behind = up_to_date.clone();
+        behind.version = "0.0.1".into();
+        assert!(tracked_version_differs(&[up_to_date, behind]));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_prunes_an_entry_whose_directory_tree_is_gone() {
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // A path under a directory that does not exist — the shape a
+                // temp-directory install leaves behind once the temp dir is gone.
+                let gone =
+                    PathBuf::from("/nonexistent-root-xyz/.agents/skills/bitbucket-cloud/SKILL.md");
+                save_state(&[Entry {
+                    path: gone.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes.len(), 1);
+                assert_eq!(outcomes[0].action, Action::Pruned);
+                assert!(!gone.exists(), "pruning must not create the file");
+
+                let (state, _) = load_state();
+                assert!(
+                    state.is_empty(),
+                    "the pruned entry must leave the state file"
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_still_restores_a_missing_file_whose_directory_exists() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                // Directory exists, file does not: someone deleted a skill and
+                // wants it back. This must not be confused with a pruned tree.
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(bb_skill().content.as_bytes()),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes[0].action, Action::Refreshed);
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), bb_skill().content);
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_a_skipped_entry_without_touching_the_file() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "locally edited").unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(b"something else"),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked().unwrap();
+                assert_eq!(outcomes[0].action, Action::SkippedModified);
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    "locally edited",
+                    "a local edit must survive"
+                );
+
+                // The version moves forward even though the file was left alone,
+                // so the auto-refresh check does not re-fire on every command.
+                let (state, _) = load_state();
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
             },
         );
     }

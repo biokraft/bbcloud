@@ -106,6 +106,9 @@ pub fn install(
                 match row.action.as_str() {
                     "unchanged" => output::info(&line),
                     "skipped_modified" => output::warn(&line),
+                    "pruned" => {
+                        output::info(&format!("pruned {} (directory no longer exists)", row.path))
+                    }
                     _ => output::success(&line),
                 }
             }
