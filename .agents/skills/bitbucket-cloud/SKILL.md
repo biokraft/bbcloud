@@ -83,17 +83,29 @@ Statuses are fetched only for pull requests that survive the other filters.
 
 ## Across repositories
 
-`bb pr mine` is the only command that is not repository-scoped, and it works outside a checkout.
+`bb pr mine` is the only command that is not repository-scoped. There is no api call left that
+discovers which workspaces you belong to, so the workspace(s) to scan are resolved in this order:
+`--workspace <slug>[,<slug>...]` (comma-separated, highest precedence), then the `BB_WORKSPACE`
+env var (same syntax), then the workspace of the git remote in the current checkout — which is
+what makes a bare `bb pr mine` work inside a checkout. If none of the three apply, the command
+errors rather than silently scanning nothing.
+
 It returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`
 (`workspace/repo`), `my_role` (`author` | `reviewer` | `both`), `my_review_state`, `updated_on`,
 and — with `--build` — `build_state` and `build[]`.
 
-`--role author` costs two requests: one to find who you are, one paginated call across every
-workspace. The reviewer half costs one request to find who you are, one to list workspaces
-(skipped when `--workspace` is given), one listing call per workspace, then one call per scanned
-repository — narrow it with `--workspace <slug>` or `--repo-limit <n>` when the user asks about
-one workspace. A workspace the token cannot read is listed in `partial` rather than failing the
-command; say so when reporting from a partial scan.
+`--role author` costs one request to find who you are, then one paginated call per workspace. The
+reviewer half costs one request to find who you are, one repository-listing call per workspace,
+then one call per scanned repository — for `--role all` both halves run, so it is one call to find
+who you are plus, per workspace, one authored call and one listing call followed by one call per
+scanned repository. A workspace the token cannot read is listed in `partial` rather than failing
+the command; say so when reporting from a partial scan.
+
+**The reviewer-side scan is a recency window, not full workspace coverage.** It covers only the
+`--repo-limit` most recently updated repositories per workspace (default 30) — on a workspace with
+hundreds of repositories, that is a small slice by design, not an oversight. Never report a
+`pr mine` brief as a complete picture of a workspace. If the user needs certainty about a specific
+repository, use `bb pr list -R <repo>` for that repository instead.
 
 For a ranked morning brief built on this command, the separate `bbc-daily-brief` skill carries the
 ranking rules. Use it only when the user explicitly asks for a brief.

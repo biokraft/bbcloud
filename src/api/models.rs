@@ -179,13 +179,6 @@ pub struct PullRequest {
     pub updated_on: Option<String>,
 }
 
-/// A workspace as returned by `GET /workspaces`. Only the slug is used — it is
-/// what the repositories endpoint needs.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Workspace {
-    pub slug: Option<String>,
-}
-
 /// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
 /// `"workspace/repo"`, which `RepoSlug::parse` accepts directly.
 #[derive(Debug, Clone, Deserialize)]
@@ -686,9 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_and_repository_deserialise() {
-        let ws: Workspace = serde_json::from_str(r#"{"slug":"acme"}"#).unwrap();
-        assert_eq!(ws.slug.as_deref(), Some("acme"));
+    fn repository_deserialises() {
         let repo: Repository = serde_json::from_str(r#"{"full_name":"acme/api"}"#).unwrap();
         assert_eq!(repo.full_name.as_deref(), Some("acme/api"));
     }

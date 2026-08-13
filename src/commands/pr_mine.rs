@@ -1,13 +1,13 @@
 use crate::api;
 use crate::api::models::{
-    BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState, Workspace,
+    BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState,
 };
 use crate::api::Client;
 use crate::commands::pr_list::{state_query, REVIEWER_FIELDS};
 use crate::credentials;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::repo::RepoSlug;
+use crate::repo::{self, RepoSlug};
 use crate::users::current_user;
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
@@ -112,20 +112,30 @@ fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
     }
 }
 
-/// Pull requests I authored, across every workspace, in one paginated call.
-/// `GET /pullrequests/{uuid}` returns the same reduced object as the
-/// paginated per-repository endpoint — see `REVIEWER_FIELDS`'s doc comment —
-/// so this must ask for the same partial-response fields the reviewer half
-/// does, or a row's `draft`, `reviewers` and `my_review_state` all come back
-/// wrong instead of merely missing.
+/// Pull requests I authored, in one workspace, in one paginated call.
+///
+/// `GET /pullrequests/{uuid}` — the cross-workspace form of this endpoint —
+/// was removed by Atlassian on 2025-02-20 and now returns 404. The supported
+/// replacement is workspace-scoped: `GET /workspaces/{workspace}/pullrequests/{uuid}`,
+/// which takes the same `state` (repeatable) and pagination parameters, so the
+/// caller now loops this over every workspace instead of making one
+/// cross-workspace call.
+///
+/// The endpoint returns the same reduced object as the paginated
+/// per-repository endpoint — see `REVIEWER_FIELDS`'s doc comment — so this
+/// must ask for the same partial-response fields the reviewer half does, or a
+/// row's `draft`, `reviewers` and `my_review_state` all come back wrong
+/// instead of merely missing.
 async fn authored(
     client: &Client,
+    workspace: &str,
     my_uuid: &str,
     state: &str,
 ) -> Result<Vec<(String, PullRequest)>> {
     let prs: Vec<PullRequest> = client
         .paginate(&format!(
-            "/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+            "/workspaces/{}/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+            urlencoding::encode(workspace),
             urlencoding::encode(my_uuid),
             urlencoding::encode(&state_query(state))
         ))
@@ -152,14 +162,60 @@ fn repo_of(pr: &PullRequest) -> String {
 /// rate limit.
 const MAX_IN_FLIGHT: usize = 8;
 
-/// The workspaces to scan. `--workspace` short-circuits the lookup entirely,
-/// which is the cheap path a narrowed brief uses.
-async fn workspaces(client: &Client, explicit: Option<&str>) -> Result<Vec<String>> {
-    if let Some(slug) = explicit {
-        return Ok(vec![slug.to_string()]);
+/// Splits a comma-separated `--workspace`/`BB_WORKSPACE` value into slugs:
+/// trims whitespace, drops empty segments, and deduplicates while preserving
+/// order.
+fn parse_workspace_list(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let slug = part.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|s: &String| s == slug) {
+            out.push(slug.to_string());
+        }
     }
-    let found: Vec<Workspace> = client.paginate("/workspaces?pagelen=50").await?;
-    Ok(found.into_iter().filter_map(|w| w.slug).collect())
+    out
+}
+
+/// The workspaces to scan, in precedence order:
+///
+/// 1. `--workspace` (comma-separated).
+/// 2. `BB_WORKSPACE` (same syntax).
+/// 3. The workspace of the git remote in the current checkout, resolved the
+///    same way every other command resolves a repository — but tried rather
+///    than required, since `pr mine` must work outside a checkout as long as
+///    one of the first two sources is given.
+/// 4. Neither present and no checkout: a config error naming both `--workspace`
+///    and `BB_WORKSPACE`, rather than silently scanning nothing.
+///
+/// There is no api call left that discovers a user's workspaces —
+/// `GET /workspaces`, `GET /user/permissions/workspaces` and
+/// `GET /user/permissions/repositories` were all removed by Atlassian under
+/// CHANGE-2770 and now return 410 — so this resolves entirely from local
+/// input.
+fn resolve_workspaces(explicit: Option<&str>) -> Result<Vec<String>> {
+    if let Some(raw) = explicit {
+        let slugs = parse_workspace_list(raw);
+        if !slugs.is_empty() {
+            return Ok(slugs);
+        }
+    }
+    if let Ok(raw) = std::env::var("BB_WORKSPACE") {
+        let slugs = parse_workspace_list(&raw);
+        if !slugs.is_empty() {
+            return Ok(slugs);
+        }
+    }
+    if let Ok(slug) = repo::resolve(None) {
+        return Ok(vec![slug.workspace]);
+    }
+    Err(BbError::Config(
+        "no workspace to scan — pass --workspace <slug>[,<slug>...], set BB_WORKSPACE, \
+         or run inside a bitbucket checkout"
+            .into(),
+    ))
 }
 
 /// The `--repo-limit` most recently updated repositories in one workspace.
@@ -177,9 +233,12 @@ async fn repositories(client: &Client, workspace: &str, limit: usize) -> Result<
         return Ok(Vec::new());
     }
     let pagelen = limit.min(100);
+    // `role=member` was removed by Atlassian on 2026-04-14 under CHANGE-2770
+    // and now returns 410; the unfiltered workspace listing is the supported
+    // replacement.
     let page: api::Page<Repository> = client
         .get_json(&format!(
-            "/repositories/{}?role=member&sort=-updated_on&pagelen={pagelen}",
+            "/repositories/{}?sort=-updated_on&pagelen={pagelen}",
             urlencoding::encode(workspace)
         ))
         .await?;
@@ -233,6 +292,8 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
         ));
     }
 
+    let workspaces = resolve_workspaces(args.workspace.as_deref())?;
+
     let creds = credentials::load()?;
     let client = Client::from_env(creds)?;
 
@@ -247,17 +308,25 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
     let mut found: Vec<(String, PullRequest, Origin)> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
 
-    if args.role != RoleArg::Reviewer {
-        found.extend(
-            authored(&client, &my_uuid, &args.state)
-                .await?
-                .into_iter()
-                .map(|(repo, pr)| (repo, pr, Origin::Authored)),
-        );
-    }
+    // The authored half moved to a workspace-scoped endpoint (see `authored`'s
+    // doc comment), so it now needs the workspace list too — for every role,
+    // not only the reviewer half. `workspaces` is resolved once above, before
+    // any request, per `resolve_workspaces`'s precedence order.
+    for workspace in workspaces {
+        if args.role != RoleArg::Reviewer {
+            match authored(&client, &workspace, &my_uuid, &args.state).await {
+                Ok(prs) => found.extend(
+                    prs.into_iter()
+                        .map(|(repo, pr)| (repo, pr, Origin::Authored)),
+                ),
+                Err(crate::error::BbError::Api { status: 403, .. }) => {
+                    partial.push(workspace.clone());
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
-    if args.role != RoleArg::Author {
-        for workspace in workspaces(&client, args.workspace.as_deref()).await? {
+        if args.role != RoleArg::Author {
             // A 403 means the token has no scope on this workspace, which is
             // expected on a shared account and must not sink the whole scan —
             // the slug is reported instead, so a brief built from a partial
@@ -266,7 +335,9 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
             let repos = match repositories(&client, &workspace, args.repo_limit).await {
                 Ok(repos) => repos,
                 Err(crate::error::BbError::Api { status: 403, .. }) => {
-                    partial.push(workspace);
+                    if !partial.contains(&workspace) {
+                        partial.push(workspace);
+                    }
                     continue;
                 }
                 Err(e) => return Err(e),

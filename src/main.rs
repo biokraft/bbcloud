@@ -251,7 +251,8 @@ enum PrCommand {
         /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
-        /// Only scan this workspace
+        /// Workspace(s) to scan, comma-separated. Falls back to BB_WORKSPACE,
+        /// then to the workspace of the current git checkout.
         #[arg(long)]
         workspace: Option<String>,
         /// Most recently updated repositories to scan per workspace

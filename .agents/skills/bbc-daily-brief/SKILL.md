@@ -36,11 +36,20 @@ Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`,
 `failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for the individual
 checks.
 
-`--role author` is two requests: one to find who you are, one paginated call across every
-workspace. The reviewer half is one request to find who you are, one to list workspaces (skipped
-when `--workspace` is given), one listing call per workspace, then one call per scanned
-repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one
-workspace.
+There is no api call left that discovers which workspaces you belong to. The workspace(s) scanned
+are resolved from `--workspace <slug>[,<slug>...]`, then `BB_WORKSPACE`, then the git remote of the
+current checkout — see the `bitbucket-cloud` skill for the full precedence order.
+
+`--role author` is one request to find who you are, then one paginated call per workspace. The
+reviewer half is one request to find who you are, one repository-listing call per workspace, then
+one call per scanned repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the
+user asks about one workspace.
+
+**This scan is a recency window, not the whole workspace.** The reviewer half only ever looks at
+the `--repo-limit` most recently updated repositories per workspace (default 30) — a workspace with
+hundreds of repositories is covered only in a small slice. Never present a brief built this way as
+a complete picture of the workspace; if certainty about one specific repository matters, use
+`bb pr list -R <repo>` for that repository instead.
 
 ## Phase 2 — enrich only the candidates
 

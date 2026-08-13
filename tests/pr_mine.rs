@@ -1,15 +1,19 @@
 #![allow(clippy::unwrap_used)]
 
 use assert_cmd::Command;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// `BB_WORKSPACE` defaults to `acme` here so every test written before
+/// workspace resolution became explicit keeps working unchanged; tests that
+/// care about resolution order override or remove it.
 fn bb(base: &str) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
     cmd.env("BB_EMAIL", "me@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", base)
         .env("BB_KEYRING_DISABLE", "1")
+        .env("BB_WORKSPACE", "acme")
         .env("NO_COLOR", "1");
     cmd
 }
@@ -50,12 +54,80 @@ async fn mock_user(server: &MockServer) {
         .await;
 }
 
-#[tokio::test]
-async fn role_author_asks_only_the_authored_endpoint() {
-    let server = MockServer::start().await;
-    mock_user(&server).await;
+/// Mounts all four api paths Atlassian removed under CHANGE-2770, each with
+/// `.expect(0)` so a regression back to any of them fails the suite instead
+/// of silently degrading to a 410 in production. There is no more
+/// workspace-discovery request at all — every test that used to call
+/// `mock_workspaces` now supplies `--workspace`/`BB_WORKSPACE` directly.
+async fn mock_removed_endpoints(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(serde_json::json!({
+            "error": { "message": "CHANGE-2770 - Functionality has been deprecated" }
+        })))
+        .expect(0)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user/permissions/workspaces"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(serde_json::json!({
+            "error": { "message": "CHANGE-2770 - Functionality has been deprecated" }
+        })))
+        .expect(0)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user/permissions/repositories"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(serde_json::json!({
+            "error": { "message": "CHANGE-2770 - Functionality has been deprecated" }
+        })))
+        .expect(0)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex_repositories())
+        .and(query_param("role", "member"))
+        .respond_with(ResponseTemplate::new(410).set_body_json(serde_json::json!({
+            "error": { "message": "CHANGE-2770 - Functionality has been deprecated" }
+        })))
+        .expect(0)
+        .mount(server)
+        .await;
+}
+
+/// The removed cross-workspace authored endpoint. Mounted with `.expect(0)`
+/// in every test so a regression back to it fails the suite instead of
+/// silently degrading to a 404 in production.
+async fn mock_removed_authored_endpoint(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({})))
+        .expect(0)
+        .mount(server)
+        .await;
+}
+
+fn path_regex_repositories() -> wiremock::matchers::PathRegexMatcher {
+    wiremock::matchers::path_regex(r"^/repositories/.*$")
+}
+
+fn repos_page(names: &[&str]) -> serde_json::Value {
+    page(
+        names
+            .iter()
+            .map(|n| serde_json::json!({ "full_name": n }))
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn role_author_asks_only_the_workspace_scoped_authored_endpoint() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(page(vec![pr(42, "acme/api", "{me}", None)])),
         )
@@ -64,8 +136,8 @@ async fn role_author_asks_only_the_authored_endpoint() {
         .await;
     // No repository enumeration may happen on the author-only path.
     Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
         .expect(0)
         .mount(&server)
         .await;
@@ -86,11 +158,45 @@ async fn role_author_asks_only_the_authored_endpoint() {
 }
 
 #[tokio::test]
+async fn workspace_flag_skips_workspace_enumeration_for_role_author() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "author",
+            "--workspace",
+            "acme",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
 async fn empty_json_prints_only_the_value() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
         .mount(&server)
         .await;
@@ -109,8 +215,10 @@ async fn empty_json_prints_only_the_value() {
 async fn state_is_passed_through_to_the_api() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .and(query_param("state", "MERGED"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
         .expect(1)
@@ -129,8 +237,10 @@ async fn state_is_passed_through_to_the_api() {
 async fn a_404_from_the_authored_endpoint_exits_three() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
@@ -145,8 +255,10 @@ async fn a_404_from_the_authored_endpoint_exits_three() {
 async fn human_output_names_the_repository() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(page(vec![pr(42, "acme/api", "{me}", None)])),
         )
@@ -162,29 +274,14 @@ async fn human_output_names_the_repository() {
     assert!(stdout.contains("REPO"), "got {stdout}");
 }
 
-fn repos_page(names: &[&str]) -> serde_json::Value {
-    page(
-        names
-            .iter()
-            .map(|n| serde_json::json!({ "full_name": n }))
-            .collect(),
-    )
-}
-
 #[tokio::test]
 async fn reviewer_side_keeps_only_pull_requests_i_review() {
     let server = MockServer::start().await;
     mock_user(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
-        )
-        .mount(&server)
-        .await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme"))
+        .and(query_param_is_missing("role"))
         .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
         .mount(&server)
         .await;
@@ -214,14 +311,7 @@ async fn reviewer_side_keeps_only_pull_requests_i_review() {
 async fn a_500_from_repositories_fails_the_whole_command() {
     let server = MockServer::start().await;
     mock_user(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
-        )
-        .mount(&server)
-        .await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({})))
@@ -238,14 +328,7 @@ async fn a_500_from_repositories_fails_the_whole_command() {
 async fn a_401_from_repositories_exits_two() {
     let server = MockServer::start().await;
     mock_user(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
-        )
-        .mount(&server)
-        .await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({})))
@@ -262,22 +345,15 @@ async fn a_401_from_repositories_exits_two() {
 async fn authored_and_reviewed_dedupes_into_one_row_marked_both() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
             7,
             "acme/api",
             "{me}",
             Some("{me}"),
         )])))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
-        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -385,13 +461,13 @@ async fn repo_limit_caps_the_fan_out() {
 }
 
 #[tokio::test]
-async fn repositories_are_requested_newest_first() {
+async fn repositories_are_requested_newest_first_with_no_role_parameter() {
     let server = MockServer::start().await;
     mock_user(&server).await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme"))
-        .and(query_param("role", "member"))
         .and(query_param("sort", "-updated_on"))
+        .and(query_param_is_missing("role"))
         .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
         .expect(1)
         .mount(&server)
@@ -415,14 +491,7 @@ async fn repositories_are_requested_newest_first() {
 async fn an_unreadable_workspace_is_reported_not_fatal() {
     let server = MockServer::start().await;
     mock_user(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![
-            serde_json::json!({ "slug": "acme" }),
-            serde_json::json!({ "slug": "locked" }),
-        ])))
-        .mount(&server)
-        .await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme"))
         .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&["acme/api"])))
@@ -445,7 +514,15 @@ async fn an_unreadable_workspace_is_reported_not_fatal() {
         .await;
 
     let out = bb(&server.uri())
-        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme,locked",
+            "--json",
+        ])
         .assert()
         .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
@@ -463,8 +540,9 @@ async fn an_unreadable_workspace_is_reported_not_fatal() {
 async fn authored_request_carries_the_reviewer_fields_parameter() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .and(query_param(
             "fields",
             "+values.reviewers,+values.participants,+values.draft",
@@ -488,18 +566,11 @@ async fn authored_request_carries_the_reviewer_fields_parameter() {
 async fn a_pr_found_in_both_halves_is_marked_both_even_when_the_first_seen_row_lacks_a_reviewer() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(page(vec![pr(7, "acme/api", "{me}", None)])),
-        )
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
         )
         .mount(&server)
         .await;
@@ -616,10 +687,11 @@ async fn repo_limit_zero_scans_nothing_and_issues_no_listing_request() {
 async fn a_row_with_no_parseable_repo_still_carries_build_fields_when_build_is_requested() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
     let mut linkless = pr(7, "acme/api", "{me}", None);
     linkless["links"] = serde_json::json!({});
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![linkless])))
         .mount(&server)
         .await;
@@ -693,22 +765,15 @@ async fn an_account_with_no_uuid_is_a_config_error() {
 async fn build_is_fetched_once_for_a_deduped_row() {
     let server = MockServer::start().await;
     mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
     Mock::given(method("GET"))
-        .and(path("/pullrequests/%7Bme%7D"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![pr(
             7,
             "acme/api",
             "{me}",
             Some("{me}"),
         )])))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/workspaces"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
-        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -745,4 +810,114 @@ async fn build_is_fetched_once_for_a_deduped_row() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["build_state"], "failed");
     assert_eq!(rows[0]["build"].as_array().unwrap().len(), 1);
+}
+
+/// Resolution order 1: `--workspace a,b` scans both workspaces, comma-
+/// separated, in one invocation.
+#[tokio::test]
+async fn workspace_flag_with_a_comma_list_scans_both_workspaces() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/other"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "acme,other",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+/// Resolution order 2: `--workspace` beats `BB_WORKSPACE` — the flag names
+/// `other`, the env var (set by the `bb` helper's default) names `acme`, and
+/// only `other` may be scanned.
+#[tokio::test]
+async fn workspace_flag_beats_bb_workspace_env_var() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/other"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args([
+            "pr",
+            "mine",
+            "--role",
+            "reviewer",
+            "--workspace",
+            "other",
+            "--json",
+        ])
+        .assert()
+        .success();
+}
+
+/// Resolution order 3: with no `--workspace`, `BB_WORKSPACE` is used — the
+/// `bb` helper already sets it to `acme` by default, so this just asserts
+/// that a bare invocation (no flag) reaches the workspace the env var names.
+#[tokio::test]
+async fn bb_workspace_env_var_is_used_when_the_flag_is_absent() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_endpoints(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(repos_page(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .success();
+}
+
+/// Resolution order 4: no `--workspace`, no `BB_WORKSPACE`, and the test
+/// runs with a working directory inside this git repository — whose remote
+/// is GitHub, not Bitbucket — so `repo::resolve` fails naturally too. That
+/// must be a config error (exit 1) naming both `--workspace` and
+/// `BB_WORKSPACE`, never a silent empty success.
+#[tokio::test]
+async fn no_workspace_source_is_a_config_error_not_an_empty_success() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+
+    let out = bb(&server.uri())
+        .env_remove("BB_WORKSPACE")
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("--workspace"), "got {stderr}");
+    assert!(stderr.contains("BB_WORKSPACE"), "got {stderr}");
 }
