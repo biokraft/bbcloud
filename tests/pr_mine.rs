@@ -211,6 +211,54 @@ async fn reviewer_side_keeps_only_pull_requests_i_review() {
 }
 
 #[tokio::test]
+async fn a_500_from_repositories_fails_the_whole_command() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .code(1);
+}
+
+#[tokio::test]
+async fn a_401_from_repositories_exits_two() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(page(vec![serde_json::json!({ "slug": "acme" })])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
+    bb(&server.uri())
+        .args(["pr", "mine", "--role", "reviewer", "--json"])
+        .assert()
+        .code(2);
+}
+
+#[tokio::test]
 async fn authored_and_reviewed_dedupes_into_one_row_marked_both() {
     let server = MockServer::start().await;
     mock_user(&server).await;

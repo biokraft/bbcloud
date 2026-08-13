@@ -209,15 +209,18 @@ pub async fn run(format: Format, args: MineArgs) -> Result<()> {
 
     if args.role != RoleArg::Author {
         for workspace in workspaces(&client, args.workspace.as_deref()).await? {
-            // A token without scope on one workspace must not sink the whole
-            // scan; the slug is reported instead, so a brief built from a
-            // partial view can say so.
+            // A 403 means the token has no scope on this workspace, which is
+            // expected on a shared account and must not sink the whole scan —
+            // the slug is reported instead, so a brief built from a partial
+            // view can say so. Anything else (401, 429, a network failure, a
+            // malformed response) is a real failure and must propagate.
             let repos = match repositories(&client, &workspace, args.repo_limit).await {
                 Ok(repos) => repos,
-                Err(_) => {
+                Err(crate::error::BbError::Api { status: 403, .. }) => {
                     partial.push(workspace);
                     continue;
                 }
+                Err(e) => return Err(e),
             };
             let batches: Vec<Vec<(String, PullRequest)>> = stream::iter(repos.iter())
                 .map(|repo| reviewing_in(&client, repo, &args.state, &my_uuid))
