@@ -2,7 +2,8 @@
 
 use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
-use bb_cli::output::Format;
+use bb_cli::output::{self, Format};
+use bb_cli::skill;
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -301,8 +302,53 @@ enum AuthCommand {
     Logout,
 }
 
+/// `brew upgrade bb` and `cargo install` replace the binary without running any
+/// of our code, so an installed skill file would otherwise keep describing an
+/// older CLI until someone noticed `bb skill status` saying `stale` and re-ran
+/// the install. Every tracked entry records the version that wrote it, so the
+/// check is a string compare and costs nothing once everything is current.
+///
+/// Five properties this keeps, each with a test: it never overwrites a locally
+/// edited file (`refresh_tracked` reports those as skipped), it never writes to
+/// stdout so `--json` stays pure, it never fails the command the user actually
+/// asked for, `BB_SKILL_NO_AUTO_REFRESH=1` turns it off, and `refresh_tracked`
+/// stamps the running version onto every entry it looked at — including skipped
+/// ones — so this fires once per upgrade rather than on every invocation.
+fn auto_refresh_skills(format: Format) {
+    if std::env::var_os("BB_SKILL_NO_AUTO_REFRESH").is_some() {
+        return;
+    }
+    let (entries, _warning) = skill::load_state();
+    if entries.is_empty() || !skill::tracked_version_differs(&entries) {
+        return;
+    }
+    match skill::refresh_tracked() {
+        Ok(outcomes) => {
+            let changed = outcomes
+                .iter()
+                .filter(|o| matches!(o.action, skill::Action::Refreshed | skill::Action::Pruned))
+                .count();
+            if changed > 0 && !format.is_json() {
+                output::warn(&format!(
+                    "refreshed {changed} skill file{} for bb {}",
+                    if changed == 1 { "" } else { "s" },
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+        }
+        // The user asked for something else. A read-only filesystem or a
+        // vanished directory must not turn their command into a failure.
+        Err(err) => {
+            if !format.is_json() {
+                output::warn(&format!("could not refresh agent skills: {err}"));
+            }
+        }
+    }
+}
+
 async fn run(cli: Cli) -> Result<()> {
     let format = Format::from_json_flag(cli.json);
+    auto_refresh_skills(format);
     match cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Login { email, token_stdin } => {

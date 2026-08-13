@@ -576,3 +576,241 @@ fn the_main_skill_documents_the_cross_repository_query() {
     assert!(text.contains("bbc-daily-brief"));
     assert!(text.contains("my_role"));
 }
+
+/// The brief is written by the agent *for the user*, so its prose must address
+/// them as "you" rather than narrating in the first person. The json field names
+/// `my_role`/`my_review_state` are the api's wording and must still be
+/// documented, so they are stripped before the search; the frontmatter is too,
+/// since its `description` quotes what a user says ("what needs my attention").
+#[test]
+fn the_brief_skill_addresses_the_user_not_itself() {
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
+        .unwrap()
+        .content;
+    let body = text
+        .split_once("\n---\n")
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_else(|| text.to_string());
+    // `pr mine` is the command's own name, and `my_role`/`my_review_state` are
+    // api field names: all three must stay documented, none of them is prose.
+    let prose = body
+        .replace("my_role", "")
+        .replace("my_review_state", "")
+        .replace("pr mine", "");
+    for needle in [" my ", " mine ", " I ", "My ", "Mine "] {
+        assert!(
+            !prose.contains(needle),
+            "first-person prose `{needle}` must not appear in a brief addressed to the user"
+        );
+    }
+    assert!(
+        prose.contains("your") || prose.contains("Your"),
+        "the brief speaks to the user as `you`"
+    );
+}
+
+#[test]
+fn the_brief_skill_carries_the_grouped_output_contract() {
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
+        .unwrap()
+        .content;
+    assert!(text.contains("YOU'RE BLOCKING"));
+    assert!(text.contains("WAITING ON OTHERS"));
+    assert!(
+        text.contains("bb pr list -R"),
+        "the repo-scoped path must be documented"
+    );
+    assert!(
+        text.contains("my_role"),
+        "the json field name is still documented"
+    );
+}
+
+/// The state file lives under `$XDG_CONFIG_HOME/bb/`, and these tests point both
+/// `HOME` and `XDG_CONFIG_HOME` at one tempdir, so look in both shapes.
+fn state_file(cfg: &std::path::Path) -> std::path::PathBuf {
+    let xdg = cfg.join("bb/skills.json");
+    if xdg.exists() {
+        return xdg;
+    }
+    cfg.join(".config/bb/skills.json")
+}
+
+/// Rewrites every tracked entry's `version` to an old value, the way an upgraded
+/// binary finds a state file written by its predecessor.
+fn age_the_state_file(cfg: &std::path::Path) {
+    let path = state_file(cfg);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let mut entries: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    assert!(!entries.is_empty(), "nothing tracked to age");
+    for e in &mut entries {
+        e["version"] = serde_json::Value::String("0.0.1".into());
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+}
+
+/// Makes the state file claim that `bb` itself wrote `content` at `path`, which
+/// is what distinguishes "the binary now ships newer text" (`Stale`, refreshable)
+/// from "someone edited this by hand" (`Modified`, left alone). A test that only
+/// overwrites the file gets the second case, not the first.
+/// `suffix` is matched against the end of each tracked path rather than compared
+/// whole: on macOS a tempdir is handed out as `/var/folders/...` but resolves to
+/// `/private/var/folders/...`, so an exact string comparison misses.
+fn record_as_written_by_bb(cfg: &std::path::Path, suffix: &str, content: &str) {
+    let state = state_file(cfg);
+    let raw = std::fs::read_to_string(&state).unwrap();
+    let mut entries: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    let mut found = false;
+    for e in &mut entries {
+        if e["path"].as_str().is_some_and(|p| p.ends_with(suffix)) {
+            e["sha256"] =
+                serde_json::Value::String(bb_cli::skill::content_hash(content.as_bytes()));
+            found = true;
+        }
+    }
+    assert!(found, "no tracked entry ending in {suffix}");
+    std::fs::write(&state, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+}
+
+fn state_versions(cfg: &std::path::Path) -> Vec<String> {
+    let raw = std::fs::read_to_string(state_file(cfg)).unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    entries
+        .iter()
+        .map(|e| e["version"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn an_unrelated_command_refreshes_skills_left_behind_by_an_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+
+    let path = dir.path().join(".agents/skills/bitbucket-cloud/SKILL.md");
+    let old = "old text from a previous release";
+    std::fs::write(&path, old).unwrap();
+    record_as_written_by_bb(dir.path(), ".agents/skills/bitbucket-cloud/SKILL.md", old);
+    age_the_state_file(dir.path());
+
+    // A command with nothing to do with skills.
+    bb_in(dir.path())
+        .args(["completions", "bash"])
+        .assert()
+        .success();
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(
+        after, "old text from a previous release",
+        "auto-refresh should have rewritten it"
+    );
+    assert!(after.starts_with("---"), "and written the real skill text");
+    assert!(
+        state_versions(dir.path()).iter().all(|v| v != "0.0.1"),
+        "the recorded version must move forward so the check stops firing"
+    );
+}
+
+#[test]
+fn auto_refresh_prints_nothing_on_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    let path = dir.path().join(".agents/skills/bitbucket-cloud/SKILL.md");
+    std::fs::write(&path, "old text").unwrap();
+    record_as_written_by_bb(
+        dir.path(),
+        ".agents/skills/bitbucket-cloud/SKILL.md",
+        "old text",
+    );
+    age_the_state_file(dir.path());
+
+    let out = bb_in(dir.path())
+        .args(["skill", "status", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be exactly one json value: {e}\n{stdout}"));
+}
+
+#[test]
+fn the_opt_out_leaves_a_stale_file_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    let path = dir.path().join(".agents/skills/bitbucket-cloud/SKILL.md");
+    std::fs::write(&path, "old text").unwrap();
+    record_as_written_by_bb(
+        dir.path(),
+        ".agents/skills/bitbucket-cloud/SKILL.md",
+        "old text",
+    );
+    age_the_state_file(dir.path());
+
+    bb_in(dir.path())
+        .env("BB_SKILL_NO_AUTO_REFRESH", "1")
+        .args(["completions", "bash"])
+        .assert()
+        .success();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old text");
+}
+
+#[test]
+fn auto_refresh_never_overwrites_a_local_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    let path = dir.path().join(".agents/skills/bbc-daily-brief/SKILL.md");
+    std::fs::write(&path, "my own notes").unwrap();
+    age_the_state_file(dir.path());
+
+    bb_in(dir.path())
+        .args(["completions", "bash"])
+        .assert()
+        .success();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "my own notes");
+    assert!(
+        state_versions(dir.path()).iter().all(|v| v != "0.0.1"),
+        "a skipped entry still records the running version"
+    );
+}
+
+#[test]
+fn a_state_entry_under_a_deleted_tree_is_pruned_by_any_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let gone = dir.path().join("was-a-temp-dir");
+    std::fs::create_dir_all(&gone).unwrap();
+    bb(gone.as_path(), dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    std::fs::remove_dir_all(&gone).unwrap();
+    age_the_state_file(dir.path());
+
+    bb_in(dir.path())
+        .args(["completions", "bash"])
+        .assert()
+        .success();
+
+    let out = bb_in(dir.path())
+        .args(["skill", "status", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("was-a-temp-dir"),
+        "the vanished entry should be gone from status: {stdout}"
+    );
+    assert!(!gone.exists(), "pruning must not recreate the tree");
+}
