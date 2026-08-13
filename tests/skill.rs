@@ -609,6 +609,25 @@ fn the_brief_skill_addresses_the_user_not_itself() {
     );
 }
 
+/// The skill texts are compiled into the published binary, so an example copied
+/// out of a real terminal session ships a real workspace, repository, colleague
+/// or ticket id to everyone who installs `bb`. Examples must use the placeholder
+/// `acme` workspace. This test is deliberately a denylist of the shapes that have
+/// slipped in before rather than a clever heuristic: add to it, don't outsmart it.
+#[test]
+fn no_shipped_skill_text_names_a_real_workspace_or_person() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let lower = skill.content.to_lowercase();
+        for needle in ["check24", "mailgpt", "hyein", "afal-", "bitbucket.org/check"] {
+            assert!(
+                !lower.contains(needle),
+                "{} ships `{needle}` — examples must use the placeholder `acme` workspace",
+                skill.name
+            );
+        }
+    }
+}
+
 #[test]
 fn the_brief_skill_carries_the_grouped_output_contract() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")

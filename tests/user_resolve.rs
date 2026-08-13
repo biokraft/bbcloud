@@ -298,18 +298,18 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(
         &server,
-        serde_json::json!([{ "uuid": "{m}", "display_name": "Moritz Fischer" }]),
+        serde_json::json!([{ "uuid": "{m}", "display_name": "Dana Fischer" }]),
     )
     .await;
     mount_permissions_config(
         &server,
         serde_json::json!([
-            { "user": { "uuid": "{m}", "display_name": "Moritz Fischer" } }
+            { "user": { "uuid": "{m}", "display_name": "Dana Fischer" } }
         ]),
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "moritz", &[])
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
