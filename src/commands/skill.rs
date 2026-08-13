@@ -22,6 +22,7 @@ struct StatusRowJson {
 #[derive(Serialize)]
 struct UninstallRowJson {
     path: String,
+    skill: String,
     /// One of "removed", "refused_modified", "refused_unsafe_path", "absent" —
     /// kept as an explicit outcome string rather than a boolean so a consumer
     /// can tell "we refused to touch a local edit" apart from "there was
@@ -31,7 +32,28 @@ struct UninstallRowJson {
     outcome: String,
 }
 
-pub fn install(format: Format, agent: Option<&str>, global: bool, force: bool) -> Result<()> {
+/// The skills a command acts on. `None` means all of them; an unknown name is a
+/// configuration error naming the valid ones, not a silent no-op.
+fn wanted_skills(name: Option<&str>) -> Result<Vec<&'static skill::Skill>> {
+    match name {
+        None => Ok(skill::SKILLS.iter().collect()),
+        Some(name) => skill::skill_by_name(name).map(|s| vec![s]).ok_or_else(|| {
+            let valid: Vec<&str> = skill::SKILLS.iter().map(|s| s.name).collect();
+            BbError::Config(format!(
+                "unknown skill `{name}` — expected one of {}",
+                valid.join(", ")
+            ))
+        }),
+    }
+}
+
+pub fn install(
+    format: Format,
+    agent: Option<&str>,
+    global: bool,
+    force: bool,
+    skill_name: Option<&str>,
+) -> Result<()> {
     let root = if global {
         home_dir()?
     } else {
@@ -64,7 +86,7 @@ pub fn install(format: Format, agent: Option<&str>, global: bool, force: bool) -
         }
     };
 
-    let skills: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+    let skills = wanted_skills(skill_name)?;
     let outcomes = skill::install(&root, &agents, &skills, force)?;
     let rows: Vec<OutcomeRow> = outcomes
         .iter()
@@ -126,12 +148,13 @@ pub fn status(format: Format) -> Result<()> {
                 .map(|r| {
                     vec![
                         r.path.display().to_string(),
+                        r.skill.clone(),
                         r.agent.clone(),
                         r.state.as_str().to_string(),
                     ]
                 })
                 .collect();
-            output::print_table(&["PATH", "AGENT", "STATE"], table_rows);
+            output::print_table(&["PATH", "SKILL", "AGENT", "STATE"], table_rows);
             output::info(&format!(
                 "{} tracked skill{}",
                 rows.len(),
@@ -142,22 +165,28 @@ pub fn status(format: Format) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall(format: Format, global: bool, force: bool) -> Result<()> {
+pub fn uninstall(
+    format: Format,
+    global: bool,
+    force: bool,
+    skill_name: Option<&str>,
+) -> Result<()> {
     let root = if global {
         home_dir()?
     } else {
         std::env::current_dir().map_err(BbError::Io)?
     };
 
-    let skills: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+    let skills = wanted_skills(skill_name)?;
     let results = skill::uninstall(Some(&root), &skills, force)?;
 
     match format {
         Format::Json => {
             let json_rows: Vec<UninstallRowJson> = results
                 .iter()
-                .map(|(path, outcome)| UninstallRowJson {
+                .map(|(path, skill, outcome)| UninstallRowJson {
                     path: path.display().to_string(),
+                    skill: skill.clone(),
                     outcome: outcome.as_str().to_string(),
                 })
                 .collect();
@@ -167,7 +196,7 @@ pub fn uninstall(format: Format, global: bool, force: bool) -> Result<()> {
             if results.is_empty() {
                 output::info("nothing to uninstall");
             }
-            for (path, outcome) in &results {
+            for (path, _skill, outcome) in &results {
                 match outcome {
                     skill::RemovalOutcome::Removed => {
                         output::success(&format!("removed {}", path.display()))

@@ -18,6 +18,12 @@ fn bb(project: &std::path::Path, cfg: &std::path::Path) -> Command {
     cmd
 }
 
+/// Convenience over `bb()` for tests that don't need the project root and the
+/// config location to be separate tempdirs.
+fn bb_in(dir: &std::path::Path) -> Command {
+    bb(dir, dir)
+}
+
 #[test]
 fn install_creates_the_agents_skill_and_says_so() {
     let project = tempfile::tempdir().unwrap();
@@ -423,4 +429,140 @@ fn skill_documents_build_status() {
         text.contains("build_state"),
         "skill omits the rollup json field"
     );
+}
+
+#[test]
+fn install_writes_both_skills() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    for name in ["bitbucket-cloud", "bb-daily-brief"] {
+        let path = dir.path().join(format!(".agents/skills/{name}/SKILL.md"));
+        assert!(path.is_file(), "{name} was not installed");
+    }
+}
+
+#[test]
+fn skill_flag_installs_only_that_skill() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args([
+            "skill",
+            "install",
+            "--agent",
+            "agents",
+            "--skill",
+            "bb-daily-brief",
+            "--json",
+        ])
+        .assert()
+        .success();
+    assert!(dir
+        .path()
+        .join(".agents/skills/bb-daily-brief/SKILL.md")
+        .is_file());
+    assert!(!dir
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md")
+        .exists());
+}
+
+#[test]
+fn an_unknown_skill_name_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--skill", "nope", "--json"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn status_json_names_the_skill_per_row() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    let out = bb_in(dir.path())
+        .args(["skill", "status", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let names: Vec<String> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["skill"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        names.contains(&"bitbucket-cloud".to_string()),
+        "got {names:?}"
+    );
+    assert!(
+        names.contains(&"bb-daily-brief".to_string()),
+        "got {names:?}"
+    );
+}
+
+#[test]
+fn editing_one_skill_does_not_make_the_other_modified() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join(".agents/skills/bb-daily-brief/SKILL.md"),
+        "locally edited",
+    )
+    .unwrap();
+
+    let out = bb_in(dir.path())
+        .args(["skill", "status", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    for row in rows.as_array().unwrap() {
+        let expected = if row["skill"] == "bb-daily-brief" {
+            "modified"
+        } else {
+            "current"
+        };
+        assert_eq!(row["state"], expected, "row {row}");
+    }
+}
+
+#[test]
+fn uninstall_with_skill_removes_only_that_one() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    bb_in(dir.path())
+        .args(["skill", "uninstall", "--skill", "bb-daily-brief", "--json"])
+        .assert()
+        .success();
+    assert!(!dir
+        .path()
+        .join(".agents/skills/bb-daily-brief/SKILL.md")
+        .exists());
+    assert!(dir
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md")
+        .is_file());
+}
+
+#[test]
+fn the_brief_skill_states_it_is_invoked_only_on_request() {
+    let text = bb_cli::skill::skill_by_name("bb-daily-brief")
+        .unwrap()
+        .content;
+    assert!(text.contains("Never invoke this skill proactively"));
+    assert!(text.contains("bb pr mine"));
+    assert!(text.contains("Never resolve a comment thread"));
 }

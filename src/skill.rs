@@ -305,7 +305,7 @@ pub fn uninstall(
     root: Option<&Path>,
     skills: &[&'static Skill],
     force: bool,
-) -> Result<Vec<(PathBuf, RemovalOutcome)>> {
+) -> Result<Vec<(PathBuf, String, RemovalOutcome)>> {
     let (entries, warning) = load_state();
     if let Some(warning) = warning {
         crate::output::warn(&warning);
@@ -326,7 +326,11 @@ pub fn uninstall(
                 "refusing to touch {} — does not look like a skill path bb would have written",
                 entry.path.display()
             ));
-            results.push((entry.path.clone(), RemovalOutcome::RefusedUnsafePath));
+            results.push((
+                entry.path.clone(),
+                entry.skill.clone(),
+                RemovalOutcome::RefusedUnsafePath,
+            ));
             keep.push(entry);
             continue;
         }
@@ -335,7 +339,11 @@ pub fn uninstall(
             .unwrap_or_default();
         let modified = matches!(state_of(&entry, &wanted), State::Modified);
         if modified && !force {
-            results.push((entry.path.clone(), RemovalOutcome::RefusedModified));
+            results.push((
+                entry.path.clone(),
+                entry.skill.clone(),
+                RemovalOutcome::RefusedModified,
+            ));
             keep.push(entry);
             continue;
         }
@@ -373,7 +381,7 @@ pub fn uninstall(
         } else {
             RemovalOutcome::Absent
         };
-        results.push((entry.path.clone(), outcome));
+        results.push((entry.path.clone(), entry.skill.clone(), outcome));
     }
 
     save_state(&keep)?;
@@ -843,7 +851,7 @@ mod tests {
                 let results = uninstall(Some(&claude_root), &[bb_skill()], false).unwrap();
                 assert_eq!(results.len(), 1, "only the claude entry was in scope");
                 assert_eq!(
-                    results[0].1,
+                    results[0].2,
                     RemovalOutcome::Removed,
                     "the claude entry should report removed"
                 );
@@ -1368,7 +1376,7 @@ mod tests {
 
                 let results = uninstall(None, &[bb_skill()], false).unwrap();
                 assert_eq!(results.len(), 1);
-                assert_eq!(results[0].1, RemovalOutcome::Removed);
+                assert_eq!(results[0].2, RemovalOutcome::Removed);
 
                 assert!(
                     std::fs::read_to_string(&agents_path).unwrap() == bb_skill().content,
@@ -1428,7 +1436,7 @@ mod tests {
                 assert_eq!(results.len(), 2);
                 assert!(results
                     .iter()
-                    .all(|(_, o)| *o == RemovalOutcome::RefusedUnsafePath));
+                    .all(|(_, _, o)| *o == RemovalOutcome::RefusedUnsafePath));
 
                 assert!(victim_dir.is_dir(), "unrelated directory must survive");
                 assert!(
@@ -1462,6 +1470,7 @@ mod tests {
                     results,
                     vec![(
                         skill_file(dir.path(), Agent::Agents, bb_skill()),
+                        bb_skill().name.to_string(),
                         RemovalOutcome::Removed
                     )]
                 );

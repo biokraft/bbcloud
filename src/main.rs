@@ -82,6 +82,9 @@ enum SkillCommand {
         /// Overwrite a skill file that was edited locally
         #[arg(long)]
         force: bool,
+        /// Only act on this skill; omit for all of them
+        #[arg(long)]
+        skill: Option<String>,
     },
     /// Show where the skill is installed and whether it is current
     Status,
@@ -93,6 +96,9 @@ enum SkillCommand {
         /// Remove a skill file that was edited locally
         #[arg(long)]
         force: bool,
+        /// Only act on this skill; omit for all of them
+        #[arg(long)]
+        skill: Option<String>,
     },
 }
 
@@ -473,11 +479,16 @@ async fn run(cli: Cli) -> Result<()> {
                 agent,
                 global,
                 force,
-            } => commands::skill::install(format, agent.as_deref(), global, force),
-            SkillCommand::Status => commands::skill::status(format),
-            SkillCommand::Uninstall { global, force } => {
-                commands::skill::uninstall(format, global, force)
+                skill,
+            } => {
+                commands::skill::install(format, agent.as_deref(), global, force, skill.as_deref())
             }
+            SkillCommand::Status => commands::skill::status(format),
+            SkillCommand::Uninstall {
+                global,
+                force,
+                skill,
+            } => commands::skill::uninstall(format, global, force, skill.as_deref()),
         },
     }
 }
