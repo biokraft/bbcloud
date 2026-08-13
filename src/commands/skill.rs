@@ -7,6 +7,7 @@ use serde::Serialize;
 struct OutcomeRow {
     path: String,
     agent: String,
+    skill: String,
     action: String,
 }
 
@@ -14,6 +15,7 @@ struct OutcomeRow {
 struct StatusRowJson {
     path: String,
     agent: String,
+    skill: String,
     state: String,
 }
 
@@ -62,12 +64,14 @@ pub fn install(format: Format, agent: Option<&str>, global: bool, force: bool) -
         }
     };
 
-    let outcomes = skill::install(&root, &agents, force)?;
+    let skills: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+    let outcomes = skill::install(&root, &agents, &skills, force)?;
     let rows: Vec<OutcomeRow> = outcomes
         .iter()
         .map(|o| OutcomeRow {
             path: o.path.display().to_string(),
             agent: o.agent.clone(),
+            skill: o.skill.clone(),
             action: o.action.as_str().to_string(),
         })
         .collect();
@@ -110,6 +114,7 @@ pub fn status(format: Format) -> Result<()> {
                 .map(|r| StatusRowJson {
                     path: r.path.display().to_string(),
                     agent: r.agent.clone(),
+                    skill: r.skill.clone(),
                     state: r.state.as_str().to_string(),
                 })
                 .collect();
@@ -144,7 +149,8 @@ pub fn uninstall(format: Format, global: bool, force: bool) -> Result<()> {
         std::env::current_dir().map_err(BbError::Io)?
     };
 
-    let results = skill::uninstall(Some(&root), force)?;
+    let skills: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+    let results = skill::uninstall(Some(&root), &skills, force)?;
 
     match format {
         Format::Json => {

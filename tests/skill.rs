@@ -411,7 +411,9 @@ fn uninstall_removes_a_symlinked_claude_entry() {
 /// skill does not mention it, an agent will never use it.
 #[test]
 fn skill_documents_build_status() {
-    let text = bb_cli::skill::SKILL_MD;
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
     assert!(text.contains("bb pr build"), "skill omits `bb pr build`");
     assert!(
         text.contains("--build-status"),
