@@ -34,7 +34,7 @@ bb pr list --reviewer patrick --json       # PRs that person is tagged on
 bb pr list --author @me --json             # PRs I opened; @me resolves the authenticated account
 bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
 bb pr list --build --json                  # add BUILD column: worst-wins rollup per PR
-bb pr list --build-status failed --json     # only PRs whose build rolls up to FAILED
+bb pr list --build-status failed --json    # only PRs whose build rolls up to FAILED
 bb pr view 42 --json                       # the pull request, plus all comments
 bb pr view 42 --unresolved --json          # only the threads that still need an answer
 bb pr diff 42                              # raw diff, plain text
@@ -64,8 +64,10 @@ bb pr build 42 --json           # every check on one PR: key, name, state, url
 bb pr list --build --json       # a BUILD column across a list
 ```
 
-States: `successful | failed | inprogress | stopped | none`. `none` means no check ever
-reported — not that a check passed.
+States: `successful | failed | inprogress | stopped | none`. That vocabulary is
+`build_state`'s; `statuses[].state` and `build[].state` carry Bitbucket's raw
+uppercase value (`FAILED`, `INPROGRESS`, …). `none` means no check reported, or no
+check this version recognises — not that a check passed.
 
 `build_state` is a worst-wins rollup over every check on the pull request
 (`failed` > `stopped` > `inprogress` > `successful` > `none`), so asking "did anything

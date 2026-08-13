@@ -629,6 +629,25 @@ async fn build_json_carries_rollup_and_every_status() {
     assert_eq!(seven["build"][1]["key"], "KEY1");
 }
 
+/// `statuses_for` uses `try_collect`: the first failing status request aborts
+/// the whole listing rather than rendering partial rows with blank cells.
+#[tokio::test]
+async fn build_flag_fails_the_whole_list_when_one_status_request_fails() {
+    let server = MockServer::start().await;
+    mount_list(&server, two_prs()).await;
+    mount_statuses(&server, 7, &["SUCCESSFUL"]).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/9/statuses"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "list", "--build", "--json"])
+        .assert()
+        .failure();
+}
+
 /// Existing callers must see the same shape they see today.
 #[tokio::test]
 async fn json_without_build_has_no_build_fields() {

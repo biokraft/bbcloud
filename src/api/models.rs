@@ -99,7 +99,7 @@ pub struct BuildStatus {
 /// single word. `None` covers both "no checks reported" and "a state this
 /// version does not recognise" — an unknown future state must never fail a list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum BuildState {
     Failed,
     Stopped,
@@ -626,10 +626,10 @@ mod tests {
     }
 
     #[test]
-    fn build_state_serialises_snake_case() {
+    fn build_state_serialises_lowercase() {
         assert_eq!(
             serde_json::to_string(&BuildState::InProgress).unwrap(),
-            "\"in_progress\""
+            "\"inprogress\""
         );
         assert_eq!(
             serde_json::to_string(&BuildState::None).unwrap(),
