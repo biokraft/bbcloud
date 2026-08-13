@@ -1,3 +1,4 @@
+use crate::api::models::BuildState;
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_BORDERS_ONLY;
@@ -135,6 +136,16 @@ pub fn colored_cell(text: &str, tone: Tone) -> String {
     colored_cell_with(text, tone, color_enabled())
 }
 
+/// The single source of truth for how a build state maps to a colour intent.
+pub fn tone_for(state: BuildState) -> Tone {
+    match state {
+        BuildState::Failed => Tone::Bad,
+        BuildState::Stopped | BuildState::InProgress => Tone::Warn,
+        BuildState::Successful => Tone::Good,
+        BuildState::None => Tone::Dim,
+    }
+}
+
 pub fn spinner(msg: &str) -> indicatif::ProgressBar {
     if !std::io::stderr().is_terminal() {
         return indicatif::ProgressBar::hidden();
@@ -242,6 +253,15 @@ mod tests {
     fn format_from_flag() {
         assert!(matches!(Format::from_json_flag(true), Format::Json));
         assert!(matches!(Format::from_json_flag(false), Format::Human));
+    }
+
+    #[test]
+    fn tone_for_maps_every_build_state() {
+        assert_eq!(tone_for(BuildState::Failed), Tone::Bad);
+        assert_eq!(tone_for(BuildState::Stopped), Tone::Warn);
+        assert_eq!(tone_for(BuildState::InProgress), Tone::Warn);
+        assert_eq!(tone_for(BuildState::Successful), Tone::Good);
+        assert_eq!(tone_for(BuildState::None), Tone::Dim);
     }
 
     #[test]

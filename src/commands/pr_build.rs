@@ -1,7 +1,7 @@
 use crate::api::models::{BuildState, BuildStatus};
 use crate::commands::pr::Ctx;
 use crate::error::Result;
-use crate::output::{self, Format, Tone};
+use crate::output::{self, Format};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -31,15 +31,6 @@ struct BuildReport {
     statuses: Vec<BuildStatus>,
 }
 
-fn tone(state: BuildState) -> Tone {
-    match state {
-        BuildState::Failed => Tone::Bad,
-        BuildState::Stopped | BuildState::InProgress => Tone::Warn,
-        BuildState::Successful => Tone::Good,
-        BuildState::None => Tone::Dim,
-    }
-}
-
 pub async fn run(ctx: &Ctx, id: u64) -> Result<()> {
     let spinner = output::spinner("fetching build statuses");
     let found = statuses(ctx, id).await?;
@@ -55,7 +46,10 @@ pub async fn run(ctx: &Ctx, id: u64) -> Result<()> {
         Format::Human => {
             output::heading(&format!(
                 "build: {}",
-                output::colored_cell(report.build_state.label(), tone(report.build_state))
+                output::colored_cell(
+                    report.build_state.label(),
+                    output::tone_for(report.build_state)
+                )
             ));
             if report.statuses.is_empty() {
                 output::info("no build statuses");
@@ -70,7 +64,7 @@ pub async fn run(ctx: &Ctx, id: u64) -> Result<()> {
                             vec![
                                 s.key.clone().unwrap_or_else(|| "-".into()),
                                 s.name.clone().unwrap_or_else(|| "-".into()),
-                                output::colored_cell(state.label(), tone(state)),
+                                output::colored_cell(state.label(), output::tone_for(state)),
                                 s.url.clone().unwrap_or_else(|| "-".into()),
                             ]
                         })

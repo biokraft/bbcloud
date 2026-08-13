@@ -242,13 +242,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
 
 fn build_cell(state: Option<BuildState>) -> String {
     let state = state.unwrap_or(BuildState::None);
-    let tone = match state {
-        BuildState::Failed => output::Tone::Bad,
-        BuildState::Stopped | BuildState::InProgress => output::Tone::Warn,
-        BuildState::Successful => output::Tone::Good,
-        BuildState::None => output::Tone::Dim,
-    };
-    output::colored_cell(state.label(), tone)
+    output::colored_cell(state.label(), output::tone_for(state))
 }
 
 fn render(ctx: &Ctx, rows: &[PrRow], build: bool) -> Result<()> {
