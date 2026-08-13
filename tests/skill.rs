@@ -438,7 +438,7 @@ fn install_writes_both_skills() {
         .args(["skill", "install", "--agent", "agents", "--json"])
         .assert()
         .success();
-    for name in ["bitbucket-cloud", "bb-daily-brief"] {
+    for name in ["bitbucket-cloud", "bbc-daily-brief"] {
         let path = dir.path().join(format!(".agents/skills/{name}/SKILL.md"));
         assert!(path.is_file(), "{name} was not installed");
     }
@@ -454,14 +454,14 @@ fn skill_flag_installs_only_that_skill() {
             "--agent",
             "agents",
             "--skill",
-            "bb-daily-brief",
+            "bbc-daily-brief",
             "--json",
         ])
         .assert()
         .success();
     assert!(dir
         .path()
-        .join(".agents/skills/bb-daily-brief/SKILL.md")
+        .join(".agents/skills/bbc-daily-brief/SKILL.md")
         .is_file());
     assert!(!dir
         .path()
@@ -502,7 +502,7 @@ fn status_json_names_the_skill_per_row() {
         "got {names:?}"
     );
     assert!(
-        names.contains(&"bb-daily-brief".to_string()),
+        names.contains(&"bbc-daily-brief".to_string()),
         "got {names:?}"
     );
 }
@@ -515,7 +515,7 @@ fn editing_one_skill_does_not_make_the_other_modified() {
         .assert()
         .success();
     std::fs::write(
-        dir.path().join(".agents/skills/bb-daily-brief/SKILL.md"),
+        dir.path().join(".agents/skills/bbc-daily-brief/SKILL.md"),
         "locally edited",
     )
     .unwrap();
@@ -527,7 +527,7 @@ fn editing_one_skill_does_not_make_the_other_modified() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     for row in rows.as_array().unwrap() {
-        let expected = if row["skill"] == "bb-daily-brief" {
+        let expected = if row["skill"] == "bbc-daily-brief" {
             "modified"
         } else {
             "current"
@@ -544,12 +544,12 @@ fn uninstall_with_skill_removes_only_that_one() {
         .assert()
         .success();
     bb_in(dir.path())
-        .args(["skill", "uninstall", "--skill", "bb-daily-brief", "--json"])
+        .args(["skill", "uninstall", "--skill", "bbc-daily-brief", "--json"])
         .assert()
         .success();
     assert!(!dir
         .path()
-        .join(".agents/skills/bb-daily-brief/SKILL.md")
+        .join(".agents/skills/bbc-daily-brief/SKILL.md")
         .exists());
     assert!(dir
         .path()
@@ -559,7 +559,7 @@ fn uninstall_with_skill_removes_only_that_one() {
 
 #[test]
 fn the_brief_skill_states_it_is_invoked_only_on_request() {
-    let text = bb_cli::skill::skill_by_name("bb-daily-brief")
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
         .unwrap()
         .content;
     assert!(text.contains("Never invoke this skill proactively"));
@@ -573,6 +573,6 @@ fn the_main_skill_documents_the_cross_repository_query() {
         .unwrap()
         .content;
     assert!(text.contains("bb pr mine"));
-    assert!(text.contains("bb-daily-brief"));
+    assert!(text.contains("bbc-daily-brief"));
     assert!(text.contains("my_role"));
 }

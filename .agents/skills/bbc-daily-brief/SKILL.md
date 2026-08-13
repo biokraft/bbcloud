@@ -1,5 +1,5 @@
 ---
-name: bb-daily-brief
+name: bbc-daily-brief
 description: Produce a ranked, actionable daily brief of the user's Bitbucket Cloud pull requests across every repository. Use ONLY when the user explicitly asks for a daily brief, a standup summary, or "what needs my attention" across repositories. Never invoke this skill proactively, and never as a step inside another task.
 license: MIT
 ---

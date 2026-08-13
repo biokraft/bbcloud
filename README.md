@@ -162,7 +162,7 @@ Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the 
 pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
 comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
 agent to answer comment threads and report them, and to leave the resolve decision to you.
-`bb-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
+`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
 explicitly ask for one.
 
 Install both into a project:
@@ -171,7 +171,7 @@ Install both into a project:
 bb skill install
 ```
 
-`bb skill install` writes both skills — `bitbucket-cloud` and `bb-daily-brief`. Pass
+`bb skill install` writes both skills — `bitbucket-cloud` and `bbc-daily-brief`. Pass
 `--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
 the `bb` binary, so this needs no network and no credentials. It detects which agents the project
 uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/` means the portable

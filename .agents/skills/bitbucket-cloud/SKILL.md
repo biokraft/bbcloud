@@ -95,7 +95,7 @@ repository — narrow it with `--workspace <slug>` or `--repo-limit <n>` when th
 one workspace. A workspace the token cannot read is listed in `partial` rather than failing the
 command; say so when reporting from a partial scan.
 
-For a ranked morning brief built on this command, the separate `bb-daily-brief` skill carries the
+For a ranked morning brief built on this command, the separate `bbc-daily-brief` skill carries the
 ranking rules. Use it only when the user explicitly asks for a brief.
 
 ## Answer a review

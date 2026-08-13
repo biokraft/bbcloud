@@ -18,8 +18,8 @@ pub const SKILLS: [Skill; 2] = [
         content: include_str!("../.agents/skills/bitbucket-cloud/SKILL.md"),
     },
     Skill {
-        name: "bb-daily-brief",
-        content: include_str!("../.agents/skills/bb-daily-brief/SKILL.md"),
+        name: "bbc-daily-brief",
+        content: include_str!("../.agents/skills/bbc-daily-brief/SKILL.md"),
     },
 ];
 
@@ -1547,7 +1547,7 @@ mod tests {
         assert_eq!(SKILLS.len(), 2);
         let names: Vec<&str> = SKILLS.iter().map(|s| s.name).collect();
         assert!(names.contains(&"bitbucket-cloud"));
-        assert!(names.contains(&"bb-daily-brief"));
+        assert!(names.contains(&"bbc-daily-brief"));
         for skill in SKILLS.iter() {
             assert!(
                 skill.content.starts_with("---"),
@@ -1565,8 +1565,8 @@ mod tests {
     #[test]
     fn skill_by_name_resolves_known_and_rejects_unknown() {
         assert_eq!(
-            skill_by_name("bb-daily-brief").map(|s| s.name),
-            Some("bb-daily-brief")
+            skill_by_name("bbc-daily-brief").map(|s| s.name),
+            Some("bbc-daily-brief")
         );
         assert!(skill_by_name("nope").is_none());
     }
@@ -1587,10 +1587,10 @@ mod tests {
             "/p/.agents/skills/other-skill/SKILL.md"
         )));
         assert!(!is_shaped_like_a_skill_path(&PathBuf::from(
-            "/p/.agents/bb-daily-brief/SKILL.md"
+            "/p/.agents/bbc-daily-brief/SKILL.md"
         )));
         assert!(!is_shaped_like_a_skill_path(&PathBuf::from(
-            "/p/.vscode/skills/bb-daily-brief/SKILL.md"
+            "/p/.vscode/skills/bbc-daily-brief/SKILL.md"
         )));
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
     fn state_of_compares_against_each_entrys_own_skill() {
         // A daily-brief file holding daily-brief content is Current, even though
         // it does not match the bitbucket-cloud hash.
-        let brief = skill_by_name("bb-daily-brief").unwrap();
+        let brief = skill_by_name("bbc-daily-brief").unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("SKILL.md");
         std::fs::write(&path, brief.content).unwrap();
@@ -1618,7 +1618,7 @@ mod tests {
             kind: "file".into(),
             sha256: content_hash(brief.content.as_bytes()),
             version: "0.1.0".into(),
-            skill: "bb-daily-brief".into(),
+            skill: "bbc-daily-brief".into(),
         };
         assert_eq!(
             state_of(&entry, &content_hash(brief.content.as_bytes())),
