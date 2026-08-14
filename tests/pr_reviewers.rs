@@ -25,11 +25,11 @@ fn pr_body() -> serde_json::Value {
         "state": "OPEN",
         "reviewers": [
             { "uuid": "{a}", "display_name": "Ana" },
-            { "uuid": "{r}", "display_name": "Raigon Doe" }
+            { "uuid": "{r}", "display_name": "Ash Doe" }
         ],
         "participants": [
             { "role": "REVIEWER", "state": "approved", "user": { "uuid": "{a}", "display_name": "Ana" } },
-            { "role": "REVIEWER", "state": null, "user": { "uuid": "{r}", "display_name": "Raigon Doe" } }
+            { "role": "REVIEWER", "state": null, "user": { "uuid": "{r}", "display_name": "Ash Doe" } }
         ]
     })
 }
@@ -47,9 +47,9 @@ async fn mount_members(server: &MockServer) {
         .and(path("/workspaces/acme/members"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "user": { "uuid": "{p}", "display_name": "Patrick Stein", "nickname": "patrick" } },
+                { "user": { "uuid": "{p}", "display_name": "Dana Stein", "nickname": "dana" } },
                 { "user": { "uuid": "{a}", "display_name": "Ana", "nickname": "ana" } },
-                { "user": { "uuid": "{r}", "display_name": "Raigon Doe", "nickname": "raigon" } }
+                { "user": { "uuid": "{r}", "display_name": "Ash Doe", "nickname": "ash" } }
             ]
         })))
         .mount(server)
@@ -94,7 +94,7 @@ async fn reviewers_list_shows_name_and_state() {
         .success()
         .stdout(contains("Ana"))
         .stdout(contains("approved"))
-        .stdout(contains("Raigon Doe"))
+        .stdout(contains("Ash Doe"))
         .stdout(contains("pending"));
 }
 
@@ -125,10 +125,10 @@ async fn add_puts_the_union_of_old_and_new_reviewers() {
     .await;
 
     bb(&server)
-        .args(["pr", "reviewers", "add", "7", "patrick"])
+        .args(["pr", "reviewers", "add", "7", "dana"])
         .assert()
         .success()
-        .stdout(contains("Patrick Stein"));
+        .stdout(contains("Dana Stein"));
 }
 
 /// Adding someone already tagged must not issue a write; `expect(0)` on the PUT
@@ -160,7 +160,7 @@ async fn remove_puts_the_reduced_set() {
     mount_put_expecting(&server, serde_json::json!([{ "uuid": "{a}" }])).await;
 
     bb(&server)
-        .args(["pr", "reviewers", "remove", "7", "raigon"])
+        .args(["pr", "reviewers", "remove", "7", "ash"])
         .assert()
         .success();
 }
@@ -178,7 +178,7 @@ async fn remove_of_someone_not_tagged_errors_and_sends_no_put() {
         .await;
 
     bb(&server)
-        .args(["pr", "reviewers", "remove", "7", "patrick"])
+        .args(["pr", "reviewers", "remove", "7", "dana"])
         .assert()
         .code(1)
         .stderr(contains("not a reviewer"));
@@ -199,7 +199,7 @@ async fn one_bad_name_in_a_list_prevents_the_whole_put() {
         .await;
 
     bb(&server)
-        .args(["pr", "reviewers", "add", "7", "patrick,nobodyhere"])
+        .args(["pr", "reviewers", "add", "7", "dana,nobodyhere"])
         .assert()
         .code(1)
         .stderr(contains("nobodyhere"));
@@ -220,7 +220,7 @@ async fn a_failed_put_does_not_announce_success() {
         .await;
 
     let out = bb(&server)
-        .args(["pr", "reviewers", "add", "7", "patrick"])
+        .args(["pr", "reviewers", "add", "7", "dana"])
         .output()
         .unwrap();
 

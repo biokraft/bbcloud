@@ -322,11 +322,15 @@ fn auto_refresh_skills(format: Format) {
     if entries.is_empty() || !skill::tracked_version_differs(&entries) {
         return;
     }
-    match skill::refresh_tracked() {
+    // `Preserve` because this call runs ahead of a command the user did not
+    // ask to refresh anything with — a file they deliberately deleted must
+    // stay deleted here. Only explicit `bb skill install`/`bb update` restore
+    // a missing file.
+    match skill::refresh_tracked(skill::MissingPolicy::Preserve) {
         Ok(outcomes) => {
-            // Refreshed and pruned are different events and the line must not
-            // conflate them: "refreshed 2" when both were actually dropped from
-            // the state file reads as a write that never happened.
+            // Refreshed, pruned and failed are different events and the line
+            // must not conflate them: "refreshed 2" when some were actually
+            // dropped or left broken reads as a write that never happened.
             let refreshed = outcomes
                 .iter()
                 .filter(|o| o.action == skill::Action::Refreshed)
@@ -335,7 +339,11 @@ fn auto_refresh_skills(format: Format) {
                 .iter()
                 .filter(|o| o.action == skill::Action::Pruned)
                 .count();
-            if (refreshed > 0 || pruned > 0) && !format.is_json() {
+            let failed = outcomes
+                .iter()
+                .filter(|o| o.action == skill::Action::Failed)
+                .count();
+            if (refreshed > 0 || pruned > 0 || failed > 0) && !format.is_json() {
                 let mut parts = Vec::new();
                 if refreshed > 0 {
                     parts.push(format!(
@@ -350,6 +358,15 @@ fn auto_refresh_skills(format: Format) {
                         if pruned == 1 { "s" } else { "" }
                     ));
                 }
+                // Named once, as a count — not per path — so a read-only
+                // checkout does not spam a line per tracked entry on every
+                // single invocation.
+                if failed > 0 {
+                    parts.push(format!(
+                        "could not refresh {failed} skill file{}",
+                        if failed == 1 { "" } else { "s" }
+                    ));
+                }
                 output::warn(&format!(
                     "{} for bb {}",
                     parts.join(", "),
@@ -358,7 +375,10 @@ fn auto_refresh_skills(format: Format) {
             }
         }
         // The user asked for something else. A read-only filesystem or a
-        // vanished directory must not turn their command into a failure.
+        // vanished directory must not turn their command into a failure. Per
+        // entry write failures no longer reach here at all (see
+        // `refresh_tracked`'s `Action::Failed`) — only `save_state` itself
+        // failing does, which is rare enough that warning every time is fine.
         Err(err) => {
             if !format.is_json() {
                 output::warn(&format!("could not refresh agent skills: {err}"));

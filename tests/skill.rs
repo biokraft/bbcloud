@@ -618,11 +618,46 @@ fn the_brief_skill_addresses_the_user_not_itself() {
 fn no_shipped_skill_text_names_a_real_workspace_or_person() {
     for skill in bb_cli::skill::SKILLS.iter() {
         let lower = skill.content.to_lowercase();
-        for needle in ["check24", "mailgpt", "hyein", "afal-", "bitbucket.org/check"] {
+        for needle in [
+            "check24",
+            "mailgpt",
+            "hyein",
+            "afal-",
+            "bitbucket.org/check",
+        ] {
             assert!(
                 !lower.contains(needle),
                 "{} ships `{needle}` — examples must use the placeholder `acme` workspace",
                 skill.name
+            );
+        }
+    }
+}
+
+/// The denylist above only catches identifiers already known to be real. This
+/// is the positive half: every concrete `-R <workspace>/<repo>` example in the
+/// shipped skill text must use the `acme` workspace, so a *new* real workspace
+/// slug slipping into an example fails the build even before anyone thinks to
+/// add it to the denylist. A bare placeholder like `-R <workspace>/<repo>` is
+/// not a concrete example and is skipped.
+#[test]
+fn every_concrete_repo_flag_example_uses_the_acme_workspace() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let tokens: Vec<&str> = skill.content.split_whitespace().collect();
+        for pair in tokens.windows(2) {
+            if pair[0] != "-R" {
+                continue;
+            }
+            let Some((workspace, _repo)) = pair[1].split_once('/') else {
+                continue;
+            };
+            if workspace.starts_with('<') || workspace.starts_with('$') {
+                continue; // a placeholder, not a concrete example
+            }
+            assert_eq!(
+                workspace, "acme",
+                "{} uses `-R {}` — concrete examples must use the acme workspace",
+                skill.name, pair[1]
             );
         }
     }
@@ -832,4 +867,37 @@ fn a_state_entry_under_a_deleted_tree_is_pruned_by_any_command() {
         "the vanished entry should be gone from status: {stdout}"
     );
     assert!(!gone.exists(), "pruning must not recreate the tree");
+}
+
+/// The design ruling for finding 4: the pre-command auto-refresh must never
+/// resurrect a file the user deleted on purpose. Only `bb skill install` and
+/// `bb update` restore a missing file (see
+/// `tests/update.rs::update_restores_a_deleted_skill_file` for the contrast).
+/// A `Missing` entry the auto-refresh declines to restore must also stay
+/// tracked with its old version, not get stamped as if it were current.
+#[test]
+fn auto_refresh_leaves_a_deliberately_deleted_file_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    let path = dir.path().join(".agents/skills/bitbucket-cloud/SKILL.md");
+    assert!(path.is_file(), "sanity: install wrote the file");
+    std::fs::remove_file(&path).unwrap();
+    age_the_state_file(dir.path());
+
+    bb_in(dir.path())
+        .args(["completions", "bash"])
+        .assert()
+        .success();
+
+    assert!(
+        !path.exists(),
+        "auto-refresh must not silently write a deleted skill file back"
+    );
+    assert!(
+        state_versions(dir.path()).iter().any(|v| v == "0.0.1"),
+        "the entry for the deleted file must keep its old version, not be stamped current"
+    );
 }

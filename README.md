@@ -21,8 +21,8 @@ $ bb pr list --build
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ID   TITLE                      STATE   BUILD        SOURCE           →   TARGET   AUTHOR   REVIEWERS    │
 ╞══════════════════════════════════════════════════════════════════════════════════════════════════════════╡
-│ 42   Cache session lookups      Open    SUCCESSFUL   feat/cache       →   main     dev      Patrick ✓    │
-│ 41   Fix token refresh window   Draft   FAILED       fix/token-clock  →   main     dev      Linus ·      │
+│ 42   Cache session lookups      Open    SUCCESSFUL   feat/cache       →   main     dev      Dana ✓       │
+│ 41   Fix token refresh window   Draft   FAILED       fix/token-clock  →   main     dev      Ash ·        │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,7 +170,7 @@ bb pr list                                # open PRs, with state and per-reviewe
 bb pr list --needs-my-review              # only PRs waiting on your review
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
 bb pr build 42                            # one PR's checks: key, name, state, url
-bb pr reviewers add 42 patrick            # tag a reviewer; comma-separate for several
+bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread

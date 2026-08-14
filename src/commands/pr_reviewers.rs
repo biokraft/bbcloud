@@ -135,7 +135,7 @@ pub async fn remove(ctx: &Ctx, id: u64, names: &str) -> Result<()> {
     let mut uuids = current_uuids(&pr);
     let mut removed: Vec<String> = Vec::new();
     for user in &resolved {
-        // A silent no-op would let "remove Raigon" look like it worked when it
+        // A silent no-op would let "remove Ash" look like it worked when it
         // matched nobody on this pull request.
         let uuid = user
             .uuid

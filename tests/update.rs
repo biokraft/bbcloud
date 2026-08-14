@@ -441,3 +441,52 @@ async fn update_never_touches_the_real_config_path() {
         "the overridden config dir should be the one bb actually used"
     );
 }
+
+/// `bb update` is one of the two call sites (with `bb skill install`) that
+/// pass `MissingPolicy::Restore` to `refresh_tracked`, because there a human
+/// explicitly asked for the skill files to be brought current. Deleting a
+/// tracked file and then running `update` must bring it back — the opposite
+/// of what the pre-command auto-refresh does for the same situation (see
+/// `tests/skill.rs::auto_refresh_leaves_a_deliberately_deleted_file_deleted`).
+#[tokio::test]
+async fn update_restores_a_deleted_skill_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/biokraft/bbcloud/releases/latest"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(release_body(&format!("v{}", env!("CARGO_PKG_VERSION")))),
+        )
+        .mount(&server)
+        .await;
+
+    let (mut cmd, cfg) = bb(&server.uri());
+    let project = tempfile::tempdir().unwrap();
+    cmd.current_dir(project.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+
+    let path = project
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md");
+    assert!(path.is_file(), "sanity: install wrote the file");
+    std::fs::remove_file(&path).unwrap();
+
+    Command::cargo_bin("bb")
+        .unwrap()
+        .env("HOME", cfg.path())
+        .env("XDG_CONFIG_HOME", cfg.path())
+        .env("BB_UPDATE_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .current_dir(project.path())
+        .arg("update")
+        .assert()
+        .success();
+
+    assert!(
+        path.is_file(),
+        "bb update must restore a deleted tracked skill file"
+    );
+}

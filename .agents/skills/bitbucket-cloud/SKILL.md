@@ -30,7 +30,7 @@ bb pr list --json                          # open pull requests
 bb pr list main --state MERGED --json      # filter by target branch and state
 bb pr list --state all --json              # every state, not just OPEN
 bb pr list --needs-my-review --json        # I'm a reviewer and haven't approved yet
-bb pr list --reviewer patrick --json       # PRs that person is tagged on
+bb pr list --reviewer dana --json       # PRs that person is tagged on
 bb pr list --author @me --json             # PRs I opened; @me resolves the authenticated account
 bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
 bb pr list --build --json                  # add BUILD column: worst-wins rollup per PR
@@ -165,8 +165,8 @@ bb pr no-request-changes 42 --json
 
 ```bash
 bb pr reviewers 42 --json                     # list, same as `list`
-bb pr reviewers add 42 patrick,raigon --json  # tag reviewers, comma-separated
-bb pr reviewers remove 42 raigon --json       # untag a reviewer
+bb pr reviewers add 42 dana,ash --json  # tag reviewers, comma-separated
+bb pr reviewers remove 42 ash --json       # untag a reviewer
 ```
 
 Names match case-insensitively as a substring of display name or nickname, against the
