@@ -33,7 +33,8 @@ git log --oneline --decorate -1 "$(git merge-base HEAD origin/main)"
 ```
 
 If the source branch's history does not descend from the main branch, ask the user what to
-target.
+target. Whatever you determine here is "the target branch" for the rest of this skill — use it,
+not a hardcoded `main`, in every merge-base command below.
 
 **If the repository squash-merges, the pull request title becomes the commit message.** Where
 the repository parses commits — a conventional-commit changelog, release automation — the
@@ -50,12 +51,20 @@ The default reviewers are a static list. The people who wrote the code you chang
 history. Get the changed files first, then their history:
 
 ```bash
-git diff --name-only "$(git merge-base HEAD origin/main)"..HEAD
+git diff --name-only "$(git merge-base HEAD origin/<target>)"..HEAD
 git log --follow --format='%an|%ae|%ad' --date=short -- <file>
 ```
 
+Use the target branch from Step 1 in place of `<target>` above — not `main`. For a branch cut
+from a release or integration branch, diffing against `main` pulls in that branch's files too,
+and ranks people who never touched this change.
+
 `--follow` matters: a renamed file still reports the people who worked on it under its old
 name, and those are exactly the people you want.
+
+The `%ae` email is for telling apart two commits from the same person written under different
+name spellings — it is never something to pass to `bb pr reviewers add`, which rejects an
+email outright.
 
 Rank candidates by **commits in the last twelve months**, not all-time count. Someone who
 wrote one line in 2019 is not the reviewer; whoever has been maintaining the file is. Then:
@@ -70,26 +79,40 @@ wrote one line in 2019 is not the reviewer; whoever has been maintaining the fil
 ## Step 3 — resolve those names against Bitbucket
 
 Git records an author as a name and an email. `bb pr reviewers add` resolves a
-case-insensitive substring of a Bitbucket display name or nickname. The two do not always
-coincide, and an unresolvable name fails at add time with exit 1 — after the pull request
+case-insensitive substring of a Bitbucket display name or nickname, matched against workspace
+members, the repository's permission-config users, and its default reviewers — a pool no `bb`
+command lists. An unresolvable name fails at add time with exit 1 — after the pull request
 already exists.
 
-So resolve before you suggest. List the repository's resolvable users:
+No command can tell you the full resolvable pool, so resolvability cannot be fully verified
+before the write. The best available read-only approximation is the names Bitbucket already
+shows on this repository's pull requests — anyone who has authored or reviewed recently is most
+plausible as a reviewer for a new one:
 
 ```bash
-bb pr reviewers <any-open-pr-id> --json      # who is already tagged there
+bb pr list --state ALL --json      # each row's author and reviewers[]
 ```
 
-If no open pull request exists to read, resolve each candidate by attempting nothing and
-instead relying on `bb pr reviewers add`'s own error, which lists candidates when a name is
-ambiguous — but say plainly in your suggestion that the name is unverified.
+Build a name pool from every `author` and every entry in `reviewers[]` across that list. Match
+each candidate's git name against the pool the same way `bb pr reviewers add` does: a
+case-insensitive substring.
 
-Suggest only candidates you could map. Then list the ones you could not, under the heading
-`could not be mapped`, with their git names. Never silently drop them: the most likely
-reviewer is often behind a name-format mismatch, and the user can map them by hand in one
-word.
+- A candidate that matches the pool is a reasonably safe suggestion.
+- A candidate that does not match the pool is not necessarily unresolvable — the pool is only an
+  approximation — but suggest them labeled explicitly as **unverified**, so the user knows the
+  add can still fail with exit 1.
+- A candidate you cannot match at all — no plausible name in the pool, nothing close — goes
+  under the heading `could not be mapped`, with their git name. Never silently drop them: the
+  most likely reviewer is often behind a name-format mismatch, and the user can map them by hand
+  in one word.
 
 If a name is ambiguous, pass the account's `{uuid}` in braces to skip name matching entirely.
+The only source for a uuid is `bb pr reviewers <pr-id> --json` on some pull request the person
+is already tagged on — so this only works for people who have reviewed before. When no uuid is
+available, ask the user for the person's exact Bitbucket display name instead of guessing.
+
+Every one of these checks happens before any write: one bad name in a later `add` call fails
+the whole call, but nothing has been created yet at this point.
 
 ## Step 4 — draft the description, then get it approved
 

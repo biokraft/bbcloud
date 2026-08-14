@@ -1078,14 +1078,29 @@ fn the_main_skill_points_at_the_open_pr_skill() {
 /// The load-bearing regression guard. The integration suite, CI, and
 /// `auto_refresh_skills` all run without a terminal. If a prompt ever appears on
 /// that path it hangs the suite, so a non-interactive install must still take
-/// every skill and ask nothing.
+/// every skill and ask nothing — even in human format, where the prompt would
+/// otherwise fire. Piped stdin (via `assert_cmd`'s default, non-tty stdin) is
+/// what stands in for "no terminal" here, and human format (no `--json`) is
+/// what makes this test distinct from `install_writes_every_skill`: it is the
+/// only one of the two conditions that path checks that a JSON-mode test can't
+/// also exercise.
 #[test]
 fn install_without_a_terminal_still_takes_every_skill() {
     let dir = tempfile::tempdir().unwrap();
-    bb_in(dir.path())
-        .args(["skill", "install", "--agent", "agents", "--json"])
-        .assert()
-        .success();
+    let out = bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("Which skills should be installed"),
+        "prompt text leaked onto stderr without a terminal: {stderr}"
+    );
     for skill in bb_cli::skill::SKILLS.iter() {
         let path = dir
             .path()
