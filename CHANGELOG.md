@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0](https://github.com/biokraft/bbcloud/compare/v0.15.3...v0.16.0) - 2026-08-14
+
+### Added
+
+- *(skill)* add bbc-open-pr and let skill install ask what to install ([#32](https://github.com/biokraft/bbcloud/pull/32))
+
 ## [0.15.3](https://github.com/biokraft/bbcloud/compare/v0.15.2...v0.15.3) - 2026-08-14
 
 ### Added
