@@ -9,16 +9,21 @@ use std::path::{Path, PathBuf};
 /// skill can never describe a flag this binary lacks.
 pub struct Skill {
     pub name: &'static str,
+    /// One line, shown as this skill's row in the `bb skill install` prompt.
+    /// Kept short enough to render on a narrow terminal.
+    pub summary: &'static str,
     pub content: &'static str,
 }
 
 pub const SKILLS: [Skill; 2] = [
     Skill {
         name: "bitbucket-cloud",
+        summary: "read, review and comment on Bitbucket Cloud pull requests",
         content: include_str!("../.agents/skills/bitbucket-cloud/SKILL.md"),
     },
     Skill {
         name: "bbc-daily-brief",
+        summary: "a ranked morning brief of the pull requests waiting on you",
         content: include_str!("../.agents/skills/bbc-daily-brief/SKILL.md"),
     },
 ];

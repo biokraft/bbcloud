@@ -963,3 +963,24 @@ fn auto_refresh_leaves_a_deliberately_deleted_file_deleted() {
         "the entry for the deleted file must keep its old version, not be stamped current"
     );
 }
+
+/// Every skill carries a one-line summary, because the install prompt lists them
+/// by that line. An empty or over-long summary makes the prompt useless.
+#[test]
+fn every_skill_carries_a_short_summary() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let summary = skill.summary;
+        assert!(!summary.trim().is_empty(), "{} has no summary", skill.name);
+        assert!(
+            summary.len() <= 80,
+            "{}'s summary is {} chars — the prompt shows one line",
+            skill.name,
+            summary.len()
+        );
+        assert!(
+            !summary.contains('\n'),
+            "{}'s summary spans lines",
+            skill.name
+        );
+    }
+}
