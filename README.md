@@ -64,6 +64,31 @@ Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknow
 The cargo routes install `bb` into `~/.cargo/bin` — add that to your `PATH` if the command isn't
 found afterwards.
 
+## Get started
+
+Three commands, once per machine:
+
+```bash
+brew install biokraft/tap/bb   # 1. install
+bb auth login                  # 2. authenticate — walks you through creating a scoped token
+bb skill install --global      # 3. teach your coding agents to drive bb
+```
+
+`bb auth login` prints the token URL and the exact scopes to grant, then verifies the token before
+storing it in your OS keyring — see [Authenticate](#authenticate) for the scope table and for CI
+machines that have no keyring.
+
+`bb skill install --global` installs both agent skills under your home directory, so every project
+picks them up; drop `--global` to install into the current project only. See
+[Agent skills](#agent-skills) for what they contain.
+
+Then, in any repository with a Bitbucket remote:
+
+```bash
+bb pr list --build   # this repository
+bb pr mine           # every repository you work in
+```
+
 ## Agent skills
 
 This repository ships two [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
@@ -73,12 +98,6 @@ comment and reply flags, the exit codes, and what to do when a scope is missing.
 agent to answer comment threads and report them, and to leave the resolve decision to you.
 `bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
 explicitly ask for one.
-
-Install both into a project:
-
-```bash
-bb skill install
-```
 
 `bb skill install` writes both skills — `bitbucket-cloud` and `bbc-daily-brief`. Pass
 `--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
@@ -115,9 +134,10 @@ Each agent loads the skill by itself when a task touches Bitbucket. To force it,
 Atlassian **removed Bitbucket Cloud app passwords on 2026-07-28.** `bb` uses an Atlassian API token,
 sent as HTTP Basic auth with your account email as the username.
 
-1. Create a token at <https://id.atlassian.com/manage-profile/security/api-tokens>, selecting the
-   scopes below.
-2. Run `bb auth login` and paste it — the input is masked and never echoed.
+`bb auth login` walks you through it: it prints the token URL and the scopes below, prompts for
+your email and the token — masked, never echoed — and verifies the token against `/user` before
+storing it, so a token with the wrong scopes is rejected at login rather than at the first command
+that needs them.
 
 ```bash
 bb auth login     # prompts, verifies the token, then stores it in the OS keyring

@@ -7,6 +7,66 @@ use serde::Serialize;
 
 const TOKEN_HELP_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
+/// The scopes `bb` needs, with what each one buys. `read:user:bitbucket` is
+/// first because login itself fails without it, and the write scope is last
+/// because everything read-only works without it — a reader can stop at three.
+const SCOPES: [(&str, &str); 4] = [
+    (
+        "read:user:bitbucket",
+        "required — login verifies the token against /user",
+    ),
+    (
+        "read:pullrequest:bitbucket",
+        "pr list, view, diff, files, commits, mine",
+    ),
+    (
+        "read:repository:bitbucket",
+        "branch list, default reviewers, the pr mine scan",
+    ),
+    (
+        "write:pullrequest:bitbucket",
+        "pr create, comment, resolve, request-changes",
+    ),
+];
+
+/// Printed before the prompts, because a token created without scopes — or with
+/// the wrong ones — fails verification and the user has no way to guess which of
+/// the two dozen Bitbucket scopes this tool wanted.
+fn print_onboarding() {
+    output::heading("bb authenticates with an atlassian api token");
+    output::info("app passwords were removed by atlassian on 2026-07-28 — a token is the only way");
+    println!();
+    output::info(&format!("1. open {TOKEN_HELP_URL}"));
+    output::info("2. choose \"Create API token with scopes\", then pick Bitbucket as the product");
+    output::info("3. grant these scopes:");
+    let width = SCOPES.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+    for (scope, why) in SCOPES {
+        println!("     {scope:<width$}  {why}");
+    }
+    output::info("   the write scope is only needed to create pull requests and comment");
+    output::info("4. copy the token — atlassian shows it once — and paste it below");
+    println!();
+}
+
+/// The likely cause of a failed verification, or `None` when the failure says
+/// nothing about credentials. Printed as a warning rather than folded into the
+/// error, so the exit code stays what the http layer decided: `check()` renders
+/// every 401 as "not authenticated" and every 403 as a scope problem in general
+/// terms, neither of which helps someone who has just typed a brand-new token.
+fn verification_hint(err: &BbError) -> Option<&'static str> {
+    match err {
+        BbError::Auth => Some(
+            "the email or token was rejected — the username must be your atlassian account \
+             email, and the password the api token itself, not your atlassian password",
+        ),
+        BbError::Api { status: 403, .. } => Some(
+            "the token was accepted but is missing the read:user:bitbucket scope — \
+             create a new token with that scope granted",
+        ),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuthStatus {
     pub email: String,
@@ -42,8 +102,7 @@ fn print_status(format: Format, status: &AuthStatus, unverified_label: &str) -> 
 
 pub async fn login(email: Option<String>, token_stdin: bool, format: Format) -> Result<()> {
     if !format.is_json() {
-        output::info("bb authenticates with an atlassian api token");
-        output::info(&format!("create one at {TOKEN_HELP_URL}"));
+        print_onboarding();
     }
 
     // Never block on input that will not arrive: if stdin is not a terminal and
@@ -91,8 +150,17 @@ pub async fn login(email: Option<String>, token_stdin: bool, format: Format) -> 
     // Verify before persisting, so a bad token is never stored.
     let spinner = output::spinner("verifying token");
     let client = Client::from_env(creds.clone())?;
-    let user: crate::api::models::User = client.get_json("/user").await?;
+    let verified = client.get_json::<crate::api::models::User>("/user").await;
     spinner.finish_and_clear();
+    let user = match verified {
+        Ok(user) => user,
+        Err(err) => {
+            if let Some(hint) = verification_hint(&err) {
+                output::warn(hint);
+            }
+            return Err(err);
+        }
+    };
 
     credentials::store(&email, &token)?;
 
