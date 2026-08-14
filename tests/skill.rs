@@ -663,6 +663,41 @@ fn every_concrete_repo_flag_example_uses_the_acme_workspace() {
     }
 }
 
+/// `owner/repo#123` is GitHub's issue-reference syntax, and chat clients and
+/// terminals rewrite it into a link to github.com. A brief about Bitbucket work
+/// that renders it sends the reader to a GitHub 404 — which is exactly what
+/// happened before this rule existed. No shipped skill text may contain that
+/// shape; identifiers are written `PR <id>` with a real Bitbucket url.
+#[test]
+fn no_shipped_skill_text_uses_the_github_issue_shorthand() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        for (i, line) in skill.content.lines().enumerate() {
+            // `<word>/<word>#<digits>` — the shape clients auto-link.
+            let offending = line.split_whitespace().find(|token| {
+                let token = token.trim_start_matches(['(', '[', '`']);
+                match token.split_once('#') {
+                    Some((path, rest)) => {
+                        path.contains('/')
+                            && !path.contains("://")
+                            && !rest.is_empty()
+                            && rest.chars().take_while(|c| c.is_ascii_digit()).count() > 0
+                            && rest.starts_with(|c: char| c.is_ascii_digit())
+                    }
+                    None => false,
+                }
+            });
+            assert!(
+                offending.is_none(),
+                "{} line {} writes `{}` — clients auto-link `owner/repo#id` to github.com; \
+                 use `PR <id>` with the row's own url instead",
+                skill.name,
+                i + 1,
+                offending.unwrap_or_default()
+            );
+        }
+    }
+}
+
 /// The brief's emoji are visual anchors, not decoration: five glyphs, each with
 /// one meaning. This asserts the allowlist rather than a denylist, so a cheerful
 /// 🚀 added later fails the build instead of shipping — the value of the anchors

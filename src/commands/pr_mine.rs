@@ -83,6 +83,20 @@ impl Origin {
     }
 }
 
+/// The browser url for a pull request. Bitbucket normally supplies it in
+/// `links.html.href`, and that value is preferred; when it is absent
+/// `html_url()` yields `"-"`, which would reach a consumer as a dead link — and
+/// the daily brief renders this field as a clickable link, so a placeholder is
+/// worse than a reconstruction. The web url is stable and derivable from the
+/// repository and the id, so derive it.
+fn browse_url(repo: &str, pr: &PullRequest) -> String {
+    let from_api = pr.html_url();
+    if from_api != "-" {
+        return from_api.to_string();
+    }
+    format!("https://bitbucket.org/{repo}/pull-requests/{}", pr.id)
+}
+
 fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
     let reviewers = pr.reviewer_states();
     let my_review_state = reviewers
@@ -99,7 +113,7 @@ fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
         repo: repo.to_string(),
         id: pr.id,
         title: pr.title.clone().unwrap_or_default(),
-        url: pr.html_url().to_string(),
+        url: browse_url(repo, pr),
         state: pr.state.clone().unwrap_or_else(|| "-".into()),
         draft: pr.draft,
         author: pr.author_name().to_string(),
@@ -474,4 +488,36 @@ fn render(format: Format, rows: Vec<MineRow>, partial: Vec<String>, build: bool)
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn pr_from(json: &str) -> PullRequest {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn browse_url_prefers_the_api_link() {
+        let pr = pr_from(
+            r#"{"id":42,"links":{"html":{"href":"https://bitbucket.org/acme/api/pull-requests/42"}}}"#,
+        );
+        assert_eq!(
+            browse_url("acme/api", &pr),
+            "https://bitbucket.org/acme/api/pull-requests/42"
+        );
+    }
+
+    #[test]
+    fn browse_url_is_derived_when_the_api_omits_the_link() {
+        // `html_url()` yields "-" here, which would reach the daily brief as a
+        // dead markdown link.
+        let pr = pr_from(r#"{"id":42}"#);
+        assert_eq!(
+            browse_url("acme/api", &pr),
+            "https://bitbucket.org/acme/api/pull-requests/42"
+        );
+    }
 }
