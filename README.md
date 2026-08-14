@@ -79,7 +79,7 @@ bb skill install --global      # 3. teach your coding agents to drive bb
 storing it in your OS keyring — see [Authenticate](#authenticate) for the scope table and for CI
 machines that have no keyring.
 
-`bb skill install --global` installs both agent skills under your home directory, so every project
+`bb skill install --global` installs the agent skills under your home directory, so every project
 picks them up; drop `--global` to install into the current project only. See
 [Agent skills](#agent-skills) for what they contain.
 
@@ -92,21 +92,26 @@ bb pr mine           # every repository you work in
 
 ## Agent skills
 
-This repository ships two [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
-Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to review
-pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
-comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
-agent to answer comment threads and report them, and to leave the resolve decision to you.
-`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
-explicitly ask for one.
+This repository ships several [Agent Skills](.agents/skills/) — the portable `SKILL.md` format
+that Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to
+review pull requests through `bb` rather than ask you to open a browser: the `--json` contract,
+the comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells
+the agent to answer comment threads and report them, and to leave the resolve decision to you.
+`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when
+you explicitly ask for one. `bbc-open-pr` walks the agent through opening a pull request: it
+suggests reviewers by scanning the recent history of the files the change touches, resolving each
+name against Bitbucket before it is suggested, and it prints the drafted description back to you
+for approval before creating anything.
 
-`bb skill install` writes both skills — `bitbucket-cloud` and `bbc-daily-brief`. Pass
-`--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
-the `bb` binary, so this needs no network and no credentials. It detects which agents the project
-uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/` means the portable
-location — and defaults to `.agents/skills/` if it finds none. Pass `--agent agents|claude|all` to
-pick explicitly, or `--global` to install under your home directory instead, so every project
-picks it up.
+The skill text ships inside the `bb` binary, so `bb skill install` needs no network and no
+credentials. Run it on a terminal with none of `--skill`, `--all` or `--json`, and it asks which
+skills to install; pick none and it exits 0 having written nothing. Pass `--all` to install every
+skill without asking, or `--skill <name>` to install (or uninstall) exactly one. Any non-interactive
+run — CI, piped stdin, or `--json` — installs every skill and prompts for nothing. It detects which
+agents the project uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/`
+means the portable location — and defaults to `.agents/skills/` if it finds none. Pass
+`--agent agents|claude|all` to pick explicitly, or `--global` to install under your home directory
+instead, so every project picks it up.
 
 | Agent | Discovers skills in | Extra step |
 | --- | --- | --- |
