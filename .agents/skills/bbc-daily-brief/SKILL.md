@@ -130,22 +130,36 @@ preamble, no closing offer of help.
 2 need you · 1 waiting on others · 1 quiet
 
 🔴 YOU'RE BLOCKING
-  acme/api#225  Validate mapi responses
+  [acme/api PR 225](https://bitbucket.org/acme/api/pull-requests/225)  Validate mapi responses
     Your review is pending · 4h old
     → bb pr view 225 -R acme/api --unresolved --json
 
-  acme/web#206  Add guardrail hooks
+  [acme/web PR 206](https://bitbucket.org/acme/web/pull-requests/206)  Add guardrail hooks
     💥 Build failed, changes requested by Dana · 5d old — oldest here
     → bb pr diff 206 -R acme/web
 
 ⏳ WAITING ON OTHERS
-  acme/api#221  Dana hasn't replied to your 2 threads · 3d
+  [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  Dana hasn't replied to your 2 threads · 3d
 
 ✅ READY TO MERGE
-  acme/api#198  Approved by Dana, build green · 2d
+  [acme/api PR 198](https://bitbucket.org/acme/api/pull-requests/198)  Approved by Dana, build green · 2d
 
 💤 1 quiet (1 draft)
 ```
+
+### Linking, and one shape to never write
+
+Every entry's identifier is a markdown link whose target is that row's own `url` field — never a
+url you assembled yourself, and never the plain repository path.
+
+**Never write a repository path followed by a hash and the number.** That shape is GitHub's
+issue-reference syntax: chat clients and terminals silently rewrite it into a link to `github.com`,
+so a brief about Bitbucket work sends the reader to a GitHub 404. Write
+`[acme/api PR 225](<url>)` instead — the words `PR` and the id, with the real Bitbucket url as the
+link target.
+
+In the repo-scoped mode `bb pr list` supplies the same `url` field per row, so the rule is identical
+there.
 
 ### The emoji vocabulary
 
