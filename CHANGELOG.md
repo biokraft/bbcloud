@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0](https://github.com/biokraft/bbcloud/compare/v0.14.0...v0.15.0) - 2026-08-14
+
+### Fixed
+
+- *(skill)* keep installed skills current, and make the daily brief readable ([#24](https://github.com/biokraft/bbcloud/pull/24))
+
 ## [0.14.0](https://github.com/biokraft/bbcloud/compare/v0.13.0...v0.14.0) - 2026-08-13
 
 ### Fixed
