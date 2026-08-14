@@ -129,28 +129,49 @@ preamble, no closing offer of help.
 ```
 2 need you · 1 waiting on others · 1 quiet
 
-YOU'RE BLOCKING
+🔴 YOU'RE BLOCKING
   acme/api#225  Validate mapi responses
     Your review is pending · 4h old
     → bb pr view 225 -R acme/api --unresolved --json
 
   acme/web#206  Add guardrail hooks
-    Your review is pending · 5d old — oldest here
-    → bb pr view 206 -R acme/web --unresolved --json
+    💥 Build failed, changes requested by Dana · 5d old — oldest here
+    → bb pr diff 206 -R acme/web
 
-WAITING ON OTHERS
-  #221  Dana hasn't replied to your 2 threads · 3d
+⏳ WAITING ON OTHERS
+  acme/api#221  Dana hasn't replied to your 2 threads · 3d
 
-1 quiet (1 draft)
+✅ READY TO MERGE
+  acme/api#198  Approved by Dana, build green · 2d
+
+💤 1 quiet (1 draft)
 ```
 
-Rules for that shape:
+### The emoji vocabulary
 
-- The verdict line is always present, even when it reads `nothing needs you`.
+Exactly five glyphs, each earning its place as a visual anchor. **Use no others** — a brief peppered
+with decoration is harder to scan than one with none, which defeats the point.
+
+| Glyph | Means | Where |
+|---|---|---|
+| 🔴 | this is on you | the `YOU'RE BLOCKING` heading |
+| ⏳ | waiting on someone else | the `WAITING ON OTHERS` heading |
+| ✅ | nothing left to do but merge | the `READY TO MERGE` heading |
+| 💥 | a build is failing or stopped | on the entry line, before the reason |
+| 💤 | nothing needed here | the quiet tail |
+
+🔴, ⏳, ✅ and 💤 appear once each at most, on their own heading or tail line. 💥 is the only one that
+repeats, and only on entries whose `build_state` is `failed` or `stopped`.
+
+### Rules for that shape
+
+- The verdict line is always present and carries no emoji, even when it reads `nothing needs you`.
 - A group heading appears only when it has entries.
-- `YOU'RE BLOCKING` holds ranking rungs 1–3, and every entry carries one command line prefixed `→`.
-- `WAITING ON OTHERS` holds rungs 4–5. Those need no command: name who owes the reply and how long
-  it has been. Add a command only when there is something useful to run.
+- `🔴 YOU'RE BLOCKING` holds ranking rungs 1–3, and every entry carries one command line prefixed `→`.
+- `⏳ WAITING ON OTHERS` holds rung 5. It needs no command: name who owes the reply and how long it
+  has been. Add a command only when there is something useful to run.
+- `✅ READY TO MERGE` holds rung 4. Merging is the user's decision and `bb` cannot do it, so give no
+  command — say it is approved and green.
 - The quiet tail is a count with a parenthesised breakdown, never a list.
 - Ages are short: `4h`, `3d`. Mark the oldest entry in a group with `— oldest here`.
 - Address the user directly throughout, per rule 6.

@@ -663,6 +663,33 @@ fn every_concrete_repo_flag_example_uses_the_acme_workspace() {
     }
 }
 
+/// The brief's emoji are visual anchors, not decoration: five glyphs, each with
+/// one meaning. This asserts the allowlist rather than a denylist, so a cheerful
+/// 🚀 added later fails the build instead of shipping — the value of the anchors
+/// is that a reader can scan them, and that only holds while they stay scarce.
+#[test]
+fn the_brief_skill_uses_only_the_allowed_emoji() {
+    const ALLOWED: [char; 5] = ['🔴', '⏳', '✅', '💥', '💤'];
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
+        .unwrap()
+        .content;
+    for c in text.chars() {
+        let pictographic = matches!(c as u32,
+            0x1F300..=0x1FAFF   // emoji proper
+            | 0x2600..=0x27BF   // misc symbols and dingbats
+            | 0x2B00..=0x2BFF); // arrows and stars block used by emoji
+        if pictographic && !ALLOWED.contains(&c) {
+            panic!(
+                "bbc-daily-brief ships an unlisted emoji `{c}` (U+{:04X})",
+                c as u32
+            );
+        }
+    }
+    for c in ALLOWED {
+        assert!(text.contains(c), "the brief no longer documents `{c}`");
+    }
+}
+
 #[test]
 fn the_brief_skill_carries_the_grouped_output_contract() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
