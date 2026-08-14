@@ -432,15 +432,17 @@ fn skill_documents_build_status() {
 }
 
 #[test]
-fn install_writes_both_skills() {
+fn install_writes_every_skill() {
     let dir = tempfile::tempdir().unwrap();
     bb_in(dir.path())
         .args(["skill", "install", "--agent", "agents", "--json"])
         .assert()
         .success();
-    for name in ["bitbucket-cloud", "bbc-daily-brief"] {
-        let path = dir.path().join(format!(".agents/skills/{name}/SKILL.md"));
-        assert!(path.is_file(), "{name} was not installed");
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let path = dir
+            .path()
+            .join(format!(".agents/skills/{}/SKILL.md", skill.name));
+        assert!(path.is_file(), "{} was not installed", skill.name);
     }
 }
 
@@ -962,4 +964,192 @@ fn auto_refresh_leaves_a_deliberately_deleted_file_deleted() {
         state_versions(dir.path()).iter().any(|v| v == "0.0.1"),
         "the entry for the deleted file must keep its old version, not be stamped current"
     );
+}
+
+/// The workflow skill is only useful if it carries the whole flow: the two
+/// commands it drives, the git scan that produces suggestions, and the two human
+/// gates. Each assertion is a step someone could quietly drop.
+#[test]
+fn the_open_pr_skill_carries_the_whole_workflow() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    for needle in [
+        "bb pr create",
+        "bb pr reviewers add",
+        "git log",
+        "--follow",
+        "## Why",
+        "## What changed",
+    ] {
+        assert!(
+            text.contains(needle),
+            "bbc-open-pr no longer documents `{needle}`"
+        );
+    }
+}
+
+/// Bitbucket Cloud strips raw HTML from pull request descriptions, so the
+/// GitHub collapsible idiom renders as nothing. This is the single most likely
+/// well-meaning regression in this file, hence a test rather than a comment.
+#[test]
+fn the_open_pr_skill_never_suggests_html_collapsibles() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    for tag in ["<details", "<summary", "<br", "<div"] {
+        assert!(
+            !text.contains(tag),
+            "bbc-open-pr suggests `{tag}` — Bitbucket renders no raw HTML in descriptions"
+        );
+    }
+}
+
+/// The reviewer gate and the description gate are the reason this skill exists:
+/// an agent must never tag people or open a PR body the user has not seen.
+#[test]
+fn the_open_pr_skill_keeps_both_human_gates() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr")
+        .unwrap()
+        .content
+        .to_lowercase();
+    assert!(
+        text.contains("print the description back"),
+        "the description-approval gate is gone"
+    );
+    assert!(
+        text.contains("never tag anyone the user did not pick"),
+        "the reviewer-consent rule is gone"
+    );
+}
+
+/// A pick that cannot resolve fails at `bb pr reviewers add` time with exit 1,
+/// so the skill resolves names against the repository's user pool *before* it
+/// suggests them, and says so.
+#[test]
+fn the_open_pr_skill_resolves_names_before_suggesting() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    assert!(text.contains("bb pr reviewers"));
+    assert!(
+        text.to_lowercase().contains("could not be mapped"),
+        "unmappable git authors must still be reported, not dropped"
+    );
+}
+
+/// Every skill carries a one-line summary, because the install prompt lists them
+/// by that line. An empty or over-long summary makes the prompt useless.
+#[test]
+fn every_skill_carries_a_short_summary() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let summary = skill.summary;
+        assert!(!summary.trim().is_empty(), "{} has no summary", skill.name);
+        assert!(
+            summary.len() <= 80,
+            "{}'s summary is {} chars — the prompt shows one line",
+            skill.name,
+            summary.len()
+        );
+        assert!(
+            !summary.contains('\n'),
+            "{}'s summary spans lines",
+            skill.name
+        );
+    }
+}
+
+/// The main skill stays the command reference — an agent that installed only
+/// this one must still be able to open a pull request — but the workflow lives
+/// in `bbc-open-pr`, and this skill points at it rather than repeating it.
+#[test]
+fn the_main_skill_points_at_the_open_pr_skill() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("bbc-open-pr"),
+        "the main skill does not point at the workflow skill"
+    );
+    assert!(
+        text.contains("bb pr create <target>"),
+        "the command map must still carry bb pr create"
+    );
+    assert!(
+        !text.contains("## What changed"),
+        "the description template belongs to bbc-open-pr only"
+    );
+}
+
+/// The load-bearing regression guard. The integration suite, CI, and
+/// `auto_refresh_skills` all run without a terminal. If a prompt ever appears on
+/// that path it hangs the suite, so a non-interactive install must still take
+/// every skill and ask nothing — even in human format, where the prompt would
+/// otherwise fire. Piped stdin (via `assert_cmd`'s default, non-tty stdin) is
+/// what stands in for "no terminal" here, and human format (no `--json`) is
+/// what makes this test distinct from `install_writes_every_skill`: it is the
+/// only one of the two conditions that path checks that a JSON-mode test can't
+/// also exercise.
+#[test]
+fn install_without_a_terminal_still_takes_every_skill() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("Which skills should be installed"),
+        "prompt text leaked onto stderr without a terminal: {stderr}"
+    );
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let path = dir
+            .path()
+            .join(format!(".agents/skills/{}/SKILL.md", skill.name));
+        assert!(
+            path.is_file(),
+            "{} was not installed on the non-interactive path",
+            skill.name
+        );
+    }
+}
+
+/// `--all` is the deliberate opt-out of the prompt, so it must behave exactly
+/// like the non-interactive default.
+#[test]
+fn install_all_matches_the_non_interactive_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bb_in(dir.path())
+        .args(["skill", "install", "--all", "--agent", "agents", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<String> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["skill"].as_str().unwrap().to_string())
+        .collect();
+    for skill in bb_cli::skill::SKILLS.iter() {
+        assert!(
+            names.contains(&skill.name.to_string()),
+            "{} missing under --all",
+            skill.name
+        );
+    }
+}
+
+/// `--skill` already expresses an exact choice, so combining it with `--all` is
+/// a contradiction clap should reject rather than silently resolve.
+#[test]
+fn install_rejects_all_together_with_skill() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--all", "--skill", "bbc-open-pr"])
+        .assert()
+        .failure();
 }

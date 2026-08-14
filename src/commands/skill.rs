@@ -47,12 +47,66 @@ fn wanted_skills(name: Option<&str>) -> Result<Vec<&'static skill::Skill>> {
     }
 }
 
+/// The skills to act on, asking when the choice is genuinely open.
+///
+/// The prompt appears only when no `--skill` was given, `--all` was not passed,
+/// the format is human, and stdin is a terminal. That last condition is
+/// load-bearing three times over: the integration suite drives this binary with
+/// piped stdin, CI has no terminal, and `auto_refresh_skills` runs before every
+/// command's own logic — a prompt on any of those paths hangs rather than fails.
+fn choose_skills(
+    format: Format,
+    skill_name: Option<&str>,
+    all: bool,
+) -> Result<Vec<&'static skill::Skill>> {
+    let wanted = wanted_skills(skill_name)?;
+    let interactive = skill_name.is_none()
+        && !all
+        && !format.is_json()
+        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    if !interactive {
+        return Ok(wanted);
+    }
+
+    let options: Vec<String> = wanted
+        .iter()
+        .map(|s| format!("{} — {}", s.name, s.summary))
+        .collect();
+    // Everything preselected, so the fast path is one keypress and the
+    // behaviour matches what this command did before the prompt existed.
+    let defaults: Vec<usize> = (0..options.len()).collect();
+    let picked = inquire::MultiSelect::new("Which skills should be installed?", options.clone())
+        .with_default(&defaults)
+        .prompt()
+        .map_err(|_| BbError::Config("install cancelled — nothing was written".to_string()))?;
+
+    Ok(pick_skills(&wanted, &options, &picked))
+}
+
+/// Maps the labels the user picked in the prompt back to the `&'static Skill`
+/// values they came from. Pulled out of `choose_skills` because the prompt
+/// itself only runs behind a terminal, so this is the part of that function a
+/// test can actually reach.
+fn pick_skills(
+    wanted: &[&'static skill::Skill],
+    options: &[String],
+    picked: &[String],
+) -> Vec<&'static skill::Skill> {
+    options
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| picked.contains(label))
+        .map(|(i, _)| wanted[i])
+        .collect()
+}
+
 pub fn install(
     format: Format,
     agent: Option<&str>,
     global: bool,
     force: bool,
     skill_name: Option<&str>,
+    all: bool,
 ) -> Result<()> {
     let root = if global {
         home_dir()?
@@ -86,7 +140,13 @@ pub fn install(
         }
     };
 
-    let skills = wanted_skills(skill_name)?;
+    let skills = choose_skills(format, skill_name, all)?;
+    if skills.is_empty() {
+        if !format.is_json() {
+            output::info("no skills selected — nothing installed");
+        }
+        return Ok(());
+    }
     let outcomes = skill::install(&root, &agents, &skills, force)?;
     let rows: Vec<OutcomeRow> = outcomes
         .iter()
@@ -231,4 +291,57 @@ fn home_dir() -> Result<std::path::PathBuf> {
         .filter(|h| !h.is_empty())
         .map(std::path::PathBuf::from)
         .ok_or_else(|| BbError::Config("HOME is not set, so --global has no target".into()))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_skills_all_picked() {
+        let wanted: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+        let options: Vec<String> = wanted
+            .iter()
+            .map(|s| format!("{} — {}", s.name, s.summary))
+            .collect();
+        let picked = options.clone();
+
+        let result = pick_skills(&wanted, &options, &picked);
+
+        assert_eq!(result.len(), wanted.len());
+    }
+
+    #[test]
+    fn pick_skills_some_picked() {
+        let wanted: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+        let options: Vec<String> = wanted
+            .iter()
+            .map(|s| format!("{} — {}", s.name, s.summary))
+            .collect();
+        assert!(
+            options.len() >= 2,
+            "test needs at least two skills to pick a subset"
+        );
+        let picked = vec![options[0].clone()];
+
+        let result = pick_skills(&wanted, &options, &picked);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, wanted[0].name);
+    }
+
+    #[test]
+    fn pick_skills_none_picked() {
+        let wanted: Vec<&'static skill::Skill> = skill::SKILLS.iter().collect();
+        let options: Vec<String> = wanted
+            .iter()
+            .map(|s| format!("{} — {}", s.name, s.summary))
+            .collect();
+        let picked: Vec<String> = Vec::new();
+
+        let result = pick_skills(&wanted, &options, &picked);
+
+        assert!(result.is_empty());
+    }
 }

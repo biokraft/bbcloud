@@ -86,6 +86,9 @@ enum SkillCommand {
         /// Only act on this skill; omit for all of them
         #[arg(long)]
         skill: Option<String>,
+        /// Install every skill without asking
+        #[arg(long, conflicts_with = "skill")]
+        all: bool,
     },
     /// Show where the skill is installed and whether it is current
     Status,
@@ -580,9 +583,15 @@ async fn run(cli: Cli) -> Result<()> {
                 global,
                 force,
                 skill,
-            } => {
-                commands::skill::install(format, agent.as_deref(), global, force, skill.as_deref())
-            }
+                all,
+            } => commands::skill::install(
+                format,
+                agent.as_deref(),
+                global,
+                force,
+                skill.as_deref(),
+                all,
+            ),
             SkillCommand::Status => commands::skill::status(format),
             SkillCommand::Uninstall {
                 global,
