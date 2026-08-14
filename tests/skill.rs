@@ -432,15 +432,17 @@ fn skill_documents_build_status() {
 }
 
 #[test]
-fn install_writes_both_skills() {
+fn install_writes_every_skill() {
     let dir = tempfile::tempdir().unwrap();
     bb_in(dir.path())
         .args(["skill", "install", "--agent", "agents", "--json"])
         .assert()
         .success();
-    for name in ["bitbucket-cloud", "bbc-daily-brief"] {
-        let path = dir.path().join(format!(".agents/skills/{name}/SKILL.md"));
-        assert!(path.is_file(), "{name} was not installed");
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let path = dir
+            .path()
+            .join(format!(".agents/skills/{}/SKILL.md", skill.name));
+        assert!(path.is_file(), "{} was not installed", skill.name);
     }
 }
 
@@ -961,6 +963,72 @@ fn auto_refresh_leaves_a_deliberately_deleted_file_deleted() {
     assert!(
         state_versions(dir.path()).iter().any(|v| v == "0.0.1"),
         "the entry for the deleted file must keep its old version, not be stamped current"
+    );
+}
+
+/// The workflow skill is only useful if it carries the whole flow: the two
+/// commands it drives, the git scan that produces suggestions, and the two human
+/// gates. Each assertion is a step someone could quietly drop.
+#[test]
+fn the_open_pr_skill_carries_the_whole_workflow() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    for needle in [
+        "bb pr create",
+        "bb pr reviewers add",
+        "git log",
+        "--follow",
+        "## Why",
+        "## What changed",
+    ] {
+        assert!(
+            text.contains(needle),
+            "bbc-open-pr no longer documents `{needle}`"
+        );
+    }
+}
+
+/// Bitbucket Cloud strips raw HTML from pull request descriptions, so the
+/// GitHub collapsible idiom renders as nothing. This is the single most likely
+/// well-meaning regression in this file, hence a test rather than a comment.
+#[test]
+fn the_open_pr_skill_never_suggests_html_collapsibles() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    for tag in ["<details", "<summary", "<br", "<div"] {
+        assert!(
+            !text.contains(tag),
+            "bbc-open-pr suggests `{tag}` — Bitbucket renders no raw HTML in descriptions"
+        );
+    }
+}
+
+/// The reviewer gate and the description gate are the reason this skill exists:
+/// an agent must never tag people or open a PR body the user has not seen.
+#[test]
+fn the_open_pr_skill_keeps_both_human_gates() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr")
+        .unwrap()
+        .content
+        .to_lowercase();
+    assert!(
+        text.contains("print the description back"),
+        "the description-approval gate is gone"
+    );
+    assert!(
+        text.contains("never tag anyone the user did not pick"),
+        "the reviewer-consent rule is gone"
+    );
+}
+
+/// A pick that cannot resolve fails at `bb pr reviewers add` time with exit 1,
+/// so the skill resolves names against the repository's user pool *before* it
+/// suggests them, and says so.
+#[test]
+fn the_open_pr_skill_resolves_names_before_suggesting() {
+    let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    assert!(text.contains("bb pr reviewers"));
+    assert!(
+        text.to_lowercase().contains("could not be mapped"),
+        "unmappable git authors must still be reported, not dropped"
     );
 }
 

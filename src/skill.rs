@@ -15,7 +15,7 @@ pub struct Skill {
     pub content: &'static str,
 }
 
-pub const SKILLS: [Skill; 2] = [
+pub const SKILLS: [Skill; 3] = [
     Skill {
         name: "bitbucket-cloud",
         summary: "read, review and comment on Bitbucket Cloud pull requests",
@@ -25,6 +25,11 @@ pub const SKILLS: [Skill; 2] = [
         name: "bbc-daily-brief",
         summary: "a ranked morning brief of the pull requests waiting on you",
         content: include_str!("../.agents/skills/bbc-daily-brief/SKILL.md"),
+    },
+    Skill {
+        name: "bbc-open-pr",
+        summary: "open a pull request: reviewer suggestions from git history",
+        content: include_str!("../.agents/skills/bbc-open-pr/SKILL.md"),
     },
 ];
 
@@ -1684,10 +1689,10 @@ mod tests {
 
     #[test]
     fn both_skills_are_registered_and_well_formed() {
-        assert_eq!(SKILLS.len(), 2);
         let names: Vec<&str> = SKILLS.iter().map(|s| s.name).collect();
         assert!(names.contains(&"bitbucket-cloud"));
         assert!(names.contains(&"bbc-daily-brief"));
+        assert!(names.contains(&"bbc-open-pr"));
         for skill in SKILLS.iter() {
             assert!(
                 skill.content.starts_with("---"),
