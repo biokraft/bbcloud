@@ -66,7 +66,8 @@ found afterwards.
 
 ## Get started
 
-Three commands, once per machine:
+Three commands, once per machine — step 1 is Homebrew here because it is the recommended route;
+any of the [alternatives](#alternatives) works the same for steps 2 and 3.
 
 ```bash
 brew install biokraft/tap/bb   # 1. install

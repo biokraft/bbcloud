@@ -10,7 +10,7 @@ const TOKEN_HELP_URL: &str = "https://id.atlassian.com/manage-profile/security/a
 /// The scopes `bb` needs, with what each one buys. `read:user:bitbucket` is
 /// first because login itself fails without it, and the write scope is last
 /// because everything read-only works without it — a reader can stop at three.
-const SCOPES: [(&str, &str); 4] = [
+pub const SCOPES: [(&str, &str); 4] = [
     (
         "read:user:bitbucket",
         "required — login verifies the token against /user",
@@ -31,10 +31,15 @@ const SCOPES: [(&str, &str); 4] = [
 
 /// Printed before the prompts, because a token created without scopes — or with
 /// the wrong ones — fails verification and the user has no way to guess which of
-/// the two dozen Bitbucket scopes this tool wanted.
+/// the two dozen Bitbucket scopes this tool wanted. Only for someone who is about
+/// to type values: a caller that passed `--email` and `--token-stdin` already has
+/// a token, and on a CI runner these lines are just noise in the captured log.
 fn print_onboarding() {
     output::heading("bb authenticates with an atlassian api token");
-    output::info("app passwords were removed by atlassian on 2026-07-28 — a token is the only way");
+    output::info(
+        "atlassian retired the older bitbucket credential on 2026-07-28 — an api token is \
+         the only one left",
+    );
     println!();
     output::info(&format!("1. open {TOKEN_HELP_URL}"));
     output::info("2. choose \"Create API token with scopes\", then pick Bitbucket as the product");
@@ -60,8 +65,9 @@ fn verification_hint(err: &BbError) -> Option<&'static str> {
              email, and the password the api token itself, not your atlassian password",
         ),
         BbError::Api { status: 403, .. } => Some(
-            "the token was accepted but is missing the read:user:bitbucket scope — \
-             create a new token with that scope granted",
+            "the token was accepted but the request was refused — most likely the \
+             read:user:bitbucket scope is missing; a revoked token or an organisation \
+             access policy gives the same answer",
         ),
         _ => None,
     }
@@ -101,13 +107,14 @@ fn print_status(format: Format, status: &AuthStatus, unverified_label: &str) -> 
 }
 
 pub async fn login(email: Option<String>, token_stdin: bool, format: Format) -> Result<()> {
-    if !format.is_json() {
-        print_onboarding();
-    }
-
     // Never block on input that will not arrive: if stdin is not a terminal and
     // either value would require a prompt, name the flags instead of hanging.
     let would_prompt = email.is_none() || !token_stdin;
+
+    if would_prompt && !format.is_json() {
+        print_onboarding();
+    }
+
     if would_prompt && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(BbError::Config(
             "no email/token on a non-interactive stdin — pass --email and --token-stdin".into(),

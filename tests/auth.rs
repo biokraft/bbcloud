@@ -285,11 +285,47 @@ async fn status_reports_an_unverified_account_when_the_identity_check_fails() {
     );
 }
 
-/// Onboarding: a first-time user has to be told where to create the token and
-/// which scopes to grant, otherwise verification fails and they cannot guess
-/// which of Bitbucket's scopes this tool wanted.
+/// Onboarding: a user who is about to be prompted has to be told where to create
+/// the token and which scopes to grant, otherwise verification fails and they
+/// cannot guess which of Bitbucket's scopes this tool wanted.
+#[test]
+fn login_prints_the_token_url_and_every_required_scope() {
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "login"])
+        .env("BB_API_BASE", "http://127.0.0.1:1")
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected the non-interactive config error: {out:?}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("https://id.atlassian.com/manage-profile/security/api-tokens"),
+        "no token url: {stdout}"
+    );
+    for (scope, _) in bb_cli::commands::auth::SCOPES {
+        assert!(stdout.contains(scope), "scope {scope} missing: {stdout}");
+    }
+    assert!(
+        stdout.contains("Create API token with scopes"),
+        "no scoped-token instruction: {stdout}"
+    );
+}
+
+/// The walkthrough is for someone who will type values. `--email` with
+/// `--token-stdin` prompts for nothing, so on a CI runner the lines would be noise
+/// in the captured log.
 #[tokio::test]
-async fn login_prints_the_token_url_and_every_required_scope() {
+async fn login_with_both_values_supplied_prints_no_walkthrough() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/user"))
@@ -320,21 +356,14 @@ async fn login_prints_the_token_url_and_every_required_scope() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("https://id.atlassian.com/manage-profile/security/api-tokens"),
-        "no token url: {stdout}"
+        !stdout.contains("Create API token with scopes"),
+        "walkthrough printed on the non-interactive path: {stdout}"
     );
-    for scope in [
-        "read:user:bitbucket",
-        "read:pullrequest:bitbucket",
-        "read:repository:bitbucket",
-        "write:pullrequest:bitbucket",
-    ] {
-        assert!(stdout.contains(scope), "scope {scope} missing: {stdout}");
-    }
 }
 
 /// `--help` carries the same guidance, because `--email`/`--token-stdin` skips the
-/// interactive walkthrough entirely.
+/// interactive walkthrough entirely. Driven off `SCOPES`, so the clap `long_about`
+/// cannot drift away from the list the walkthrough prints.
 #[test]
 fn auth_login_help_lists_the_required_scopes() {
     let out = Command::cargo_bin("bb")
@@ -344,12 +373,7 @@ fn auth_login_help_lists_the_required_scopes() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("id.atlassian.com"), "no token url: {text}");
-    for scope in [
-        "read:user:bitbucket",
-        "read:pullrequest:bitbucket",
-        "read:repository:bitbucket",
-        "write:pullrequest:bitbucket",
-    ] {
+    for (scope, _) in bb_cli::commands::auth::SCOPES {
         assert!(text.contains(scope), "scope {scope} missing: {text}");
     }
 }
