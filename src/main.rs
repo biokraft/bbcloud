@@ -324,14 +324,35 @@ fn auto_refresh_skills(format: Format) {
     }
     match skill::refresh_tracked() {
         Ok(outcomes) => {
-            let changed = outcomes
+            // Refreshed and pruned are different events and the line must not
+            // conflate them: "refreshed 2" when both were actually dropped from
+            // the state file reads as a write that never happened.
+            let refreshed = outcomes
                 .iter()
-                .filter(|o| matches!(o.action, skill::Action::Refreshed | skill::Action::Pruned))
+                .filter(|o| o.action == skill::Action::Refreshed)
                 .count();
-            if changed > 0 && !format.is_json() {
+            let pruned = outcomes
+                .iter()
+                .filter(|o| o.action == skill::Action::Pruned)
+                .count();
+            if (refreshed > 0 || pruned > 0) && !format.is_json() {
+                let mut parts = Vec::new();
+                if refreshed > 0 {
+                    parts.push(format!(
+                        "refreshed {refreshed} skill file{}",
+                        if refreshed == 1 { "" } else { "s" }
+                    ));
+                }
+                if pruned > 0 {
+                    parts.push(format!(
+                        "forgot {pruned} skill path{} that no longer exist{}",
+                        if pruned == 1 { "" } else { "s" },
+                        if pruned == 1 { "s" } else { "" }
+                    ));
+                }
                 output::warn(&format!(
-                    "refreshed {changed} skill file{} for bb {}",
-                    if changed == 1 { "" } else { "s" },
+                    "{} for bb {}",
+                    parts.join(", "),
                     env!("CARGO_PKG_VERSION")
                 ));
             }
