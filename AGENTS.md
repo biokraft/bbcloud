@@ -248,6 +248,10 @@ echoes a raw response body.
 - Assert on parsed JSON structure rather than substrings where practical.
 - Write tests that would actually fail if the behaviour regressed. A test that passes against the
   un-fixed code proves nothing.
+- `auto_refresh_skills` (`src/main.rs`) runs before every command's own logic, including in
+  integration tests that set `HOME`/`XDG_CONFIG_HOME` to a tempdir with tracked skills in it. A
+  test asserting on stderr can see its "refreshed N skill file(s) for bb …" line unless the
+  fixture has nothing tracked, or `BB_SKILL_NO_AUTO_REFRESH=1` is set.
 
 ### Live smoke test
 
@@ -271,6 +275,7 @@ BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
 | `BB_KEYRING_DISABLE` | force keyring lookup failure (testing) |
+| `BB_SKILL_NO_AUTO_REFRESH` | disable the pre-command auto-refresh of tracked agent skill files |
 | `NO_COLOR` | disable color and spinners |
 
 ## Releasing

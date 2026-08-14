@@ -13,7 +13,7 @@ One ranked list of what needs the user's attention across every Bitbucket reposi
 
 1. **Explicit invocation only.** Produce a brief when the user asks for one in those words — a
    daily brief, a standup summary, what needs their attention. If the question is narrower ("what
-   is failing on PR 42", "who is reviewing my branch"), answer it with plain `bb` commands and do
+   is failing on PR 42", "who is reviewing this branch"), answer it with plain `bb` commands and do
    not produce a brief.
 2. The `bitbucket-cloud` skill's rules bind here too: `--json` on every command, never `-w` or
    `--web`, use exit codes rather than error text.
@@ -22,6 +22,10 @@ One ranked list of what needs the user's attention across every Bitbucket reposi
 4. Never write a comment, approve, or merge while building a brief. It is read-only.
 5. Report an incomplete scan. If phase 1 returns a non-empty `partial`, the brief opens with one
    line naming those workspaces.
+6. **Write to the user as "you".** The brief says "your review is pending", "you raised two
+   threads", "Dana owes you a reply". Never write the brief in the first person — the reader is the
+   person whose pull requests these are, not the agent. The json fields are still named `my_role`
+   and `my_review_state`; that is the api's wording, not the brief's.
 
 ## Phase 1 — structural scan, cheap
 
@@ -31,19 +35,19 @@ bb pr mine --build --json
 
 Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`, `id`, `title`,
 `url`, `state`, `draft`, `author`, `my_role` (`author` | `reviewer` | `both`), `my_review_state`
-(`approved` | `changes_requested` | `pending`, or `null` when I am not a reviewer), `reviewers[]`,
-`updated_on` (rfc3339), and — because `--build` was passed — `build_state` (worst-wins rollup:
-`failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for the individual
-checks.
+(`approved` | `changes_requested` | `pending`, or `null` when the user is not a reviewer),
+`reviewers[]`, `updated_on` (rfc3339), and — because `--build` was passed — `build_state`
+(worst-wins rollup: `failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for
+the individual checks.
 
-There is no api call left that discovers which workspaces you belong to. The workspace(s) scanned
-are resolved from `--workspace <slug>[,<slug>...]`, then `BB_WORKSPACE`, then the git remote of the
-current checkout — see the `bitbucket-cloud` skill for the full precedence order.
+There is no api call left that discovers which workspaces the user belongs to. The workspace(s)
+scanned are resolved from `--workspace <slug>[,<slug>...]`, then `BB_WORKSPACE`, then the git remote
+of the current checkout — see the `bitbucket-cloud` skill for the full precedence order.
 
-`--role author` is one request to find who you are, then one paginated call per workspace. The
-reviewer half is one request to find who you are, one repository-listing call per workspace, then
-one call per scanned repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the
-user asks about one workspace.
+`--role author` is one request to find who the user is, then one paginated call per workspace. The
+reviewer half adds one repository-listing call per workspace and then one call per scanned
+repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one
+workspace.
 
 **This scan is a recency window, not the whole workspace.** The reviewer half only ever looks at
 the `--repo-limit` most recently updated repositories per workspace (default 30) — a workspace with
@@ -51,14 +55,34 @@ hundreds of repositories is covered only in a small slice. Never present a brief
 a complete picture of the workspace; if certainty about one specific repository matters, use
 `bb pr list -R <repo>` for that repository instead.
 
+## One repository only
+
+When the user scopes the request to a single repository — "only this repo", "just for
+acme/api" — do not use `bb pr mine`. Use:
+
+```bash
+bb pr list -R <workspace>/<repo> --build --json
+```
+
+This is cheaper (one call plus the build fetches, rather than a 30-repository scan) and *more*
+complete: `pr mine`'s reviewer half only covers the most recently updated repositories, while
+`pr list` sees every pull request in the named repository.
+
+The rows differ: `pr list` carries `reviewers[]` but no `my_role` or `my_review_state`. Work out
+whether something waits on the user by finding their own uuid in `reviewers[]` and reading its
+`state`, or let the CLI do it — `bb pr list --needs-my-review --json` returns exactly the pull
+requests where the user is a reviewer and has not approved yet.
+
+Ranking, thresholds and output format are identical in both modes.
+
 ## Phase 2 — enrich only the candidates
 
 Phase 1 cannot see comments. Select candidates from phase 1 on structure alone:
 
 - every non-draft row where `my_role` is `reviewer` or `both`
-- every row I authored whose `build_state` is `failed` or `stopped`
-- every row I authored whose `my_review_state` is `changes_requested`
-- every row I authored past the nudge threshold below
+- every row the user authored whose `build_state` is `failed` or `stopped`
+- every row the user authored whose `my_review_state` is `changes_requested`
+- every row the user authored past the nudge threshold below
 
 Take at most 12 candidates, oldest `updated_on` first. For each:
 
@@ -68,9 +92,9 @@ bb pr view <id> -R <repo> --unresolved --json
 
 Nothing else gets enriched. Do not fetch comments for every row phase 1 returned.
 
-A thread is **waiting on my answer** when it is an unresolved inline thread whose most recent
-comment is not mine. Use `parent` to group replies into threads and the comment `author` to decide
-whose the last word was.
+A thread is **waiting on the user's answer** when it is an unresolved inline thread whose most
+recent comment is somebody else's. Use `parent` to group replies into threads and the comment
+`author` to decide whose the last word was.
 
 ## Staleness
 
@@ -79,37 +103,54 @@ everyone of ignoring the user all weekend.
 
 | Situation | Threshold | Who owes |
 |---|---|---|
-| I am a reviewer, `my_review_state` is `pending` | over 1 working day | me |
-| My pull request, a reviewer set `changes_requested` | over 1 working day | me |
-| My pull request, no reviewer has acted | over 2 working days | them — nudge |
+| The user is a reviewer, `my_review_state` is `pending` | over 1 working day | the user |
+| The user's pull request, a reviewer set `changes_requested` | over 1 working day | the user |
+| The user's pull request, no reviewer has acted | over 2 working days | them — nudge |
 
 ## Ranking
 
-One flat list, this ladder, ties broken oldest first:
+This ladder, ties broken oldest first:
 
-1. I am a reviewer and a thread waits on my answer, or my review is `pending` past threshold — I am
-   the bottleneck.
-2. My pull request has `changes_requested`, or unresolved threads waiting on my answer — my move.
-3. My pull request's `build_state` is `failed` or `stopped` — my move.
-4. My pull request is approved with `build_state` `successful` — merge it.
-5. My pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
+1. The user is a reviewer and a thread waits on their answer, or their review is `pending` past
+   threshold — they are the bottleneck.
+2. Their pull request has `changes_requested`, or unresolved threads waiting on their answer.
+3. Their pull request's `build_state` is `failed` or `stopped`.
+4. Their pull request is approved with `build_state` `successful` — ready to merge.
+5. Their pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
 6. Everything else — counted, never listed.
 
 Drafts never appear in 1–5. They are not waiting on anybody; count them in the tail.
 
 ## Output
 
-At most 10 lines, ranked, then one tail count. No preamble, no closing offer of help.
+A one-line verdict, then labelled groups, then a count. At most 10 pull requests listed. No
+preamble, no closing offer of help.
 
 ```
-1. acme/api#42 — 2 unresolved threads from patrick, oldest 3d. You're blocking the review.
-   → bb pr view 42 -R acme/api --unresolved --json
-2. acme/web#17 — build FAILED, changes requested by dana, 1d.
-   → bb pr diff 17 -R acme/web
-3. acme/api#39 — approved by patrick, build green, 2d. Ready to merge.
-   → open acme/api#39 in bitbucket to merge
-+6 quieter (3 drafts, 3 waiting on others)
+2 need you · 1 waiting on others · 1 quiet
+
+YOU'RE BLOCKING
+  acme/api#225  Validate mapi responses
+    Your review is pending · 4h old
+    → bb pr view 225 -R acme/api --unresolved --json
+
+  acme/web#206  Add guardrail hooks
+    Your review is pending · 5d old — oldest here
+    → bb pr view 206 -R acme/web --unresolved --json
+
+WAITING ON OTHERS
+  #221  Dana hasn't replied to your 2 threads · 3d
+
+1 quiet (1 draft)
 ```
 
-Every line names `repo#id`, the reason, the age, and one command to act on it. When nothing needs
-attention, say so in one line and stop.
+Rules for that shape:
+
+- The verdict line is always present, even when it reads `nothing needs you`.
+- A group heading appears only when it has entries.
+- `YOU'RE BLOCKING` holds ranking rungs 1–3, and every entry carries one command line prefixed `→`.
+- `WAITING ON OTHERS` holds rungs 4–5. Those need no command: name who owes the reply and how long
+  it has been. Add a command only when there is something useful to run.
+- The quiet tail is a count with a parenthesised breakdown, never a list.
+- Ages are short: `4h`, `3d`. Mark the oldest entry in a group with `— oldest here`.
+- Address the user directly throughout, per rule 6.

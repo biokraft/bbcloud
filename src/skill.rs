@@ -39,6 +39,16 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// True when any tracked entry was written by a different build than the one
+/// running now. This is the whole auto-refresh trigger: a string compare over a
+/// handful of entries, so the common case — everything current — costs nothing
+/// beyond reading the state file.
+pub fn tracked_version_differs(entries: &[Entry]) -> bool {
+    entries
+        .iter()
+        .any(|e| e.version != env!("CARGO_PKG_VERSION"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     /// `.agents/skills/` — read by Codex, Cursor and OpenCode.
@@ -115,13 +125,30 @@ pub fn load_state() -> (Vec<Entry>, Option<String>) {
     }
 }
 
+/// Writes via a temp file in the same directory plus `rename`, so two `bb`
+/// processes racing right after an upgrade cannot interleave and leave a
+/// truncated `skills.json` — `fs::write` truncates first, and `rename` on the
+/// same filesystem is atomic where plain writes are not.
 pub fn save_state(entries: &[Entry]) -> Result<()> {
     let path = state_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(BbError::Io)?;
-    }
+    let parent = path.parent().ok_or_else(|| {
+        BbError::Config(format!(
+            "state path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    std::fs::create_dir_all(parent).map_err(BbError::Io)?;
     let json = serde_json::to_string_pretty(entries)?;
-    std::fs::write(&path, json).map_err(BbError::Io)?;
+    let tmp = parent.join(format!(
+        ".skills.json.tmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&tmp, json).map_err(BbError::Io)?;
+    std::fs::rename(&tmp, &path).map_err(BbError::Io)?;
     Ok(())
 }
 
@@ -131,6 +158,14 @@ pub enum Action {
     Refreshed,
     Unchanged,
     SkippedModified,
+    /// The entry named a path whose directory tree no longer exists, so it was
+    /// dropped from the state file rather than recreated.
+    Pruned,
+    /// A write that should have brought this entry current failed (EROFS,
+    /// EACCES, ...). The entry stays tracked with its old version and hash so
+    /// it is retried on the next invocation, rather than aborting every other
+    /// entry's refresh in the same batch.
+    Failed,
 }
 
 impl Action {
@@ -140,8 +175,21 @@ impl Action {
             Self::Refreshed => "refreshed",
             Self::Unchanged => "unchanged",
             Self::SkippedModified => "skipped_modified",
+            Self::Pruned => "pruned",
+            Self::Failed => "failed",
         }
     }
+}
+
+/// Whether `refresh_tracked` should recreate an entry whose file has been
+/// deleted. Explicit `bb skill install`/`bb update` pass `Restore`, because a
+/// human asked for it there; the auto-refresh that runs before every command
+/// passes `Preserve`, because a deliberately deleted skill file must not be
+/// silently written back into a user's working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingPolicy {
+    Restore,
+    Preserve,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +267,19 @@ fn is_shaped_like_a_skill_path(path: &Path) -> bool {
     matches!(
         components.pop().map(|c| c.as_os_str().to_owned()),
         Some(agents_dir) if agents_dir == ".agents" || agents_dir == ".claude"
+    )
+}
+
+/// True only when `ancestor` is *definitely* gone — a stat that returns
+/// `ENOENT`. `Path::exists()` also reads false on `EACCES` for a parent
+/// component, or on a path under an unmounted network/removable volume, and
+/// either of those must not be treated as "the tree was deleted": that would
+/// prune a still-real entry that will come back once the permission or the
+/// mount is restored, leaving the file on disk but untracked forever after.
+fn ancestor_is_definitely_gone(ancestor: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(ancestor),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
     )
 }
 
@@ -584,23 +645,44 @@ fn restore_claude_link(entry_path: &Path, skill: &Skill) -> Result<String> {
 /// Refreshes every tracked entry against the currently-running binary's
 /// embedded text. Driven by the recorded entries rather than a root and an
 /// agent list, so a single call spans every project the user has installed
-/// into. Uses the same drift rules as `install`, via `state_of`: `Stale` or
-/// `Missing` rewrites the file and updates the recorded hash, `Modified` is
-/// left byte-identical and reported as `SkippedModified`, and `Current` is
-/// reported as `Unchanged` without touching anything.
-pub fn refresh_tracked() -> Result<Vec<Outcome>> {
-    let (mut state, warning) = load_state();
+/// into. Uses the same drift rules as `install`, via `state_of`: `Stale`
+/// rewrites the file and updates the recorded hash, `Modified` is left
+/// byte-identical and reported as `SkippedModified`, and `Current` is
+/// reported as `Unchanged` without touching anything. `Missing` is rewritten
+/// only under `MissingPolicy::Restore` — `Preserve` (what the pre-command
+/// auto-refresh passes) leaves a deliberately deleted file deleted, reporting
+/// nothing and leaving the entry's version untouched so it is not mistaken
+/// for current.
+///
+/// A single entry's write failing (read-only filesystem, permission denied,
+/// ...) is reported as `Action::Failed` rather than aborting the loop with
+/// `?` — every other entry's refresh still lands, and `save_state` still
+/// persists them, so one unwritable path cannot swallow the whole batch nor
+/// spam the same warning on every future invocation forever. The failed
+/// entry keeps its old version and hash, so it is retried next time rather
+/// than being mistaken for current. `refresh_tracked` itself still returns
+/// `Err` when `save_state` fails, since at that point the whole operation's
+/// work would otherwise be silently lost.
+pub fn refresh_tracked(missing: MissingPolicy) -> Result<Vec<Outcome>> {
+    let (state, warning) = load_state();
     if let Some(warning) = warning {
         crate::output::warn(&warning);
     }
     let mut outcomes = Vec::new();
+    let mut kept: Vec<Entry> = Vec::new();
 
-    for entry in &mut state {
+    for mut entry in state {
         if !is_shaped_like_a_skill_path(&entry.path) {
             crate::output::warn(&format!(
                 "refusing to touch {} — does not look like a skill path bb would have written",
                 entry.path.display()
             ));
+            // Bookkeeping only: this entry is never rewritten, but stamping the
+            // running version here still keeps `tracked_version_differs` cheap —
+            // without it, one unshaped entry would make every future invocation
+            // believe a refresh is due, forever.
+            entry.version = env!("CARGO_PKG_VERSION").to_string();
+            kept.push(entry);
             continue;
         }
         // A hand-edited or badly-merged state file could name a skill this
@@ -608,37 +690,89 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
         // reports an unknown skill name as `Modified`, since this binary has
         // no wanted content to compare it against or refresh it with.
         let Some(skill) = skill_by_name(&entry.skill) else {
+            // Same bookkeeping-only stamp as above, for the same reason.
+            entry.version = env!("CARGO_PKG_VERSION").to_string();
+            kept.push(entry);
             continue;
         };
+
+        // An entry whose whole directory tree is gone is not a skill waiting to
+        // be restored — it is residue from a temp directory or a deleted
+        // checkout. Recreating it would materialise a file inside a path nobody
+        // asked for, so drop the entry instead. A missing file whose directory
+        // still exists is the opposite case and is restored below. The check
+        // looks two levels up (past the skill-name folder itself, which
+        // `write_file`/`restore_claude_link` happily recreate) so deleting just
+        // the one skill's own folder still restores it — only a vanished parent
+        // tree above that (the agent's whole `skills/` directory, or higher)
+        // counts as residue.
+        if entry
+            .path
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(ancestor_is_definitely_gone)
+        {
+            outcomes.push(Outcome {
+                path: entry.path.clone(),
+                agent: entry.agent.clone(),
+                skill: entry.skill.clone(),
+                action: Action::Pruned,
+            });
+            continue;
+        }
+
         let wanted = content_hash(skill.content.as_bytes());
-        let action = match state_of(entry, &wanted) {
+        let disk_state = state_of(&entry, &wanted);
+
+        // A deliberately deleted file must not come back from an auto-refresh
+        // nobody asked for. Skip it entirely: no write, no outcome, no version
+        // stamp — stamping would make it read as current when it is not.
+        if disk_state == State::Missing && missing == MissingPolicy::Preserve {
+            kept.push(entry);
+            continue;
+        }
+
+        let action = match disk_state {
             // The link is intact — writing to `entry.path` follows it straight
             // into the `.agents` file it points at, refreshing the shared
             // content without disturbing the link itself.
-            State::Stale => {
-                write_file(&entry.path, skill.content)?;
-                entry.sha256 = wanted.clone();
-                entry.version = env!("CARGO_PKG_VERSION").to_string();
-                Action::Refreshed
-            }
+            State::Stale => match write_file(&entry.path, skill.content) {
+                Ok(()) => {
+                    entry.sha256 = wanted.clone();
+                    Action::Refreshed
+                }
+                Err(_) => Action::Failed,
+            },
             // The link (or file) itself is gone. A plain `write_file` here
             // would create a *real* file where a symlink used to be, leaving
             // state still claiming `"symlink"` while disk disagrees. Restore
             // the same kind of thing that used to be there instead.
             State::Missing => {
-                entry.kind = if entry.kind == "symlink" {
-                    restore_claude_link(&entry.path, skill)?
+                let restored: Result<String> = if entry.kind == "symlink" {
+                    restore_claude_link(&entry.path, skill)
                 } else {
-                    write_file(&entry.path, skill.content)?;
-                    "file".to_string()
+                    write_file(&entry.path, skill.content).map(|()| "file".to_string())
                 };
-                entry.sha256 = wanted.clone();
-                entry.version = env!("CARGO_PKG_VERSION").to_string();
-                Action::Refreshed
+                match restored {
+                    Ok(kind) => {
+                        entry.kind = kind;
+                        entry.sha256 = wanted.clone();
+                        Action::Refreshed
+                    }
+                    Err(_) => Action::Failed,
+                }
             }
             State::Modified => Action::SkippedModified,
             State::Current => Action::Unchanged,
         };
+
+        // Every entry we looked at records this build, including one we
+        // skipped — except one whose write just failed: its content is
+        // genuinely not current, and stamping the version would hide that
+        // from the next invocation's check.
+        if action != Action::Failed {
+            entry.version = env!("CARGO_PKG_VERSION").to_string();
+        }
 
         outcomes.push(Outcome {
             path: entry.path.clone(),
@@ -646,9 +780,10 @@ pub fn refresh_tracked() -> Result<Vec<Outcome>> {
             skill: entry.skill.clone(),
             action,
         });
+        kept.push(entry);
     }
 
-    save_state(&state)?;
+    save_state(&kept)?;
     Ok(outcomes)
 }
 
@@ -1183,7 +1318,7 @@ mod tests {
                 remove_existing(claude_dir).unwrap();
                 std::fs::remove_dir_all(dir.path().join(".agents")).unwrap();
 
-                let outcomes = refresh_tracked().unwrap();
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
                 assert_eq!(outcomes.len(), 1);
                 assert!(matches!(outcomes[0].action, Action::Refreshed));
 
@@ -1228,7 +1363,7 @@ mod tests {
                 remove_existing(&claude_dir).unwrap();
                 assert!(!claude_dir.exists(), "sanity: the link is gone");
 
-                let outcomes = refresh_tracked().unwrap();
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
                 let claude_outcome = outcomes.iter().find(|o| o.agent == "claude").unwrap();
                 assert!(matches!(claude_outcome.action, Action::Refreshed));
 
@@ -1285,7 +1420,7 @@ mod tests {
                 claude_entry.sha256 = content_hash(old.as_bytes());
                 save_state(&[claude_entry]).unwrap();
 
-                let outcomes = refresh_tracked().unwrap();
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
                 assert_eq!(outcomes.len(), 1);
                 assert!(matches!(outcomes[0].action, Action::Refreshed));
 
@@ -1525,7 +1660,7 @@ mod tests {
                 ])
                 .unwrap();
 
-                let outcomes = refresh_tracked().unwrap();
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
                 assert_eq!(outcomes.len(), 2);
 
                 let stale_outcome = outcomes.iter().find(|o| o.path == stale_path).unwrap();
@@ -1668,6 +1803,459 @@ mod tests {
                     rows[0].state,
                     State::Modified,
                     "an unknown skill name must never be reported as Stale"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn tracked_version_differs_only_when_an_entry_is_behind() {
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        assert!(
+            !tracked_version_differs(&[]),
+            "nothing tracked means nothing to do"
+        );
+
+        let up_to_date = Entry {
+            path: PathBuf::from("/p/.agents/skills/bitbucket-cloud/SKILL.md"),
+            agent: "agents".into(),
+            kind: "file".into(),
+            sha256: "abc".into(),
+            version: current.clone(),
+            skill: "bitbucket-cloud".into(),
+        };
+        assert!(!tracked_version_differs(std::slice::from_ref(&up_to_date)));
+
+        let mut behind = up_to_date.clone();
+        behind.version = "0.0.1".into();
+        assert!(tracked_version_differs(&[up_to_date, behind]));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_prunes_an_entry_whose_directory_tree_is_gone() {
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // A path under a directory that does not exist — the shape a
+                // temp-directory install leaves behind once the temp dir is gone.
+                let gone =
+                    PathBuf::from("/nonexistent-root-xyz/.agents/skills/bitbucket-cloud/SKILL.md");
+                save_state(&[Entry {
+                    path: gone.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
+                assert_eq!(outcomes.len(), 1);
+                assert_eq!(outcomes[0].action, Action::Pruned);
+                assert!(!gone.exists(), "pruning must not create the file");
+
+                let (state, _) = load_state();
+                assert!(
+                    state.is_empty(),
+                    "the pruned entry must leave the state file"
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_still_restores_a_missing_file_whose_directory_exists() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                // Directory exists, file does not: someone deleted a skill and
+                // wants it back. This must not be confused with a pruned tree.
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(bb_skill().content.as_bytes()),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
+                assert_eq!(outcomes[0].action, Action::Refreshed);
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), bb_skill().content);
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_a_skipped_entry_without_touching_the_file() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "locally edited").unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(b"something else"),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
+                assert_eq!(outcomes[0].action, Action::SkippedModified);
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    "locally edited",
+                    "a local edit must survive"
+                );
+
+                // The version moves forward even though the file was left alone,
+                // so the auto-refresh check does not re-fire on every command.
+                let (state, _) = load_state();
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_an_unshaped_path_without_creating_it() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // A file named `NOTES.md` instead of `SKILL.md` fails
+                // `is_shaped_like_a_skill_path`'s filename check, so this entry
+                // hits the shape-guard skip branch.
+                let path = root
+                    .path()
+                    .join(".agents")
+                    .join("skills")
+                    .join("bitbucket-cloud")
+                    .join("NOTES.md");
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
+                assert_eq!(
+                    outcomes.len(),
+                    0,
+                    "the shape guard never produces an outcome"
+                );
+                assert!(!path.exists(), "pruning/stamping must not create the file");
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1, "the unshaped entry stays tracked");
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
+            },
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn refresh_stamps_the_version_onto_an_unknown_skill_name_without_touching_the_file() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // The path's skill-name directory ("bitbucket-cloud") is one
+                // `is_shaped_like_a_skill_path` recognises, so the entry clears
+                // the shape guard; it is the `skill` field naming a skill this
+                // binary has never heard of that routes it into the
+                // unknown-skill-name skip branch.
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "whatever was here").unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: "abc".into(),
+                    version: "0.0.1".into(),
+                    skill: "some-future-skill".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Restore).unwrap();
+                assert_eq!(
+                    outcomes.len(),
+                    0,
+                    "the unknown-skill skip never produces an outcome"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    "whatever was here",
+                    "the file must be left alone"
+                );
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1, "the unknown-skill entry stays tracked");
+                assert_eq!(state[0].version, env!("CARGO_PKG_VERSION"));
+                assert!(!tracked_version_differs(&state));
+            },
+        );
+    }
+
+    /// Finding 1: `Path::exists()` reads false both for "truly gone" and for
+    /// "can't tell" (EACCES on a parent component, an unmounted volume). Only
+    /// the first must prune. A genuinely absent path is the case the prune
+    /// path exists for at all.
+    #[test]
+    fn ancestor_is_definitely_gone_is_true_only_for_not_found() {
+        assert!(
+            ancestor_is_definitely_gone(Path::new("/definitely/does/not/exist/anywhere-xyz")),
+            "a path with no such component must read as definitely gone"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !ancestor_is_definitely_gone(dir.path()),
+            "an existing directory must not read as gone"
+        );
+    }
+
+    /// The "cannot tell" half of finding 1: a permission error on the ancestor
+    /// itself must not be treated as "gone" — pruning here would drop a still
+    /// -real entry from the state file while the file stays on disk,
+    /// untracked forever. Exercised as a real EACCES rather than mocked,
+    /// since the predicate takes a `Path` and the OS is the one thing that can
+    /// hand back that exact error kind. Skipped when running as root, since
+    /// root ignores directory permission bits and the test would otherwise
+    /// silently pass for the wrong reason.
+    #[test]
+    #[cfg(unix)]
+    fn ancestor_is_definitely_gone_is_false_for_a_permission_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = tempfile::tempdir().unwrap();
+        let locked = parent.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let target = locked.join("child");
+        std::fs::create_dir(&target).unwrap();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // If running as root, permission bits are ignored and the read
+        // succeeds — in that case there is nothing this test can prove, so
+        // skip rather than assert something that isn't actually testing the
+        // permission-denied path.
+        let stat_result = std::fs::symlink_metadata(&target);
+        let restore = || {
+            let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        };
+        if stat_result.is_ok() {
+            restore();
+            return;
+        }
+        let is_permission_error = matches!(
+            &stat_result,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        if !is_permission_error {
+            // Some other error (unexpected) — restore perms and bail rather
+            // than assert on an error shape this test wasn't written for.
+            restore();
+            return;
+        }
+
+        assert!(
+            !ancestor_is_definitely_gone(&target),
+            "a permission error must not be treated as definitely gone"
+        );
+        restore();
+    }
+
+    /// Finding 2: one entry's write failing must not abort the batch, must
+    /// leave that entry's version and hash untouched (so it is retried), and
+    /// must not stop `save_state` from persisting the entries that *did*
+    /// refresh in the same call.
+    #[test]
+    #[serial_test::serial]
+    #[cfg(unix)]
+    fn refresh_reports_failed_for_an_unwritable_entry_without_blocking_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let writable_root = tempfile::tempdir().unwrap();
+        let locked_root = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let old = "---\nname: bitbucket-cloud\n---\nold text\n";
+
+                let writable_path = skill_file(writable_root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(writable_path.parent().unwrap()).unwrap();
+                std::fs::write(&writable_path, old).unwrap();
+
+                let locked_path = skill_file(locked_root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(locked_path.parent().unwrap()).unwrap();
+                std::fs::write(&locked_path, old).unwrap();
+                // Lock the skill's own directory so writing SKILL.md inside it
+                // fails with EACCES, without needing root or a real read-only
+                // filesystem.
+                std::fs::set_permissions(
+                    locked_path.parent().unwrap(),
+                    std::fs::Permissions::from_mode(0o000),
+                )
+                .unwrap();
+
+                let old_hash = content_hash(old.as_bytes());
+                save_state(&[
+                    Entry {
+                        path: writable_path.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        sha256: old_hash.clone(),
+                        version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
+                    },
+                    Entry {
+                        path: locked_path.clone(),
+                        agent: "agents".into(),
+                        kind: "file".into(),
+                        sha256: old_hash.clone(),
+                        version: "0.0.1".into(),
+                        skill: "bitbucket-cloud".into(),
+                    },
+                ])
+                .unwrap();
+
+                let restore = || {
+                    let _ = std::fs::set_permissions(
+                        locked_path.parent().unwrap(),
+                        std::fs::Permissions::from_mode(0o755),
+                    );
+                };
+
+                // Running as root ignores the permission bits entirely, so the
+                // "locked" write would silently succeed — nothing this test
+                // can prove in that environment.
+                if std::fs::write(locked_path.parent().unwrap().join("probe"), "x").is_ok() {
+                    let _ = std::fs::remove_file(locked_path.parent().unwrap().join("probe"));
+                    restore();
+                    return;
+                }
+
+                let result = refresh_tracked(MissingPolicy::Restore);
+                restore();
+                let outcomes = result.unwrap();
+
+                assert_eq!(outcomes.len(), 2);
+                let writable_outcome = outcomes.iter().find(|o| o.path == writable_path).unwrap();
+                assert_eq!(writable_outcome.action, Action::Refreshed);
+                assert_eq!(
+                    std::fs::read_to_string(&writable_path).unwrap(),
+                    bb_skill().content,
+                    "the writable entry must still refresh despite the other one failing"
+                );
+
+                let locked_outcome = outcomes.iter().find(|o| o.path == locked_path).unwrap();
+                assert_eq!(locked_outcome.action, Action::Failed);
+
+                let (state, _) = load_state();
+                let writable_entry = state.iter().find(|e| e.path == writable_path).unwrap();
+                assert_eq!(
+                    writable_entry.version,
+                    env!("CARGO_PKG_VERSION"),
+                    "save_state must have persisted the entry that did succeed"
+                );
+                let locked_entry = state.iter().find(|e| e.path == locked_path).unwrap();
+                assert_eq!(
+                    locked_entry.version, "0.0.1",
+                    "a failed write must not stamp the version — it is not current"
+                );
+                assert_eq!(
+                    locked_entry.sha256, old_hash,
+                    "a failed write must not update the recorded hash either"
+                );
+            },
+        );
+    }
+
+    /// Finding 4, unit-level: `MissingPolicy::Preserve` must not restore a
+    /// missing file, must not report an outcome for it, and must not stamp
+    /// its version — all three, or the entry would look "handled" when
+    /// nothing happened. `Restore` on the same fixture is already proven by
+    /// `refresh_still_restores_a_missing_file_whose_directory_exists`.
+    #[test]
+    #[serial_test::serial]
+    fn refresh_with_preserve_leaves_a_missing_file_missing() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(root.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                save_state(&[Entry {
+                    path: path.clone(),
+                    agent: "agents".into(),
+                    kind: "file".into(),
+                    sha256: content_hash(bb_skill().content.as_bytes()),
+                    version: "0.0.1".into(),
+                    skill: "bitbucket-cloud".into(),
+                }])
+                .unwrap();
+
+                let outcomes = refresh_tracked(MissingPolicy::Preserve).unwrap();
+                assert!(
+                    outcomes.is_empty(),
+                    "a preserved missing entry must produce no outcome"
+                );
+                assert!(!path.exists(), "the file must stay deleted");
+
+                let (state, _) = load_state();
+                assert_eq!(state.len(), 1, "the entry stays tracked");
+                assert_eq!(
+                    state[0].version, "0.0.1",
+                    "an untouched entry must not be stamped as current"
                 );
             },
         );

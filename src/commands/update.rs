@@ -270,7 +270,7 @@ pub async fn run(format: Format, base_url: &str) -> Result<()> {
     // only moment we can bring skill files up to date with the running binary.
     // Refreshing runs on every path `run()` can take, including up-to-date,
     // since that is the only path most Homebrew/Cargo users ever hit.
-    let skill_outcomes = match crate::skill::refresh_tracked() {
+    let skill_outcomes = match crate::skill::refresh_tracked(crate::skill::MissingPolicy::Restore) {
         Ok(outcomes) => outcomes,
         // The binary upgrade already succeeded and is what the user actually
         // wanted; a filesystem problem here is a warning, not an exit code.
@@ -306,6 +306,14 @@ fn report(
         .iter()
         .filter(|o| o.action == crate::skill::Action::SkippedModified)
         .collect();
+    let pruned: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::Pruned)
+        .collect();
+    let failed: Vec<&crate::skill::Outcome> = skill_outcomes
+        .iter()
+        .filter(|o| o.action == crate::skill::Action::Failed)
+        .collect();
 
     match format {
         Format::Json => {
@@ -319,6 +327,8 @@ fn report(
                 payload["skills"] = serde_json::json!({
                     "refreshed": refreshed.len(),
                     "skipped_modified": skipped.iter().map(|o| &o.path).collect::<Vec<_>>(),
+                    "pruned": pruned.iter().map(|o| &o.path).collect::<Vec<_>>(),
+                    "failed": failed.iter().map(|o| &o.path).collect::<Vec<_>>(),
                 });
             }
             output::print_json(&payload)
@@ -344,6 +354,18 @@ fn report(
             for outcome in &skipped {
                 output::info(&format!(
                     "skipped modified skill (customized locally): {}",
+                    outcome.path.display()
+                ));
+            }
+            for outcome in &pruned {
+                output::info(&format!(
+                    "forgot {} (directory no longer exists)",
+                    outcome.path.display()
+                ));
+            }
+            for outcome in &failed {
+                output::warn(&format!(
+                    "could not refresh {}: write failed",
                     outcome.path.display()
                 ));
             }

@@ -2,7 +2,8 @@
 
 use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
-use bb_cli::output::Format;
+use bb_cli::output::{self, Format};
+use bb_cli::skill;
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -301,8 +302,94 @@ enum AuthCommand {
     Logout,
 }
 
+/// `brew upgrade bb` and `cargo install` replace the binary without running any
+/// of our code, so an installed skill file would otherwise keep describing an
+/// older CLI until someone noticed `bb skill status` saying `stale` and re-ran
+/// the install. Every tracked entry records the version that wrote it, so the
+/// check is a string compare and costs nothing once everything is current.
+///
+/// Five properties this keeps, each with a test: it never overwrites a locally
+/// edited file (`refresh_tracked` reports those as skipped), it never writes to
+/// stdout so `--json` stays pure, it never fails the command the user actually
+/// asked for, `BB_SKILL_NO_AUTO_REFRESH=1` turns it off, and `refresh_tracked`
+/// stamps the running version onto every entry it looked at — including skipped
+/// ones — so this fires once per upgrade rather than on every invocation.
+fn auto_refresh_skills(format: Format) {
+    if std::env::var_os("BB_SKILL_NO_AUTO_REFRESH").is_some() {
+        return;
+    }
+    let (entries, _warning) = skill::load_state();
+    if entries.is_empty() || !skill::tracked_version_differs(&entries) {
+        return;
+    }
+    // `Preserve` because this call runs ahead of a command the user did not
+    // ask to refresh anything with — a file they deliberately deleted must
+    // stay deleted here. Only explicit `bb skill install`/`bb update` restore
+    // a missing file.
+    match skill::refresh_tracked(skill::MissingPolicy::Preserve) {
+        Ok(outcomes) => {
+            // Refreshed, pruned and failed are different events and the line
+            // must not conflate them: "refreshed 2" when some were actually
+            // dropped or left broken reads as a write that never happened.
+            let refreshed = outcomes
+                .iter()
+                .filter(|o| o.action == skill::Action::Refreshed)
+                .count();
+            let pruned = outcomes
+                .iter()
+                .filter(|o| o.action == skill::Action::Pruned)
+                .count();
+            let failed = outcomes
+                .iter()
+                .filter(|o| o.action == skill::Action::Failed)
+                .count();
+            if (refreshed > 0 || pruned > 0 || failed > 0) && !format.is_json() {
+                let mut parts = Vec::new();
+                if refreshed > 0 {
+                    parts.push(format!(
+                        "refreshed {refreshed} skill file{}",
+                        if refreshed == 1 { "" } else { "s" }
+                    ));
+                }
+                if pruned > 0 {
+                    parts.push(format!(
+                        "forgot {pruned} skill path{} that no longer exist{}",
+                        if pruned == 1 { "" } else { "s" },
+                        if pruned == 1 { "s" } else { "" }
+                    ));
+                }
+                // Named once, as a count — not per path — so a read-only
+                // checkout does not spam a line per tracked entry on every
+                // single invocation.
+                if failed > 0 {
+                    parts.push(format!(
+                        "could not refresh {failed} skill file{}",
+                        if failed == 1 { "" } else { "s" }
+                    ));
+                }
+                output::warn(&format!(
+                    "{} for bb {}",
+                    parts.join(", "),
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+        }
+        // The user asked for something else. A read-only filesystem or a
+        // vanished directory must not turn their command into a failure. Per
+        // entry write failures no longer reach here at all (see
+        // `refresh_tracked`'s `Action::Failed`) — only `save_state` itself
+        // failing does, which is rare enough that warning every time is fine.
+        Err(err) => {
+            if !format.is_json() {
+                output::warn(&format!("could not refresh agent skills: {err}"));
+            }
+        }
+    }
+}
+
 async fn run(cli: Cli) -> Result<()> {
     let format = Format::from_json_flag(cli.json);
+    auto_refresh_skills(format);
     match cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Login { email, token_stdin } => {

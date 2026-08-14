@@ -17,13 +17,26 @@ the one command that talks to another host — it queries the GitHub Releases AP
 credentials.
 
 ```
-$ bb pr list
-┌────┬──────────────────────────┬───────┬─────────────────┬───┬────────┬────────┬───────────────────────────┐
-│ ID ┆ TITLE                    ┆ STATE ┆ SOURCE          ┆ → ┆ TARGET ┆ AUTHOR ┆ REVIEWERS                 │
-╞════╪══════════════════════════╪═══════╪═════════════════╪═══╪════════╪════════╪═══════════════════════════╡
-│ 42 ┆ Cache session lookups    ┆ Open  ┆ feat/cache      ┆ → ┆ main   ┆ dev    ┆ Patrick ✓, Raigon ✗, Ana · │
-│ 41 ┆ Fix token refresh window ┆ Draft ┆ fix/token-clock ┆ → ┆ main   ┆ dev    ┆ Linus ·                   │
-└────┴──────────────────────────┴───────┴─────────────────┴───┴────────┴────────┴───────────────────────────┘
+$ bb pr list --build
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ ID   TITLE                      STATE   BUILD        SOURCE           →   TARGET   AUTHOR   REVIEWERS    │
+╞══════════════════════════════════════════════════════════════════════════════════════════════════════════╡
+│ 42   Cache session lookups      Open    SUCCESSFUL   feat/cache       →   main     dev      Dana ✓       │
+│ 41   Fix token refresh window   Draft   FAILED       fix/token-clock  →   main     dev      Ash ·        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Across every repository you work in, not just this one:
+
+```
+$ bb pr mine
+┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ REPO             ID    TITLE                     STATE   ROLE       MINE      UPDATED          │
+╞════════════════════════════════════════════════════════════════════════════════════════════════╡
+│ acme/api         225   Validate mapi responses   OPEN    reviewer   pending   4 hours ago      │
+│ acme/web         206   Add guardrail hooks       OPEN    reviewer   pending   5 days ago       │
+│ acme/api         198   Cache session lookups     OPEN    author     -         2 days ago       │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Install
@@ -50,6 +63,52 @@ Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknow
 
 The cargo routes install `bb` into `~/.cargo/bin` — add that to your `PATH` if the command isn't
 found afterwards.
+
+## Agent skills
+
+This repository ships two [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
+Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to review
+pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
+comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
+agent to answer comment threads and report them, and to leave the resolve decision to you.
+`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
+explicitly ask for one.
+
+Install both into a project:
+
+```bash
+bb skill install
+```
+
+`bb skill install` writes both skills — `bitbucket-cloud` and `bbc-daily-brief`. Pass
+`--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
+the `bb` binary, so this needs no network and no credentials. It detects which agents the project
+uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/` means the portable
+location — and defaults to `.agents/skills/` if it finds none. Pass `--agent agents|claude|all` to
+pick explicitly, or `--global` to install under your home directory instead, so every project
+picks it up.
+
+| Agent | Discovers skills in | Extra step |
+| --- | --- | --- |
+| [Codex](https://learn.chatgpt.com/docs/build-skills) | `.agents/skills/`, `~/.agents/skills/` | none |
+| [Cursor](https://cursor.com/docs/skills) | `.agents/skills/`, `.cursor/skills/`, and the `~/` equivalents | none |
+| [OpenCode](https://opencode.ai/docs/skills/) | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` | none |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | none — `bb skill install` writes a symlink there |
+
+Run `bb skill status` to see where each copy is installed and whether it is current, stale or
+edited locally. Installed copies keep themselves current: when the running binary is newer than the
+copy that wrote them — after `brew upgrade`, `cargo install` or `bb update` — the next `bb` command
+refreshes them, so the instructions an agent reads never describe an older CLI. A locally edited
+file is never overwritten; it is reported and left alone. Set `BB_SKILL_NO_AUTO_REFRESH=1` to manage
+the files entirely by hand.
+
+Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
+home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
+as `install`.
+
+Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
+*"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
+`AGENTS.md` or `CLAUDE.md` — it is plain Markdown.
 
 ## Authenticate
 
@@ -111,7 +170,7 @@ bb pr list                                # open PRs, with state and per-reviewe
 bb pr list --needs-my-review              # only PRs waiting on your review
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
 bb pr build 42                            # one PR's checks: key, name, state, url
-bb pr reviewers add 42 patrick            # tag a reviewer; comma-separate for several
+bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
@@ -162,49 +221,6 @@ Shell completions make the rest discoverable:
 bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 ```
 
-## Use it from an AI Agent
-
-This repository ships two [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
-Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to review
-pull requests through `bb` rather than ask you to open a browser: the `--json` contract, the
-comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells the
-agent to answer comment threads and report them, and to leave the resolve decision to you.
-`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when you
-explicitly ask for one.
-
-Install both into a project:
-
-```bash
-bb skill install
-```
-
-`bb skill install` writes both skills — `bitbucket-cloud` and `bbc-daily-brief`. Pass
-`--skill <name>` to narrow install (or uninstall) to just one of them. The skill text ships inside
-the `bb` binary, so this needs no network and no credentials. It detects which agents the project
-uses — `.claude/` means Claude Code, any of `.agents/`, `.cursor/`, `.opencode/` means the portable
-location — and defaults to `.agents/skills/` if it finds none. Pass `--agent agents|claude|all` to
-pick explicitly, or `--global` to install under your home directory instead, so every project
-picks it up.
-
-| Agent | Discovers skills in | Extra step |
-| --- | --- | --- |
-| [Codex](https://learn.chatgpt.com/docs/build-skills) | `.agents/skills/`, `~/.agents/skills/` | none |
-| [Cursor](https://cursor.com/docs/skills) | `.agents/skills/`, `.cursor/skills/`, and the `~/` equivalents | none |
-| [OpenCode](https://opencode.ai/docs/skills/) | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` | none |
-| [Claude Code](https://code.claude.com/docs/en/skills) | `.claude/skills/`, `~/.claude/skills/` | none — `bb skill install` writes a symlink there |
-
-Run `bb skill status` to see where the skill is installed and whether each copy is current, stale
-or has been edited locally. `bb update` refreshes every tracked copy to match the binary, so the
-skill never drifts — a locally edited file is left alone and reported instead of overwritten.
-
-Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
-home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
-as `install`.
-
-Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
-*"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
-`AGENTS.md` or `CLAUDE.md` — it is plain Markdown.
-
 ## Reference
 
 | Flag / variable | Purpose |
@@ -216,6 +232,7 @@ Each agent loads the skill by itself when a task touches Bitbucket. To force it,
 | `BB_EMAIL`, `BB_TOKEN` | credentials for CI and other non-interactive use |
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
+| `BB_SKILL_NO_AUTO_REFRESH` | set to `1` to stop `bb` refreshing installed skill files when the binary version changes |
 | `NO_COLOR` | disable colour and spinners |
 
 | Exit code | Meaning |

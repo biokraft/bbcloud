@@ -103,6 +103,12 @@ pub fn install(
         Format::Human => {
             for row in &rows {
                 let line = format!("{} {}", row.action, row.path);
+                // `skill::install()` (the only producer of these rows) never
+                // emits `Pruned` or `Failed` — those come only from
+                // `refresh_tracked`, reached through `bb update` and the
+                // pre-command auto-refresh, not this command. No arm for them
+                // here, so a future wiring mistake falls through to the
+                // generic success line instead of silently matching nothing.
                 match row.action.as_str() {
                     "unchanged" => output::info(&line),
                     "skipped_modified" => output::warn(&line),

@@ -68,15 +68,15 @@ async fn a_substring_of_the_display_name_resolves() {
     mount_members(
         &server,
         serde_json::json!([
-            { "user": { "uuid": "{p}", "display_name": "Patrick Stein", "nickname": "patrick" } },
-            { "user": { "uuid": "{r}", "display_name": "Raigon Doe", "nickname": "raigon" } }
+            { "user": { "uuid": "{p}", "display_name": "Dana Stein", "nickname": "dana" } },
+            { "user": { "uuid": "{r}", "display_name": "Ash Doe", "nickname": "ash" } }
         ]),
     )
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "patri", &[])
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dan", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
@@ -181,12 +181,12 @@ async fn a_403_on_members_falls_back_to_the_remaining_pool() {
         .await;
     mount_default_reviewers(
         &server,
-        serde_json::json!([{ "uuid": "{p}", "display_name": "Patrick Stein" }]),
+        serde_json::json!([{ "uuid": "{p}", "display_name": "Dana Stein" }]),
     )
     .await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "patrick", &[])
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
@@ -298,18 +298,18 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
     mount_members(&server, serde_json::json!([])).await;
     mount_default_reviewers(
         &server,
-        serde_json::json!([{ "uuid": "{m}", "display_name": "Moritz Fischer" }]),
+        serde_json::json!([{ "uuid": "{m}", "display_name": "Dana Fischer" }]),
     )
     .await;
     mount_permissions_config(
         &server,
         serde_json::json!([
-            { "user": { "uuid": "{m}", "display_name": "Moritz Fischer" } }
+            { "user": { "uuid": "{m}", "display_name": "Dana Fischer" } }
         ]),
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "moritz", &[])
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
@@ -330,11 +330,11 @@ async fn a_403_on_permissions_config_falls_back_to_default_reviewers() {
         .await;
     mount_default_reviewers(
         &server,
-        serde_json::json!([{ "uuid": "{p}", "display_name": "Patrick Stein" }]),
+        serde_json::json!([{ "uuid": "{p}", "display_name": "Dana Stein" }]),
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "patrick", &[])
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
