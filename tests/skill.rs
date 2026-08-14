@@ -1074,3 +1074,67 @@ fn the_main_skill_points_at_the_open_pr_skill() {
         "the description template belongs to bbc-open-pr only"
     );
 }
+
+/// The load-bearing regression guard. The integration suite, CI, and
+/// `auto_refresh_skills` all run without a terminal. If a prompt ever appears on
+/// that path it hangs the suite, so a non-interactive install must still take
+/// every skill and ask nothing.
+#[test]
+fn install_without_a_terminal_still_takes_every_skill() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--agent", "agents", "--json"])
+        .assert()
+        .success();
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let path = dir
+            .path()
+            .join(format!(".agents/skills/{}/SKILL.md", skill.name));
+        assert!(
+            path.is_file(),
+            "{} was not installed on the non-interactive path",
+            skill.name
+        );
+    }
+}
+
+/// `--all` is the deliberate opt-out of the prompt, so it must behave exactly
+/// like the non-interactive default.
+#[test]
+fn install_all_matches_the_non_interactive_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bb_in(dir.path())
+        .args(["skill", "install", "--all", "--agent", "agents", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<String> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["skill"].as_str().unwrap().to_string())
+        .collect();
+    for skill in bb_cli::skill::SKILLS.iter() {
+        assert!(
+            names.contains(&skill.name.to_string()),
+            "{} missing under --all",
+            skill.name
+        );
+    }
+}
+
+/// `--skill` already expresses an exact choice, so combining it with `--all` is
+/// a contradiction clap should reject rather than silently resolve.
+#[test]
+fn install_rejects_all_together_with_skill() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .args(["skill", "install", "--all", "--skill", "bbc-open-pr"])
+        .assert()
+        .failure();
+}

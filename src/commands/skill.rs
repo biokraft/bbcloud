@@ -47,12 +47,54 @@ fn wanted_skills(name: Option<&str>) -> Result<Vec<&'static skill::Skill>> {
     }
 }
 
+/// The skills to act on, asking when the choice is genuinely open.
+///
+/// The prompt appears only when no `--skill` was given, `--all` was not passed,
+/// the format is human, and stdin is a terminal. That last condition is
+/// load-bearing three times over: the integration suite drives this binary with
+/// piped stdin, CI has no terminal, and `auto_refresh_skills` runs before every
+/// command's own logic — a prompt on any of those paths hangs rather than fails.
+fn choose_skills(
+    format: Format,
+    skill_name: Option<&str>,
+    all: bool,
+) -> Result<Vec<&'static skill::Skill>> {
+    let wanted = wanted_skills(skill_name)?;
+    let interactive = skill_name.is_none()
+        && !all
+        && !format.is_json()
+        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    if !interactive {
+        return Ok(wanted);
+    }
+
+    let options: Vec<String> = wanted
+        .iter()
+        .map(|s| format!("{} — {}", s.name, s.summary))
+        .collect();
+    // Everything preselected, so the fast path is one keypress and the
+    // behaviour matches what this command did before the prompt existed.
+    let defaults: Vec<usize> = (0..options.len()).collect();
+    let picked = inquire::MultiSelect::new("Which skills should be installed?", options.clone())
+        .with_default(&defaults)
+        .prompt()
+        .map_err(|e| BbError::Config(format!("no skills selected: {e}")))?;
+
+    Ok(options
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| picked.contains(label))
+        .map(|(i, _)| wanted[i])
+        .collect())
+}
+
 pub fn install(
     format: Format,
     agent: Option<&str>,
     global: bool,
     force: bool,
     skill_name: Option<&str>,
+    all: bool,
 ) -> Result<()> {
     let root = if global {
         home_dir()?
@@ -86,7 +128,13 @@ pub fn install(
         }
     };
 
-    let skills = wanted_skills(skill_name)?;
+    let skills = choose_skills(format, skill_name, all)?;
+    if skills.is_empty() {
+        if !format.is_json() {
+            output::info("no skills selected — nothing installed");
+        }
+        return Ok(());
+    }
     let outcomes = skill::install(&root, &agents, &skills, force)?;
     let rows: Vec<OutcomeRow> = outcomes
         .iter()
