@@ -1052,3 +1052,25 @@ fn every_skill_carries_a_short_summary() {
         );
     }
 }
+
+/// The main skill stays the command reference — an agent that installed only
+/// this one must still be able to open a pull request — but the workflow lives
+/// in `bbc-open-pr`, and this skill points at it rather than repeating it.
+#[test]
+fn the_main_skill_points_at_the_open_pr_skill() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("bbc-open-pr"),
+        "the main skill does not point at the workflow skill"
+    );
+    assert!(
+        text.contains("bb pr create <target>"),
+        "the command map must still carry bb pr create"
+    );
+    assert!(
+        !text.contains("## What changed"),
+        "the description template belongs to bbc-open-pr only"
+    );
+}

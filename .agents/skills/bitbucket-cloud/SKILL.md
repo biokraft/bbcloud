@@ -196,6 +196,10 @@ The source branch defaults to the current checkout. The title defaults to
 you from that list. Pass `--no-default-reviewers` to attach none. Do not pass `-i`, because it
 prompts.
 
+For the full workflow — suggesting reviewers from the history of the files you changed, and
+writing a description a human can skim — use the `bbc-open-pr` skill. It is installed by
+`bb skill install`.
+
 ## Branches
 
 ```bash
