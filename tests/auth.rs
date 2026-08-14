@@ -284,3 +284,186 @@ async fn status_reports_an_unverified_account_when_the_identity_check_fails() {
         "expected a null account, got {value}"
     );
 }
+
+/// Onboarding: a user who is about to be prompted has to be told where to create
+/// the token and which scopes to grant, otherwise verification fails and they
+/// cannot guess which of Bitbucket's scopes this tool wanted.
+#[test]
+fn login_prints_the_token_url_and_every_required_scope() {
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "login"])
+        .env("BB_API_BASE", "http://127.0.0.1:1")
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected the non-interactive config error: {out:?}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("https://id.atlassian.com/manage-profile/security/api-tokens"),
+        "no token url: {stdout}"
+    );
+    for (scope, _) in bb_cli::commands::auth::SCOPES {
+        assert!(stdout.contains(scope), "scope {scope} missing: {stdout}");
+    }
+    assert!(
+        stdout.contains("Create API token with scopes"),
+        "no scoped-token instruction: {stdout}"
+    );
+}
+
+/// The walkthrough is for someone who will type values. `--email` with
+/// `--token-stdin` prompts for nothing, so on a CI runner the lines would be noise
+/// in the captured log.
+#[tokio::test]
+async fn login_with_both_values_supplied_prints_no_walkthrough() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"display_name": "Dev Person"})),
+        )
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args([
+            "auth",
+            "login",
+            "--email",
+            "dev@example.com",
+            "--token-stdin",
+        ])
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("ATATT3xFfGF0abcd")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("Create API token with scopes"),
+        "walkthrough printed on the non-interactive path: {stdout}"
+    );
+}
+
+/// `--help` carries the same guidance, because `--email`/`--token-stdin` skips the
+/// interactive walkthrough entirely. Driven off `SCOPES`, so the clap `long_about`
+/// cannot drift away from the list the walkthrough prints.
+#[test]
+fn auth_login_help_lists_the_required_scopes() {
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["auth", "login", "--help"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("id.atlassian.com"), "no token url: {text}");
+    for (scope, _) in bb_cli::commands::auth::SCOPES {
+        assert!(text.contains(scope), "scope {scope} missing: {text}");
+    }
+}
+
+/// A 403 on the verification call means the token exists but lacks
+/// `read:user:bitbucket`. Saying so beats the generic scope wording `check()` emits.
+#[tokio::test]
+async fn login_names_the_missing_user_scope_on_a_403() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_json(serde_json::json!({"error": {"message": "Forbidden"}})),
+        )
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args([
+            "auth",
+            "login",
+            "--email",
+            "dev@example.com",
+            "--token-stdin",
+        ])
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("ATATT3xFfGF0abcd")
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "403 must fail login: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("read:user:bitbucket"),
+        "no scope hint: {stderr}"
+    );
+    let combined = format!("{}{stderr}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        !combined.contains("ATATT3xFfGF0abcd"),
+        "token leaked: {combined}"
+    );
+}
+
+/// A 401 means the pair itself was rejected — the hint must point at the email and
+/// the token, not at scopes, and must not print the secret.
+#[tokio::test]
+async fn login_explains_a_rejected_email_and_token_pair() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args([
+            "auth",
+            "login",
+            "--email",
+            "dev@example.com",
+            "--token-stdin",
+        ])
+        .env("BB_API_BASE", server.uri())
+        .env("BB_KEYRING_DISABLE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("BB_EMAIL")
+        .env_remove("BB_TOKEN")
+        .write_stdin("ATATT3xFfGF0abcd")
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(2), "401 must exit 2: {out:?}");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("atlassian account email"),
+        "no email hint: {combined}"
+    );
+    assert!(
+        !combined.contains("ATATT3xFfGF0abcd"),
+        "token leaked: {combined}"
+    );
+}
