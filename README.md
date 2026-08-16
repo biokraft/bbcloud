@@ -1,3 +1,5 @@
+
+
 # bb — Bitbucket Cloud CLI
 
 [![CI](https://github.com/biokraft/bbcloud/actions/workflows/ci.yml/badge.svg)](https://github.com/biokraft/bbcloud/actions/workflows/ci.yml)
@@ -30,13 +32,13 @@ Across every repository you work in, not just this one:
 
 ```
 $ bb pr mine
-┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────────────────────────┐
 │ REPO             ID    TITLE                     STATE   ROLE       MINE      UPDATED          │
-╞════════════════════════════════════════════════════════════════════════════════════════════════╡
+╞════════════════════════════════════════════════════════════════════════════════════════╡
 │ acme/api         225   Validate mapi responses   OPEN    reviewer   pending   4 hours ago      │
 │ acme/web         206   Add guardrail hooks       OPEN    reviewer   pending   5 days ago       │
 │ acme/api         198   Cache session lookups     OPEN    author     -         2 days ago       │
-└────────────────────────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Install
@@ -275,7 +277,7 @@ macOS (arm64, x86_64) and Linux (x86_64, aarch64), both covered by CI. Windows i
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a PR, run `cargo fmt --all --check`,
-`cargo clippy --all-targets -- -D warnings`, and `cargo test` — CI enforces all three.
+`cargo clippy --all-targets -- -D warnings`, and `cargo test --all` — CI enforces all three.
 
 `rust-toolchain.toml` pins the exact toolchain used for those checks (currently 1.97), which rustup
 auto-installs on first use but which a contributor building offline needs to already have.
