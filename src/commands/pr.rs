@@ -115,7 +115,13 @@ pub async fn commits(ctx: &Ctx, id: u64) -> Result<()> {
     Ok(())
 }
 
-pub async fn request_changes(ctx: &Ctx, id: u64) -> Result<()> {
+/// Asks the author to change something. Marking a pull request is a claim about
+/// someone else's work that the api cannot tell was warranted, so a human says
+/// yes: the command confirms first, and `--yes` is the only way past it.
+pub async fn request_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
+    if !yes {
+        gate(ctx, id, "request changes on", ask_human).await?;
+    }
     ctx.client
         .post_empty(&ctx.path(&format!("/pullrequests/{id}/request-changes")))
         .await?;
@@ -126,7 +132,12 @@ pub async fn request_changes(ctx: &Ctx, id: u64) -> Result<()> {
     )
 }
 
-pub async fn unrequest_changes(ctx: &Ctx, id: u64) -> Result<()> {
+/// Withdraws a change request. Gated for the same reason as its opposite, from
+/// the other side: withdrawing clears a block on a merge.
+pub async fn unrequest_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
+    if !yes {
+        gate(ctx, id, "withdraw the change request on", ask_human).await?;
+    }
     ctx.client
         .delete(&ctx.path(&format!("/pullrequests/{id}/request-changes")))
         .await?;
@@ -135,6 +146,65 @@ pub async fn unrequest_changes(ctx: &Ctx, id: u64) -> Result<()> {
         &format!("change request removed from #{id}"),
         serde_json::json!({ "unrequested_changes": id }),
     )
+}
+
+/// Puts the pull request in front of a human and waits for a yes.
+///
+/// With no terminal there is nobody to ask, so this names the flag rather than
+/// blocking on input that will not arrive. That also means an agent or a CI job
+/// cannot mark anything unless whoever wrote the command line said `--yes`.
+///
+/// The pull request is fetched only on this path: `--yes` must cost no extra
+/// request.
+async fn gate<A>(ctx: &Ctx, id: u64, verb: &str, ask: A) -> Result<()>
+where
+    A: FnOnce(&str) -> Result<bool>,
+{
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(BbError::Config(format!(
+            "{verb} #{id} needs approval — answer the prompt in a terminal, or pass --yes to approve up front"
+        )));
+    }
+    let pr: PullRequest = ctx
+        .client
+        .get_json(&ctx.path(&format!("/pullrequests/{id}")))
+        .await?;
+    decide(&prompt_line(verb, &pr), ask)
+}
+
+/// Renders the question. Kept separate so a test can assert what a human is
+/// shown without needing a terminal or a server.
+fn prompt_line(verb: &str, pr: &PullRequest) -> String {
+    let title = pr.title.as_deref().unwrap_or("untitled");
+    let author = pr.author.as_ref().map(|a| a.name()).unwrap_or("someone");
+    format!("{verb} #{} \"{title}\" by {author}?", pr.id)
+}
+
+/// Turns the answer into a verdict. `ask` is a parameter because the real prompt
+/// needs a terminal no test has: this way the part that carries the decision is
+/// exercised, and `ask_human` is left holding nothing but the rendering.
+fn decide<A>(question: &str, ask: A) -> Result<()>
+where
+    A: FnOnce(&str) -> Result<bool>,
+{
+    if ask(question)? {
+        Ok(())
+    } else {
+        // Declining is an error, not a quiet success: a script reading exit 0 as
+        // "marked" must never see one.
+        Err(BbError::Config(format!(
+            "{question} — answered no, nothing changed"
+        )))
+    }
+}
+
+/// Left uncovered on purpose: it needs a terminal, and it holds no decision that
+/// a test could get wrong.
+fn ask_human(question: &str) -> Result<bool> {
+    inquire::Confirm::new(question)
+        .with_default(false)
+        .prompt()
+        .map_err(|e| BbError::Config(format!("cancelled: {e}")))
 }
 
 pub fn report(ctx: &Ctx, human: &str, json: serde_json::Value) -> Result<()> {
@@ -278,4 +348,50 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         output::print_json(&created)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_yes_lets_the_write_proceed() {
+        assert!(decide("request changes on #42?", |_| Ok(true)).is_ok());
+    }
+
+    #[test]
+    fn a_no_is_an_error_naming_the_pull_request() {
+        let err = decide("request changes on #42?", |_| Ok(false)).unwrap_err();
+        assert!(
+            err.to_string().contains("#42"),
+            "the error must name the pull request, got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_line_carries_title_and_author() {
+        let pr = PullRequest {
+            id: 42,
+            title: Some("fix auth token expiry".into()),
+            state: None,
+            author: Some(User {
+                uuid: None,
+                account_id: None,
+                display_name: Some("Dana".into()),
+                nickname: None,
+            }),
+            source: None,
+            destination: None,
+            links: None,
+            reviewers: Vec::new(),
+            participants: Vec::new(),
+            draft: false,
+            updated_on: None,
+        };
+        let line = prompt_line("request changes on", &pr);
+        assert!(line.contains("#42"), "got: {line}");
+        assert!(line.contains("fix auth token expiry"), "got: {line}");
+        assert!(line.contains("Dana"), "got: {line}");
+    }
 }
