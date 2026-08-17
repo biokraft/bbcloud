@@ -120,7 +120,14 @@ pub async fn commits(ctx: &Ctx, id: u64) -> Result<()> {
 /// yes: the command confirms first, and `--yes` is the only way past it.
 pub async fn request_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
     if !yes {
-        gate(ctx, id, "request changes on", ask_human).await?;
+        gate(
+            ctx,
+            id,
+            "request changes on",
+            "requesting changes",
+            ask_human,
+        )
+        .await?;
     }
     ctx.client
         .post_empty(&ctx.path(&format!("/pullrequests/{id}/request-changes")))
@@ -136,7 +143,14 @@ pub async fn request_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
 /// the other side: withdrawing clears a block on a merge.
 pub async fn unrequest_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
     if !yes {
-        gate(ctx, id, "withdraw the change request on", ask_human).await?;
+        gate(
+            ctx,
+            id,
+            "withdraw the change request on",
+            "withdrawing a change request",
+            ask_human,
+        )
+        .await?;
     }
     ctx.client
         .delete(&ctx.path(&format!("/pullrequests/{id}/request-changes")))
@@ -156,20 +170,25 @@ pub async fn unrequest_changes(ctx: &Ctx, id: u64, yes: bool) -> Result<()> {
 ///
 /// The pull request is fetched only on this path: `--yes` must cost no extra
 /// request.
-async fn gate<A>(ctx: &Ctx, id: u64, verb: &str, ask: A) -> Result<()>
+///
+/// `verb` opens the question a human answers; `action` names the same thing as a
+/// noun, for the error a caller with no terminal gets instead. Two forms rather
+/// than one because a verb phrase reads wrong as a sentence's subject, and that
+/// error is the only thing an agent or a CI job ever sees.
+async fn gate<A>(ctx: &Ctx, id: u64, verb: &str, action: &str, ask: A) -> Result<()>
 where
     A: FnOnce(&str) -> Result<bool>,
 {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(BbError::Config(format!(
-            "confirming this change on #{id} needs approval — answer the prompt in a terminal, or pass --yes to approve up front"
+            "{action} on #{id} needs approval — answer the prompt in a terminal, or pass --yes to approve up front"
         )));
     }
     let pr: PullRequest = ctx
         .client
         .get_json(&ctx.path(&format!("/pullrequests/{id}")))
         .await?;
-    decide(&prompt_line(verb, &pr), ask)
+    decide(id, &prompt_line(verb, &pr), ask)
 }
 
 /// Renders the question. Kept separate so a test can assert what a human is
@@ -183,7 +202,7 @@ fn prompt_line(verb: &str, pr: &PullRequest) -> String {
 /// Turns the answer into a verdict. `ask` is a parameter because the real prompt
 /// needs a terminal no test has: this way the part that carries the decision is
 /// exercised, and `ask_human` is left holding nothing but the rendering.
-fn decide<A>(question: &str, ask: A) -> Result<()>
+fn decide<A>(id: u64, question: &str, ask: A) -> Result<()>
 where
     A: FnOnce(&str) -> Result<bool>,
 {
@@ -191,10 +210,9 @@ where
         Ok(())
     } else {
         // Declining is an error, not a quiet success: a script reading exit 0 as
-        // "marked" must never see one.
-        Err(BbError::Config(format!(
-            "{question} — answered no, nothing changed"
-        )))
+        // "marked" must never see one. The human just read the question, so the
+        // message states the outcome rather than echoing it back at them.
+        Err(BbError::Config(format!("#{id} left unchanged")))
     }
 }
 
@@ -357,12 +375,14 @@ mod tests {
 
     #[test]
     fn a_yes_lets_the_write_proceed() {
-        assert!(decide("request changes on #42?", |_| Ok(true)).is_ok());
+        assert!(decide(42, "request changes on #42?", |_| Ok(true)).is_ok());
     }
 
     #[test]
     fn a_no_is_an_error_naming_the_pull_request() {
-        let err = decide("request changes on #42?", |_| Ok(false)).unwrap_err();
+        // The question deliberately carries no id, so the assertion below proves
+        // the message is built from the argument rather than echoing the prompt.
+        let err = decide(42, "request changes?", |_| Ok(false)).unwrap_err();
         assert!(
             err.to_string().contains("#42"),
             "the error must name the pull request, got: {err}"
