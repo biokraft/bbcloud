@@ -154,11 +154,33 @@ put it in a loop.
 Resolve the first comment of a thread — the id whose `parent` is `null`. A reply id fails, and a
 general comment fails: only inline threads carry a resolution.
 
-Ask the author to change the code, or withdraw that request:
+## Ask the author to change the code
+
+Marking a pull request as changes requested is a verdict on someone's work, so the user
+gives it, not you.
+
+After you post review comments that ask the author to change something, ask the user once
+whether to mark the pull request. On a yes, run it with `--yes`, because they just answered
+the question the prompt exists to ask:
 
 ```bash
-bb pr request-changes 42 --json
-bb pr no-request-changes 42 --json
+bb pr request-changes 42 --yes --json
+```
+
+Without `--yes` the command confirms with a human and fails when it has no terminal, so it
+cannot be marked by accident. Declining is an error, not a quiet success.
+
+Never mark changes requested on your own initiative, and never on a pull request you did not
+just review.
+
+**Never approve a pull request.** No command does it and there is no substitute to reach for.
+Approval is a human action, like merging.
+
+Withdraw a change request only after a re-review finds the earlier points addressed — offer
+it, ask first, and never do it to clear the way for a merge:
+
+```bash
+bb pr no-request-changes 42 --yes --json
 ```
 
 ## Reviewers
@@ -227,8 +249,8 @@ Both filters match a substring, and ignore case.
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
-| `bb pr request-changes <id>` | `{requested_changes:<id>}` |
-| `bb pr no-request-changes <id>` | `{unrequested_changes:<id>}` |
+| `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
+| `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
 | `bb auth status` | `{email,token,account}`, token redacted |
 | `bb browse --print [--pr <id>\|--branches]` | `{url}` |

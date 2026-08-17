@@ -190,6 +190,17 @@ not run under `--yes`, and the `inquire` prompt stays on stderr so `--json` stdo
 agent skill carries the matching rule — the agent never resolves on its own initiative — and must
 stay in step. `unresolve` is not gated: it restores a point rather than hides one.
 
+**The request-changes gate is deliberate too, and gates both directions.** `bb pr request-changes`
+and `bb pr no-request-changes` each confirm with a human unless `--yes` is passed, and error
+instead of prompting when there is no terminal. Unlike `resolve`/`unresolve`, where only hiding a
+point is gated, both directions are gated here: requesting changes and withdrawing that request are
+each a review verdict other people see, not a private housekeeping action like reopening a thread.
+The same three properties apply: the confirmation happens **before** the `POST`/`DELETE`
+(`tests/pr_review.rs` asserts this with `expect(0)`), the pull-request lookup that fills the prompt
+does not run under `--yes`, and the `inquire` prompt stays on stderr so `--json` stdout remains
+pure. The agent skill carries the matching rule — ask the user once, never mark uninvited, never
+approve — and must stay in step with this gate.
+
 **Use `Client::paginate`** rather than hand-rolling a page loop. It follows `next` and caps at 100 pages.
 
 ## JSON output

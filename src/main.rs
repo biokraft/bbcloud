@@ -162,12 +162,22 @@ enum PrCommand {
     Commits { id: u64 },
     /// Show the build statuses reported on a pull request
     Build { id: u64 },
-    /// Request changes on a pull request
+    /// Request changes on a pull request, after confirming
     #[command(name = "request-changes", alias = "rc")]
-    RequestChanges { id: u64 },
-    /// Withdraw a change request
+    RequestChanges {
+        id: u64,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Withdraw a change request, after confirming
     #[command(name = "no-request-changes", alias = "nrc")]
-    NoRequestChanges { id: u64 },
+    NoRequestChanges {
+        id: u64,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Open a pull request
     Create {
         /// Target branch, or a comma-separated list of target branches
@@ -465,9 +475,11 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
                 PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
                 PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
-                PrCommand::RequestChanges { id } => commands::pr::request_changes(&ctx, id).await,
-                PrCommand::NoRequestChanges { id } => {
-                    commands::pr::unrequest_changes(&ctx, id).await
+                PrCommand::RequestChanges { id, yes } => {
+                    commands::pr::request_changes(&ctx, id, yes).await
+                }
+                PrCommand::NoRequestChanges { id, yes } => {
+                    commands::pr::unrequest_changes(&ctx, id, yes).await
                 }
                 PrCommand::Create {
                     target,

@@ -1153,3 +1153,33 @@ fn install_rejects_all_together_with_skill() {
         .assert()
         .failure();
 }
+
+#[test]
+fn the_main_skill_makes_the_agent_ask_before_requesting_changes() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("bb pr request-changes 42 --yes"),
+        "the skill must show the flag the agent needs after the user says yes"
+    );
+    assert!(
+        text.contains("Never mark changes requested on your own initiative"),
+        "the skill must forbid marking without being asked"
+    );
+}
+
+#[test]
+fn the_main_skill_forbids_approving() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("Never approve a pull request"),
+        "the skill must state the prohibition, not rely on the command being absent"
+    );
+    assert!(
+        !text.contains("bb pr approve"),
+        "no such command exists; naming it invites an agent to try it"
+    );
+}
