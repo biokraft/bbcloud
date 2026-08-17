@@ -162,7 +162,7 @@ where
 {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(BbError::Config(format!(
-            "{verb} #{id} needs approval — answer the prompt in a terminal, or pass --yes to approve up front"
+            "confirming this change on #{id} needs approval — answer the prompt in a terminal, or pass --yes to approve up front"
         )));
     }
     let pr: PullRequest = ctx

@@ -202,6 +202,7 @@ bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for seve
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
+bb pr request-changes 42 --yes            # confirms first unless --yes is given
 bb pr mine --role reviewer --build        # your PRs across every repo you can see
 bb branch list --user alice
 bb update                                 # check for a newer release and update
@@ -242,6 +243,12 @@ bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved"))
 it, what it says — and waits for a yes. Without a terminal it fails and names `--yes`, so nothing
 resolves in a script or under an agent unless the command line approves it. `bb pr unresolve`
 reopens a thread, and needs no confirmation.
+
+**`bb pr request-changes` and `bb pr no-request-changes` ask first too**, the same way: each shows
+the pull request it is about to mark — id, title, author — and waits for a yes before requesting or
+withdrawing a change request. Pass `--yes` (or `-y`) to skip the prompt. Without a terminal, both
+fail and name `--yes` rather than hang, so nothing is marked in a script or under an agent unless
+the command line approves it.
 
 Shell completions make the rest discoverable:
 

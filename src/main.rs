@@ -162,20 +162,20 @@ enum PrCommand {
     Commits { id: u64 },
     /// Show the build statuses reported on a pull request
     Build { id: u64 },
-    /// Request changes on a pull request
+    /// Request changes on a pull request, after confirming
     #[command(name = "request-changes", alias = "rc")]
     RequestChanges {
         id: u64,
         /// Skip the confirmation prompt
-        #[arg(long)]
+        #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Withdraw a change request
+    /// Withdraw a change request, after confirming
     #[command(name = "no-request-changes", alias = "nrc")]
     NoRequestChanges {
         id: u64,
         /// Skip the confirmation prompt
-        #[arg(long)]
+        #[arg(long, short = 'y')]
         yes: bool,
     },
     /// Open a pull request
