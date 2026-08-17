@@ -32,13 +32,13 @@ Across every repository you work in, not just this one:
 
 ```
 $ bb pr mine
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ REPO             ID    TITLE                     STATE   ROLE       MINE      UPDATED          │
-╞════════════════════════════════════════════════════════════════════════════════════════╡
-│ acme/api         225   Validate mapi responses   OPEN    reviewer   pending   4 hours ago      │
-│ acme/web         206   Add guardrail hooks       OPEN    reviewer   pending   5 days ago       │
-│ acme/api         198   Cache session lookups     OPEN    author     -         2 days ago       │
-└────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ REPO             ID    TITLE                     STATE   ROLE       MINE      UPDATED             │
+╞══════════════════════════════════════════════════════════════════════════════════════════════════╡
+│ acme/api         225   Validate mapi responses   OPEN    reviewer   pending   4 hours ago         │
+│ acme/web         206   Add guardrail hooks       OPEN    reviewer   pending   5 days ago          │
+│ acme/api         198   Cache session lookups     OPEN    author     -         2 days ago          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Install
