@@ -152,6 +152,23 @@ enum ProjectCommand {
 
 #[derive(Subcommand)]
 enum RepoCommand {
+    /// Create a repository in a project
+    Create {
+        /// Repository name, used as the slug
+        name: String,
+        /// Project to create it in, by key; prompts when omitted in a terminal
+        #[arg(long)]
+        project: Option<String>,
+        /// One-line description
+        #[arg(long)]
+        description: Option<String>,
+        /// Create a public repository; private is the default
+        #[arg(long)]
+        public: bool,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
+    },
     /// List the repositories in a workspace
     #[command(alias = "l", alias = "ls")]
     List {
@@ -626,6 +643,16 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Repo { command } => match command {
+            RepoCommand::Create {
+                name,
+                project,
+                description,
+                public,
+                workspace,
+            } => {
+                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::repo::create(&ctx, name, project, description, public).await
+            }
             RepoCommand::List {
                 project,
                 name,
