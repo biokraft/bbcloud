@@ -43,6 +43,11 @@ enum Command {
         #[command(subcommand)]
         command: BranchCommand,
     },
+    /// Work with bitbucket projects
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
     /// Open the repository in a browser
     #[command(alias = "b")]
     Browse {
@@ -120,6 +125,23 @@ enum BranchCommand {
         /// Maximum rows to print
         #[arg(long, default_value_t = 100)]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommand {
+    /// List the projects in a workspace
+    #[command(alias = "l", alias = "ls")]
+    List {
+        /// Only projects whose key or name matches this substring
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Maximum rows to print
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
     },
 }
 
@@ -568,6 +590,16 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Project { command } => match command {
+            ProjectCommand::List {
+                name,
+                limit,
+                workspace,
+            } => {
+                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::project::list(&ctx, name, limit).await
+            }
+        },
         Command::Browse {
             print,
             pr,

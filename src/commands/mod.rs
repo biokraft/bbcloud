@@ -8,5 +8,7 @@ pub mod pr_comments;
 pub mod pr_list;
 pub mod pr_mine;
 pub mod pr_reviewers;
+pub mod project;
+pub mod repo;
 pub mod skill;
 pub mod update;
