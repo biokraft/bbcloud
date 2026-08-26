@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1](https://github.com/biokraft/bbcloud/compare/v0.18.0...v0.18.1) - 2026-08-26
+
+A follow-up to v0.18.0, from using it: the upgrade instruction `bb update` printed could not
+work, and the new commands' token scope was undocumented.
+
+### Fixed
+
+- *(update)* the Homebrew hint printed a command that fails. `bb update` told Homebrew users to
+  run `brew upgrade bb`, but Homebrew resolves an unqualified name against casks as well as
+  formulae, and an unrelated cask named `bb` now exists — so the command ended in
+  `Error: Cask 'bb' is not installed` and never touched the install it was meant to upgrade. The
+  hint now names the formula in full: `brew update && brew upgrade biokraft/tap/bb`
+  ([#45](https://github.com/biokraft/bbcloud/pull/45))
+- *(update)* a skipped skill now says how to take the new version. Refusing to overwrite a
+  locally edited `SKILL.md` is the right default, but after a release that adds commands — as
+  v0.18.0 added three — it leaves that agent describing a `bb` that no longer exists, and the
+  message said only that it had skipped the file. It now names the way out:
+  `bb skill install --force` ([#45](https://github.com/biokraft/bbcloud/pull/45))
+
+### Documentation
+
+- *(readme)* the scope table documents what `repo create` needs:
+  **`admin:repository:bitbucket`**, confirmed against a real token to be the only scope that
+  permits creating a repository — no combination of the read and write scopes is enough. The table
+  now also says plainly that `read:repository:bitbucket` lets you *list* repositories without
+  being able to create one, and that `read:project:bitbucket` is a separate grant again: a token
+  holding every read scope still gets a 403 from `project list`
+  ([#43](https://github.com/biokraft/bbcloud/pull/43))
+
+### Upgrading
+
+If you installed with Homebrew and `brew upgrade bb` failed for you, this is why; use
+`brew upgrade biokraft/tap/bb`. If `bb update` reported skipping a customized skill, run
+`bb skill install --force` to pick up the v0.18.0 commands — that discards local edits to those
+files, so check `bb skill status` first if you want to keep them.
+
 ## [0.18.0](https://github.com/biokraft/bbcloud/compare/v0.17.1...v0.18.0) - 2026-08-26
 
 ### Added
