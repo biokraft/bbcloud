@@ -106,12 +106,6 @@ impl Client {
         }
         match status.as_u16() {
             401 => return Err(BbError::Auth),
-            403 => {
-                return Err(BbError::Api {
-                    status: 403,
-                    message: "forbidden — the token may lack the required scope".into(),
-                })
-            }
             404 => return Err(BbError::NotFound),
             429 => {
                 return Err(BbError::Api {
@@ -124,20 +118,30 @@ impl Client {
 
         let code = status.as_u16();
         let body = response.text().await.unwrap_or_default();
-        let message = serde_json::from_str::<serde_json::Value>(&body)
+        let api_message = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|v| {
                 v.get("error")
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
                     .map(str::to_string)
-            })
-            .unwrap_or_else(|| {
+            });
+
+        let message = if code == 403 {
+            match api_message {
+                Some(api_message) => format!(
+                    "forbidden — {api_message} — the token may lack the required scope; see the scope table in the README"
+                ),
+                None => "forbidden — the token may lack the required scope; see the scope table in the README".into(),
+            }
+        } else {
+            api_message.unwrap_or_else(|| {
                 status
                     .canonical_reason()
                     .unwrap_or("request failed")
                     .to_string()
-            });
+            })
+        };
 
         Err(BbError::Api {
             status: code,
