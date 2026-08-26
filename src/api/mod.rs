@@ -27,6 +27,10 @@ pub fn repo_path(slug: &RepoSlug, suffix: &str) -> String {
     format!("/repositories/{}{}", slug.path(), suffix)
 }
 
+pub fn workspace_path(workspace: &str, suffix: &str) -> String {
+    format!("/workspaces/{}{}", urlencoding::encode(workspace), suffix)
+}
+
 /// Bitbucket answers some endpoints — `/pullrequests/{id}/diff` among them —
 /// with a 302 to another url on the same origin, so redirects have to be
 /// followed or those commands fail outright. They are followed only within the
@@ -214,5 +218,23 @@ impl Client {
         }
 
         Ok(collected)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_path_encodes_the_slug_exactly_once() {
+        assert_eq!(
+            workspace_path("acme", "/projects"),
+            "/workspaces/acme/projects"
+        );
+        assert_eq!(
+            workspace_path("a c/me", "/projects"),
+            "/workspaces/a%20c%2Fme/projects"
+        );
     }
 }
