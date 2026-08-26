@@ -21,12 +21,34 @@ fn help_lists_every_top_level_command() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    for expected in ["auth", "pr", "branch", "browse", "completions"] {
+    for expected in [
+        "auth",
+        "pr",
+        "branch",
+        "repo",
+        "project",
+        "browse",
+        "completions",
+    ] {
         assert!(
             text.contains(expected),
             "missing `{expected}` in help:\n{text}"
         );
     }
+}
+
+#[test]
+fn repo_help_documents_that_private_is_the_default() {
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .args(["repo", "create", "--help"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("private is the default"),
+        "help must state the privacy default, since getting it wrong publishes code:\n{text}"
+    );
 }
 
 #[test]
