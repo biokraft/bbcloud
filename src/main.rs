@@ -4,6 +4,7 @@ use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
 use bb_cli::output::{self, Format};
 use bb_cli::skill;
+use bb_cli::workspace;
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -42,6 +43,16 @@ enum Command {
     Branch {
         #[command(subcommand)]
         command: BranchCommand,
+    },
+    /// Work with bitbucket projects
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    /// Work with repositories
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
     },
     /// Open the repository in a browser
     #[command(alias = "b")]
@@ -120,6 +131,60 @@ enum BranchCommand {
         /// Maximum rows to print
         #[arg(long, default_value_t = 100)]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommand {
+    /// List the projects in a workspace
+    #[command(alias = "l", alias = "ls")]
+    List {
+        /// Only projects whose key or name matches this substring
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Maximum rows to print
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RepoCommand {
+    /// Create a repository in a project
+    Create {
+        /// Repository name, used as the slug
+        name: String,
+        /// Project to create it in, by key; prompts when omitted in a terminal
+        #[arg(long)]
+        project: Option<String>,
+        /// One-line description
+        #[arg(long)]
+        description: Option<String>,
+        /// Create a public repository; private is the default
+        #[arg(long)]
+        public: bool,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// List the repositories in a workspace
+    #[command(alias = "l", alias = "ls")]
+    List {
+        /// Only repositories in this project, by key
+        #[arg(long)]
+        project: Option<String>,
+        /// Only repositories whose name matches this substring
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Maximum rows to print
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
     },
 }
 
@@ -568,6 +633,37 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Project { command } => match command {
+            ProjectCommand::List {
+                name,
+                limit,
+                workspace,
+            } => {
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::project::list(&ctx, name, limit).await
+            }
+        },
+        Command::Repo { command } => match command {
+            RepoCommand::Create {
+                name,
+                project,
+                description,
+                public,
+                workspace,
+            } => {
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::repo::create(&ctx, name, project, description, public).await
+            }
+            RepoCommand::List {
+                project,
+                name,
+                limit,
+                workspace,
+            } => {
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::repo::list(&ctx, project, name, limit).await
+            }
+        },
         Command::Browse {
             print,
             pr,

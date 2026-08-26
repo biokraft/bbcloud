@@ -163,7 +163,8 @@ scopes are enough:
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
 | `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes` |
-| `read:repository:bitbucket` | `branch list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
+| `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
+| `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
 `read:repository:bitbucket`, so `pr create` needs both.
@@ -205,8 +206,20 @@ bb pr resolve 42 998877                   # confirms first, then closes the thre
 bb pr request-changes 42 --yes            # confirms first unless --yes is given
 bb pr mine --role reviewer --build        # your PRs across every repo you can see
 bb branch list --user alice
+bb project list                                  # projects in the workspace
+bb repo list --project ENG                       # repositories in one project
+bb repo create api-gateway --project ENG         # private by default
+bb repo create docs --project ENG --public       # explicit opt-in to public
 bb update                                 # check for a newer release and update
 ```
+
+`bb repo create` sends `is_private: true` unless you pass `--public`. Omitting the field is not
+safe: the effective default depends on workspace configuration, so an omitted value can publish
+source code. Everything else — the scm, fork policy, main branch name, wiki and issue tracker —
+is left to Bitbucket and the workspace's own settings rather than overridden from here.
+
+Omit `--project` in a terminal and you get a picker. Outside a terminal it is an error naming the
+flag, never a prompt that will not be answered.
 
 `bb pr list` also takes `--reviewer <name>`, `--author <name|@me>`, `--review-state
 approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
@@ -263,7 +276,7 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 | `--json` | machine-readable output, on every command |
 | `-R, --repo` | act on `workspace/repo` instead of the current git remote |
 | `BB_REPO` | default repository |
-| `BB_WORKSPACE` | workspace(s) `bb pr mine` scans, comma-separated, when `--workspace` is not given |
+| `BB_WORKSPACE` | default workspace for `repo`, `project` and `pr mine`, same as `--workspace` |
 | `BB_EMAIL`, `BB_TOKEN` | credentials for CI and other non-interactive use |
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |

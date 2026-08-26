@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 //! Live-API smoke tests. Skipped by default: they need `BB_LIVE_TEST=1`,
 //! resolvable credentials, and `cargo test -- --ignored` (each test also
@@ -132,4 +132,45 @@ fn pr_list_build_status() {
     assert!(output.status.success(), "stderr: {stderr}");
     let _value: serde_json::Value = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|e| panic!("stdout did not parse as JSON: {e}; stdout was {output:?}"));
+}
+
+// The **create** endpoint is deliberately not exercised live: a passing test would leave a real
+// repository behind in a real workspace on every run. Only the read endpoints below are covered.
+
+#[test]
+#[ignore]
+fn project_list_endpoint_is_live() {
+    let Some(workspace) = live_env() else {
+        eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
+        return;
+    };
+    let assert = bb()
+        .env("BB_WORKSPACE", &workspace)
+        .args(["project", "list", "--json"])
+        .assert();
+    let out = assert.get_output();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_not_retired(&stderr, out.status.code());
+    assert!(out.status.success(), "stderr: {stderr}");
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .expect("project list --json must emit parseable json");
+}
+
+#[test]
+#[ignore]
+fn repo_list_endpoint_is_live() {
+    let Some(workspace) = live_env() else {
+        eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
+        return;
+    };
+    let assert = bb()
+        .env("BB_WORKSPACE", &workspace)
+        .args(["repo", "list", "--limit", "5", "--json"])
+        .assert();
+    let out = assert.get_output();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_not_retired(&stderr, out.status.code());
+    assert!(out.status.success(), "stderr: {stderr}");
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .expect("repo list --json must emit parseable json");
 }

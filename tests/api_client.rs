@@ -218,6 +218,64 @@ async fn maps_403_to_a_scope_hint() {
 }
 
 #[tokio::test]
+async fn maps_403_with_api_message_to_include_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/forbidden"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "type": "error",
+            "error": {"message": "Access denied. You must be granted read:project:bitbucket scope."}
+        })))
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_json::<Item>("/forbidden")
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Api { status, message } => {
+            assert_eq!(status, 403);
+            assert!(
+                message
+                    .contains("Access denied. You must be granted read:project:bitbucket scope."),
+                "missing api message: {message}"
+            );
+            assert!(message.contains("scope"), "missing scope hint: {message}");
+            // Nothing else from the body leaks through.
+            assert!(!message.contains("\"type\""), "leaked raw body: {message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn maps_403_with_no_usable_message_to_the_fixed_wording() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/forbidden"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .get_json::<Item>("/forbidden")
+        .await
+        .unwrap_err();
+    match err {
+        BbError::Api { status, message } => {
+            assert_eq!(status, 403);
+            assert!(
+                message.contains("the token may lack the required scope"),
+                "unhelpful message: {message}"
+            );
+            assert!(!message.contains("not json"), "leaked raw body: {message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn maps_429_to_a_rate_limit_message() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

@@ -27,6 +27,14 @@ pub fn repo_path(slug: &RepoSlug, suffix: &str) -> String {
     format!("/repositories/{}{}", slug.path(), suffix)
 }
 
+pub fn workspace_path(workspace: &str, suffix: &str) -> String {
+    format!("/workspaces/{}{}", urlencoding::encode(workspace), suffix)
+}
+
+pub fn workspace_repos_path(workspace: &str, suffix: &str) -> String {
+    format!("/repositories/{}{}", urlencoding::encode(workspace), suffix)
+}
+
 /// Bitbucket answers some endpoints — `/pullrequests/{id}/diff` among them —
 /// with a 302 to another url on the same origin, so redirects have to be
 /// followed or those commands fail outright. They are followed only within the
@@ -98,12 +106,6 @@ impl Client {
         }
         match status.as_u16() {
             401 => return Err(BbError::Auth),
-            403 => {
-                return Err(BbError::Api {
-                    status: 403,
-                    message: "forbidden — the token may lack the required scope".into(),
-                })
-            }
             404 => return Err(BbError::NotFound),
             429 => {
                 return Err(BbError::Api {
@@ -116,20 +118,30 @@ impl Client {
 
         let code = status.as_u16();
         let body = response.text().await.unwrap_or_default();
-        let message = serde_json::from_str::<serde_json::Value>(&body)
+        let api_message = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|v| {
                 v.get("error")
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
                     .map(str::to_string)
-            })
-            .unwrap_or_else(|| {
+            });
+
+        let message = if code == 403 {
+            match api_message {
+                Some(api_message) => format!(
+                    "forbidden — {api_message} — the token may lack the required scope; see the scope table in the README"
+                ),
+                None => "forbidden — the token may lack the required scope; see the scope table in the README".into(),
+            }
+        } else {
+            api_message.unwrap_or_else(|| {
                 status
                     .canonical_reason()
                     .unwrap_or("request failed")
                     .to_string()
-            });
+            })
+        };
 
         Err(BbError::Api {
             status: code,
@@ -214,5 +226,32 @@ impl Client {
         }
 
         Ok(collected)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_path_encodes_the_slug_exactly_once() {
+        assert_eq!(
+            workspace_path("acme", "/projects"),
+            "/workspaces/acme/projects"
+        );
+        assert_eq!(
+            workspace_path("a c/me", "/projects"),
+            "/workspaces/a%20c%2Fme/projects"
+        );
+    }
+
+    #[test]
+    fn workspace_repos_path_encodes_the_slug_exactly_once() {
+        assert_eq!(workspace_repos_path("acme", ""), "/repositories/acme");
+        assert_eq!(
+            workspace_repos_path("a c/me", "?pagelen=100"),
+            "/repositories/a%20c%2Fme?pagelen=100"
+        );
     }
 }

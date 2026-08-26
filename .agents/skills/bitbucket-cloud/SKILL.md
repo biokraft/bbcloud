@@ -154,6 +154,17 @@ put it in a loop.
 Resolve the first comment of a thread — the id whose `parent` is `null`. A reply id fails, and a
 general comment fails: only inline threads carry a resolution.
 
+## Never create a repository on your own initiative
+
+`bb repo create` is a write to a shared workspace. Ask the human first, every time, and repeat
+back the workspace, the name and the project key you are about to use. A stray repository in a
+shared workspace is somebody's cleanup job.
+
+Never pass `--public`. The default is private; making a repository public is a decision for the
+human to state in words, and if they have not said "public" then they have not said it.
+
+If `--project` is unknown, run `bb project list` and ask which one — do not guess from the name.
+
 ## Ask the author to change the code
 
 Marking a pull request as changes requested is a verdict on someone's work, so the user
@@ -252,6 +263,9 @@ Both filters match a substring, and ignore case.
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
+| `bb project list` | the projects in a workspace |
+| `bb repo list [--project KEY]` | the repositories in a workspace or project |
+| `bb repo create <name> --project KEY` | create a repository, private by default |
 | `bb auth status` | `{email,token,account}`, token redacted |
 | `bb browse --print [--pr <id>\|--branches]` | `{url}` |
 

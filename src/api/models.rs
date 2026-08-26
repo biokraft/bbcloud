@@ -32,7 +32,7 @@ pub struct Endpoint {
     pub branch: Option<BranchName>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Link {
     pub href: Option<String>,
 }
@@ -179,11 +179,106 @@ pub struct PullRequest {
     pub updated_on: Option<String>,
 }
 
-/// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
-/// `"workspace/repo"`, which `RepoSlug::parse` accepts directly.
-#[derive(Debug, Clone, Deserialize)]
+/// A Bitbucket project, the container a repository lives in.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Project {
+    pub key: Option<String>,
+    pub name: Option<String>,
+    pub uuid: Option<String>,
+    pub is_private: Option<bool>,
+}
+
+impl Project {
+    pub fn key_or_dash(&self) -> &str {
+        self.key.as_deref().unwrap_or("-")
+    }
+
+    pub fn name_or_dash(&self) -> &str {
+        self.name.as_deref().unwrap_or("-")
+    }
+
+    pub fn access(&self) -> &'static str {
+        access_word(self.is_private)
+    }
+}
+
+/// One entry of `links.clone[]`, which Bitbucket returns as a list tagged by
+/// protocol rather than as named fields.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CloneLink {
+    pub name: Option<String>,
+    pub href: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RepositoryLinks {
+    pub html: Option<Link>,
+    #[serde(default)]
+    pub clone: Option<Vec<CloneLink>>,
+}
+
+/// `is_private` rendered as a word. `false` in a column is ambiguous about
+/// which way it points, so neither list command prints a bare boolean.
+fn access_word(is_private: Option<bool>) -> &'static str {
+    match is_private {
+        Some(true) => "private",
+        Some(false) => "public",
+        None => "-",
+    }
+}
+
+/// A repository as returned by `GET /repositories/{workspace}` and by the
+/// creation endpoint. `full_name` is `"workspace/repo"`, which
+/// `RepoSlug::parse` accepts directly.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Repository {
     pub full_name: Option<String>,
+    pub name: Option<String>,
+    pub slug: Option<String>,
+    pub description: Option<String>,
+    pub is_private: Option<bool>,
+    pub project: Option<Project>,
+    pub updated_on: Option<String>,
+    pub links: Option<RepositoryLinks>,
+}
+
+impl Repository {
+    /// The clone url the server reported: ssh by preference, https otherwise.
+    /// Never assembled locally — a hand-built url would be wrong for a
+    /// workspace on a custom domain, and a wrong clone url is worse than none.
+    pub fn clone_url(&self) -> Option<&str> {
+        let clones = self.links.as_ref()?.clone.as_ref()?;
+        let by_name = |want: &str| {
+            clones
+                .iter()
+                .find(|c| c.name.as_deref() == Some(want))
+                .and_then(|c| c.href.as_deref())
+        };
+        by_name("ssh").or_else(|| by_name("https"))
+    }
+
+    pub fn html_url(&self) -> Option<&str> {
+        self.links.as_ref()?.html.as_ref()?.href.as_deref()
+    }
+
+    pub fn display_name(&self) -> &str {
+        self.slug
+            .as_deref()
+            .or(self.name.as_deref())
+            .or(self.full_name.as_deref())
+            .unwrap_or("-")
+    }
+
+    pub fn project_key(&self) -> &str {
+        self.project
+            .as_ref()
+            .map(|p| p.key_or_dash())
+            .unwrap_or("-")
+    }
+
+    pub fn access(&self) -> &'static str {
+        access_word(self.is_private)
+    }
 }
 
 impl PullRequest {
@@ -688,5 +783,56 @@ mod tests {
     fn repository_tolerates_a_missing_full_name() {
         let repo: Repository = serde_json::from_str(r#"{}"#).unwrap();
         assert!(repo.full_name.is_none());
+    }
+
+    #[test]
+    fn repository_reads_ssh_clone_url_in_preference_to_https() {
+        let json = serde_json::json!({
+            "full_name": "acme/api",
+            "links": { "clone": [
+                { "name": "https", "href": "https://bitbucket.org/acme/api.git" },
+                { "name": "ssh", "href": "git@bitbucket.org:acme/api.git" }
+            ]}
+        });
+        let repo: Repository = serde_json::from_value(json).unwrap();
+        assert_eq!(repo.clone_url(), Some("git@bitbucket.org:acme/api.git"));
+    }
+
+    #[test]
+    fn repository_falls_back_to_https_clone_url() {
+        let json = serde_json::json!({
+            "links": { "clone": [{ "name": "https", "href": "https://bitbucket.org/acme/api.git" }] }
+        });
+        let repo: Repository = serde_json::from_value(json).unwrap();
+        assert_eq!(repo.clone_url(), Some("https://bitbucket.org/acme/api.git"));
+    }
+
+    #[test]
+    fn repository_tolerates_a_response_with_nothing_in_it() {
+        // Every field is Option-tolerant by house rule, and the accessors must not
+        // panic on the emptiest body the api could return.
+        let repo: Repository = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(repo.clone_url(), None);
+        assert_eq!(repo.project_key(), "-");
+        assert_eq!(repo.access(), "-");
+    }
+
+    #[test]
+    fn repository_renders_privacy_as_a_word_not_a_boolean() {
+        let private: Repository =
+            serde_json::from_value(serde_json::json!({ "is_private": true })).unwrap();
+        let public: Repository =
+            serde_json::from_value(serde_json::json!({ "is_private": false })).unwrap();
+        assert_eq!(private.access(), "private");
+        assert_eq!(public.access(), "public");
+    }
+
+    #[test]
+    fn repository_reads_its_project_key() {
+        let repo: Repository = serde_json::from_value(serde_json::json!({
+            "project": { "key": "ENG", "name": "Engineering" }
+        }))
+        .unwrap();
+        assert_eq!(repo.project_key(), "ENG");
     }
 }

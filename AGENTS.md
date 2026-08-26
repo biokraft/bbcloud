@@ -283,6 +283,7 @@ BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
 |---|---|
 | `BB_EMAIL`, `BB_TOKEN` | credentials for non-interactive/CI use, checked before the keyring |
 | `BB_REPO` | default repository, same as `-R/--repo` |
+| `BB_WORKSPACE` | default workspace(s) for `repo create`, `repo list`, `project list`, same as `--workspace` |
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
 | `BB_KEYRING_DISABLE` | force keyring lookup failure (testing) |
