@@ -82,7 +82,12 @@ pub const DEFAULT_RELEASE_API: &str = "https://api.github.com";
 /// `brew upgrade bb` alone never fetches the tap, so a freshly published
 /// formula stays invisible and reports "already installed" even when a
 /// newer release exists. `brew update` (no arguments) is what refreshes it.
-const HOMEBREW_UPDATE_HINT: &str = "brew update && brew upgrade bb";
+///
+/// The formula is named in full, `biokraft/tap/bb`, rather than as bare `bb`.
+/// Homebrew resolves an unqualified name against casks as well as formulae,
+/// and an unrelated cask called `bb` now exists — so `brew upgrade bb` fails
+/// with "Cask 'bb' is not installed" and never touches this install.
+const HOMEBREW_UPDATE_HINT: &str = "brew update && brew upgrade biokraft/tap/bb";
 
 #[derive(Debug, Deserialize)]
 struct ReleaseAsset {
@@ -357,6 +362,16 @@ fn report(
                     outcome.path.display()
                 ));
             }
+            // A skipped skill keeps the user's edits, which is the right
+            // default — but it also means a release that added commands leaves
+            // that agent describing a `bb` that no longer exists. Saying so
+            // once, with the escape hatch, is the difference between a
+            // protected file and a silently stale one.
+            if !skipped.is_empty() {
+                output::info(
+                    "your edits are kept; run `bb skill install --force` to take the new version",
+                );
+            }
             for outcome in &pruned {
                 output::info(&format!(
                     "forgot {} (directory no longer exists)",
@@ -565,7 +580,26 @@ mod tests {
     /// Homebrew install.
     #[test]
     fn homebrew_hint_refreshes_the_tap_before_upgrading() {
-        assert_eq!(HOMEBREW_UPDATE_HINT, "brew update && brew upgrade bb");
+        assert_eq!(
+            HOMEBREW_UPDATE_HINT,
+            "brew update && brew upgrade biokraft/tap/bb"
+        );
+    }
+
+    /// An unqualified `bb` is ambiguous to Homebrew, which resolves it
+    /// against casks too and fails with "Cask 'bb' is not installed" — so the
+    /// hint must name the tap. This is the bug the hint shipped with: the
+    /// command it printed could not work.
+    #[test]
+    fn homebrew_hint_names_the_tap_so_the_formula_is_unambiguous() {
+        assert!(
+            HOMEBREW_UPDATE_HINT.contains("biokraft/tap/bb"),
+            "hint must fully qualify the formula: {HOMEBREW_UPDATE_HINT}"
+        );
+        assert!(
+            !HOMEBREW_UPDATE_HINT.contains("upgrade bb"),
+            "hint must not upgrade an unqualified `bb`: {HOMEBREW_UPDATE_HINT}"
+        );
     }
 
     #[test]
