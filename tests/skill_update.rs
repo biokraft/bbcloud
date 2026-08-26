@@ -107,6 +107,33 @@ async fn update_leaves_a_modified_skill_alone() {
     );
 }
 
+/// Keeping a local edit is right, but a silently stale skill describes a `bb`
+/// that no longer exists after a release that added commands — so the skip has
+/// to name the way out.
+#[tokio::test]
+async fn update_tells_you_how_to_take_the_new_version_of_a_modified_skill() {
+    let server = mock_up_to_date().await;
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let file = track(project.path(), cfg.path(), OLD_SKILL);
+    std::fs::write(&file, "# our own version\n").unwrap();
+
+    let out = bb(project.path(), cfg.path(), &server.uri())
+        .arg("update")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        text.contains("skill install --force"),
+        "the skip must name the remedy, got:\n{text}"
+    );
+}
+
 /// Nothing tracked means nothing said about skills.
 #[tokio::test]
 async fn update_is_quiet_about_skills_when_none_are_tracked() {
