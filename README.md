@@ -165,7 +165,7 @@ scopes are enough:
 | `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes` |
 | `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
-| `admin:repository:bitbucket` | `repo create`. Creating a repository is a repository-admin action; the read and write scopes above are not enough |
+| `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
 `read:repository:bitbucket`, so `pr create` needs both.
