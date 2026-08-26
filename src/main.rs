@@ -48,6 +48,11 @@ enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Work with repositories
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
+    },
     /// Open the repository in a browser
     #[command(alias = "b")]
     Browse {
@@ -134,6 +139,26 @@ enum ProjectCommand {
     #[command(alias = "l", alias = "ls")]
     List {
         /// Only projects whose key or name matches this substring
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Maximum rows to print
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Workspace to act on; defaults to BB_WORKSPACE, then the git remote
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RepoCommand {
+    /// List the repositories in a workspace
+    #[command(alias = "l", alias = "ls")]
+    List {
+        /// Only repositories in this project, by key
+        #[arg(long)]
+        project: Option<String>,
+        /// Only repositories whose name matches this substring
         #[arg(long, short = 'n')]
         name: Option<String>,
         /// Maximum rows to print
@@ -598,6 +623,17 @@ async fn run(cli: Cli) -> Result<()> {
             } => {
                 let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
                 commands::project::list(&ctx, name, limit).await
+            }
+        },
+        Command::Repo { command } => match command {
+            RepoCommand::List {
+                project,
+                name,
+                limit,
+                workspace,
+            } => {
+                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                commands::repo::list(&ctx, project, name, limit).await
             }
         },
         Command::Browse {
