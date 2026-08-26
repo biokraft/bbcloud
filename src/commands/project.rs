@@ -1,7 +1,7 @@
 use crate::api::models::Project;
-use crate::commands::repo::{self, WorkspaceCtx};
 use crate::error::Result;
 use crate::output::{self, Format};
+use crate::workspace::{self, WorkspaceCtx};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -33,7 +33,7 @@ fn rows(projects: &[Project], name: Option<String>, limit: usize) -> Vec<Project
 
 pub async fn list(ctx: &WorkspaceCtx, name: Option<String>, limit: usize) -> Result<()> {
     let spinner = output::spinner("fetching projects");
-    let projects = repo::projects(ctx).await?;
+    let projects = workspace::projects(ctx).await?;
     spinner.finish_and_clear();
 
     let rows = rows(&projects, name, limit);

@@ -119,6 +119,27 @@ async fn empty_result_in_json_mode_prints_only_an_empty_array() {
 }
 
 #[tokio::test]
+async fn explicit_workspace_flag_beats_bb_workspace_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body()))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/other"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body()))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["repo", "list", "--workspace", "other"])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
 async fn unauthenticated_exits_two_and_not_found_exits_three() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

@@ -149,7 +149,9 @@ fn project_list_endpoint_is_live() {
         .args(["project", "list", "--json"])
         .assert();
     let out = assert.get_output();
-    assert_not_retired(&String::from_utf8_lossy(&out.stderr), out.status.code());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_not_retired(&stderr, out.status.code());
+    assert!(out.status.success(), "stderr: {stderr}");
     serde_json::from_slice::<serde_json::Value>(&out.stdout)
         .expect("project list --json must emit parseable json");
 }
@@ -166,7 +168,9 @@ fn repo_list_endpoint_is_live() {
         .args(["repo", "list", "--limit", "5", "--json"])
         .assert();
     let out = assert.get_output();
-    assert_not_retired(&String::from_utf8_lossy(&out.stderr), out.status.code());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_not_retired(&stderr, out.status.code());
+    assert!(out.status.success(), "stderr: {stderr}");
     serde_json::from_slice::<serde_json::Value>(&out.stdout)
         .expect("repo list --json must emit parseable json");
 }

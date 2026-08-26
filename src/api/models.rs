@@ -179,8 +179,6 @@ pub struct PullRequest {
     pub updated_on: Option<String>,
 }
 
-/// A repository as returned by `GET /repositories/{workspace}`. `full_name` is
-/// `"workspace/repo"`, which `RepoSlug::parse` accepts directly.
 /// A Bitbucket project, the container a repository lives in.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Project {

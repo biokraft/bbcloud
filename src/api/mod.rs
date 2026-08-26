@@ -31,6 +31,10 @@ pub fn workspace_path(workspace: &str, suffix: &str) -> String {
     format!("/workspaces/{}{}", urlencoding::encode(workspace), suffix)
 }
 
+pub fn workspace_repos_path(workspace: &str, suffix: &str) -> String {
+    format!("/repositories/{}{}", urlencoding::encode(workspace), suffix)
+}
+
 /// Bitbucket answers some endpoints — `/pullrequests/{id}/diff` among them —
 /// with a 302 to another url on the same origin, so redirects have to be
 /// followed or those commands fail outright. They are followed only within the
@@ -235,6 +239,15 @@ mod tests {
         assert_eq!(
             workspace_path("a c/me", "/projects"),
             "/workspaces/a%20c%2Fme/projects"
+        );
+    }
+
+    #[test]
+    fn workspace_repos_path_encodes_the_slug_exactly_once() {
+        assert_eq!(workspace_repos_path("acme", ""), "/repositories/acme");
+        assert_eq!(
+            workspace_repos_path("a c/me", "?pagelen=100"),
+            "/repositories/a%20c%2Fme?pagelen=100"
         );
     }
 }

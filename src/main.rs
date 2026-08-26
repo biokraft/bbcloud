@@ -4,6 +4,7 @@ use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
 use bb_cli::output::{self, Format};
 use bb_cli::skill;
+use bb_cli::workspace;
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -638,7 +639,7 @@ async fn run(cli: Cli) -> Result<()> {
                 limit,
                 workspace,
             } => {
-                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
                 commands::project::list(&ctx, name, limit).await
             }
         },
@@ -650,7 +651,7 @@ async fn run(cli: Cli) -> Result<()> {
                 public,
                 workspace,
             } => {
-                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
                 commands::repo::create(&ctx, name, project, description, public).await
             }
             RepoCommand::List {
@@ -659,7 +660,7 @@ async fn run(cli: Cli) -> Result<()> {
                 limit,
                 workspace,
             } => {
-                let ctx = commands::repo::WorkspaceCtx::new(workspace.as_deref(), format)?;
+                let ctx = workspace::WorkspaceCtx::new(workspace.as_deref(), format)?;
                 commands::repo::list(&ctx, project, name, limit).await
             }
         },
