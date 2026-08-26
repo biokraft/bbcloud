@@ -4,6 +4,49 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0](https://github.com/biokraft/bbcloud/compare/v0.17.1...v0.18.0) - 2026-08-26
+
+### Added
+
+- *(repo)* `bb repo create <name> --project KEY` creates a repository in a project. It sends
+  `is_private: true` unless you pass `--public`, because omitting the field does not reliably
+  produce a private repository — the effective default depends on workspace configuration, so an
+  omitted value can publish source code. Nothing else is overridden: the scm, fork policy, main
+  branch name, wiki and issue tracker are left to Bitbucket and the workspace's own settings.
+  Omit `--project` in a terminal and you get a picker; outside a terminal it is an error naming
+  the flag, never a prompt that cannot be answered. No git side effects — no clone, no
+  `git remote add` ([#41](https://github.com/biokraft/bbcloud/pull/41))
+- *(repo)* `bb repo list [--project KEY]` lists a workspace's repositories, narrowing server-side
+  by project key ([#41](https://github.com/biokraft/bbcloud/pull/41))
+- *(project)* `bb project list` lists the projects in a workspace ([#41](https://github.com/biokraft/bbcloud/pull/41))
+- All three take `--workspace`, falling back to `BB_WORKSPACE` and then to the workspace half of
+  the git remote, the same order `bb pr mine` uses ([#41](https://github.com/biokraft/bbcloud/pull/41))
+- The bundled agent skill now carries the matching rule: an agent never creates a repository on
+  its own initiative, never passes `--public` unless the human said the word, and runs
+  `bb project list` rather than guessing a project key ([#41](https://github.com/biokraft/bbcloud/pull/41))
+
+### Fixed
+
+- *(api)* a 403 no longer discards Bitbucket's own explanation. `Client::check` returned a fixed
+  string for 403 without reading the response body, so the one status where the server names the
+  missing privilege was the only one that threw that message away. It now prefers the API's
+  `error.message` and appends the scope hint rather than replacing it
+  ([#41](https://github.com/biokraft/bbcloud/pull/41))
+
+### New token scopes
+
+`bb project list`, and the picker `bb repo create` shows when `--project` is omitted, need
+**`read:project:bitbucket`** — a token without it gets a 403. `bb repo list` needs only
+`read:repository:bitbucket`, which existing tokens already carry for `bb branch list`. See the
+scope table in the README.
+
+### Breaking (library consumers only)
+
+`api::models::Repository` gained `name`, `slug`, `description`, `is_private`, `project`,
+`updated_on` and `links`, so a struct literal that constructed it from `full_name` alone no longer
+compiles. Every field is `Option`, so deserialization is unaffected — this breaks construction,
+not parsing. The `bb` binary is unaffected.
+
 ## [0.17.1](https://github.com/biokraft/bbcloud/compare/v0.17.0...v0.17.1) - 2026-08-17
 
 ### Documentation
