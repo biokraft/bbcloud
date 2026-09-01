@@ -1183,3 +1183,61 @@ fn the_main_skill_forbids_approving() {
         "no such command exists; naming it invites an agent to try it"
     );
 }
+
+/// `skill` is the canonical name — every other command group is singular
+/// (`pr`, `repo`, `branch`, `auth`, `project`) — but the plural is what people
+/// reach for, since the thing being managed is a set of files and the noun in
+/// every agent's own documentation is "skills". Both spellings work.
+#[test]
+fn the_plural_spelling_is_accepted_everywhere_the_singular_is() {
+    for subcommand in ["status", "install", "uninstall"] {
+        let project = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+
+        let singular = bb(project.path(), cfg.path())
+            .args(["skill", subcommand, "--json"])
+            .output()
+            .unwrap();
+
+        let plural_project = tempfile::tempdir().unwrap();
+        let plural_cfg = tempfile::tempdir().unwrap();
+        let plural = bb(plural_project.path(), plural_cfg.path())
+            .args(["skills", subcommand, "--json"])
+            .output()
+            .unwrap();
+
+        assert_eq!(
+            singular.status.code(),
+            plural.status.code(),
+            "`bb skills {subcommand}` and `bb skill {subcommand}` disagree on exit code"
+        );
+        // Each run gets its own tempdir, so the absolute paths in the output
+        // differ by construction — normalise the project root away before
+        // comparing, or the test only proves the two tempdirs had different
+        // names.
+        let normalise = |out: &[u8], root: &std::path::Path| {
+            String::from_utf8_lossy(out)
+                .replace(root.to_str().unwrap(), "<project>")
+                // macOS hands out `/var/...` paths that the binary reports
+                // back as their resolved `/private/var/...` form.
+                .replace(root.canonicalize().unwrap().to_str().unwrap(), "<project>")
+        };
+        assert_eq!(
+            normalise(&singular.stdout, project.path()),
+            normalise(&plural.stdout, plural_project.path()),
+            "`bb skills {subcommand}` produced different output from the singular"
+        );
+    }
+}
+
+/// An alias nobody can discover is barely an alias, so it is `visible_alias`
+/// and shows up in `bb --help` rather than only working for those who guess.
+#[test]
+fn the_top_level_help_advertises_both_spellings() {
+    let dir = tempfile::tempdir().unwrap();
+    bb_in(dir.path())
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("skill").and(contains("skills")));
+}
