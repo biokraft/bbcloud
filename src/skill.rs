@@ -15,7 +15,7 @@ pub struct Skill {
     pub content: &'static str,
 }
 
-pub const SKILLS: [Skill; 3] = [
+pub const SKILLS: [Skill; 4] = [
     Skill {
         name: "bitbucket-cloud",
         summary: "read, review and comment on Bitbucket Cloud pull requests",
@@ -30,6 +30,11 @@ pub const SKILLS: [Skill; 3] = [
         name: "bbc-open-pr",
         summary: "open a pull request: reviewer suggestions from git history",
         content: include_str!("../.agents/skills/bbc-open-pr/SKILL.md"),
+    },
+    Skill {
+        name: "bbc-report-bug",
+        summary: "file a bb bug upstream: reproduce, redact, ask, then gh",
+        content: include_str!("../.agents/skills/bbc-report-bug/SKILL.md"),
     },
 ];
 
@@ -1693,6 +1698,7 @@ mod tests {
         assert!(names.contains(&"bitbucket-cloud"));
         assert!(names.contains(&"bbc-daily-brief"));
         assert!(names.contains(&"bbc-open-pr"));
+        assert!(names.contains(&"bbc-report-bug"));
         for skill in SKILLS.iter() {
             assert!(
                 skill.content.starts_with("---"),
@@ -1703,6 +1709,37 @@ mod tests {
                 skill.content.contains(&format!("name: {}", skill.name)),
                 "{} frontmatter name does not match",
                 skill.name
+            );
+        }
+    }
+
+    /// The bug-reporting skill drives `gh issue create`, which publishes to a
+    /// public repository and cannot be undone. Two clauses are what stop it
+    /// leaking the user's private Bitbucket data or filing uninvited, and both
+    /// have been deleted by well-meaning edits in similar skills before: the
+    /// approval gate before the issue is created, and the redaction of
+    /// workspace and repository names. A skill file is prose, so a test can
+    /// only hold the load-bearing phrases in place — but that is exactly the
+    /// part a summarising edit drops first.
+    #[test]
+    fn the_bug_report_skill_keeps_its_approval_gate_and_redaction_rules() {
+        let skill = skill_by_name("bbc-report-bug").expect("bbc-report-bug is registered");
+
+        for required in [
+            // Never files uninvited.
+            "Explicit invocation only",
+            // Shows the draft and waits, before anything is created.
+            "Never create the issue without showing it first",
+            // Private names never reach a public issue.
+            "Redact before you draft",
+            // The one value that must never appear at all.
+            "never include, redacted or not",
+            // A single hardcoded target, so it cannot be pointed elsewhere.
+            "biokraft/bbcloud",
+        ] {
+            assert!(
+                skill.content.contains(required),
+                "bbc-report-bug lost the {required:?} rule"
             );
         }
     }

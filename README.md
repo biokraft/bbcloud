@@ -103,7 +103,10 @@ the agent to answer comment threads and report them, and to leave the resolve de
 you explicitly ask for one. `bbc-open-pr` walks the agent through opening a pull request: it
 suggests reviewers by scanning the recent history of the files the change touches, resolving each
 name against Bitbucket before it is suggested, and it prints the drafted description back to you
-for approval before creating anything.
+for approval before creating anything. `bbc-report-bug` files a bug about `bb` itself against this
+repository with `gh`: it reproduces the problem first, replaces your workspace, repository and
+colleague names with placeholders before drafting, searches for a duplicate, and shows you the
+finished issue for approval before anything is created.
 
 The skill text ships inside the `bb` binary, so `bb skill install` needs no network and no
 credentials. Run it on a terminal with none of `--skill`, `--all` or `--json`, and it asks which
