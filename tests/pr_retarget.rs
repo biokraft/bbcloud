@@ -114,3 +114,24 @@ async fn retarget_refuses_a_merged_pull_request_before_writing() {
     let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("MERGED"), "stderr: {stderr}");
 }
+
+#[tokio::test]
+async fn retarget_to_the_current_destination_still_prints_json() {
+    let server = MockServer::start().await;
+    mount_get(&server, "OPEN", "main").await;
+    Mock::given(method("PUT"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body("OPEN", "main")))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "retarget", "7", "--to", "main", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["id"], 7);
+    assert_eq!(v["destination"], "main");
+}
