@@ -366,18 +366,7 @@ enum ReviewersCommand {
 #[derive(Subcommand)]
 enum AuthCommand {
     /// Store an atlassian api token in the os keyring
-    #[command(long_about = "Store an atlassian api token in the os keyring.
-
-Create the token at https://id.atlassian.com/manage-profile/security/api-tokens,
-choosing \"Create API token with scopes\" and Bitbucket as the product, then grant:
-
-  read:user:bitbucket          required — login verifies the token against /user
-  read:pullrequest:bitbucket   pr list, view, diff, files, commits, mine
-  read:repository:bitbucket    branch list, default reviewers, the pr mine scan
-  write:pullrequest:bitbucket  pr create, comment, resolve, request-changes
-
-The write scope is only needed to create pull requests and comment; everything
-read-only works with the first three.")]
+    #[command(long_about = bb_cli::commands::auth::login_long_about())]
     Login {
         /// Atlassian account email
         #[arg(long)]
