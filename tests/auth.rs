@@ -467,3 +467,48 @@ async fn login_explains_a_rejected_email_and_token_pair() {
         "token leaked: {combined}"
     );
 }
+
+/// The README's scope table and `SCOPES` are two hand-maintained lists of the
+/// same facts, and they drifted: the table gained `read:project:bitbucket` and
+/// `admin:repository:bitbucket` when `repo create` and `project list` shipped,
+/// while the login walkthrough kept printing four scopes. Someone following
+/// `bb auth login` then minted a token that 403s on the first `repo create`.
+///
+/// Every other scope test iterates `SCOPES`, so all of them stayed green through
+/// that drift — they can only prove the walkthrough prints what the constant
+/// holds. This one is the cross-check: it parses the README table and asserts
+/// the two sets are equal, so adding a scope to either place alone fails here.
+#[test]
+fn the_readme_scope_table_matches_the_login_walkthrough() {
+    let readme = include_str!("../README.md");
+    let documented: Vec<&str> = readme
+        .lines()
+        .skip_while(|l| !l.starts_with("### Token scopes"))
+        .take_while(|l| !l.starts_with("### CI"))
+        .filter_map(|l| l.strip_prefix("| `"))
+        .filter_map(|rest| rest.split('`').next())
+        .collect();
+
+    assert!(
+        !documented.is_empty(),
+        "found no scope rows — the README's `### Token scopes` table moved or changed shape"
+    );
+
+    let printed: Vec<&str> = bb_cli::commands::auth::SCOPES
+        .iter()
+        .map(|(s, _)| *s)
+        .collect();
+
+    for scope in &documented {
+        assert!(
+            printed.contains(scope),
+            "README documents {scope} but `bb auth login` never tells anyone to grant it"
+        );
+    }
+    for scope in &printed {
+        assert!(
+            documented.contains(scope),
+            "`bb auth login` asks for {scope} but the README scope table does not list it"
+        );
+    }
+}

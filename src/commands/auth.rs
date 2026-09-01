@@ -7,10 +7,17 @@ use serde::Serialize;
 
 const TOKEN_HELP_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
-/// The scopes `bb` needs, with what each one buys. `read:user:bitbucket` is
-/// first because login itself fails without it, and the write scope is last
-/// because everything read-only works without it — a reader can stop at three.
-pub const SCOPES: [(&str, &str); 4] = [
+/// The scopes `bb` needs, with what each one buys, in the order someone should
+/// decide about them: `read:user:bitbucket` first because login itself fails
+/// without it, then the read scopes a browsing user wants, then the grants that
+/// only some commands need. Ordering is the only guidance a list this long can
+/// give, since Atlassian's picker shows two dozen Bitbucket scopes at once.
+///
+/// This list and the README's "Token scopes" table are the same facts written
+/// twice; `tests/auth.rs::the_readme_scope_table_matches_the_login_walkthrough`
+/// asserts they stay equal, because they did not — the table gained the last
+/// two entries while the walkthrough kept printing four.
+pub const SCOPES: [(&str, &str); 6] = [
     (
         "read:user:bitbucket",
         "required — login verifies the token against /user",
@@ -21,13 +28,54 @@ pub const SCOPES: [(&str, &str); 4] = [
     ),
     (
         "read:repository:bitbucket",
-        "branch list, default reviewers, the pr mine scan",
+        "branch list, repo list, default reviewers, the pr mine scan",
     ),
     (
         "write:pullrequest:bitbucket",
         "pr create, comment, resolve, request-changes",
     ),
+    (
+        "read:project:bitbucket",
+        "project list, and repo create's project picker",
+    ),
+    (
+        "admin:repository:bitbucket",
+        "repo create — no combination of the read scopes covers it",
+    ),
 ];
+
+/// The scope block both the walkthrough and `--help` print, one `scope  why`
+/// line per entry, aligned on the widest name. Rendered from `SCOPES` rather
+/// than written out a second time: the walkthrough, `--help` and the README
+/// each used to carry their own copy of this list, and two of the three fell
+/// behind when `repo create` shipped.
+pub fn scope_lines(indent: &str) -> String {
+    let width = SCOPES.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+    SCOPES
+        .iter()
+        .map(|(scope, why)| format!("{indent}{scope:<width$}  {why}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `--help` carries the same guidance as the interactive walkthrough, because
+/// `--email` with `--token-stdin` skips the walkthrough entirely and a CI user
+/// has nowhere else to read it.
+pub fn login_long_about() -> String {
+    format!(
+        "Store an atlassian api token in the os keyring.
+
+Create the token at {TOKEN_HELP_URL},
+choosing \"Create API token with scopes\" and Bitbucket as the product, then grant:
+
+{}
+
+The first three are the read-only floor. Grant the rest only for the commands
+named beside them: writing to a pull request, listing projects, and creating a
+repository are each a separate grant.",
+        scope_lines("  ")
+    )
+}
 
 /// Printed before the prompts, because a token created without scopes — or with
 /// the wrong ones — fails verification and the user has no way to guess which of
@@ -44,11 +92,11 @@ fn print_onboarding() {
     output::info(&format!("1. open {TOKEN_HELP_URL}"));
     output::info("2. choose \"Create API token with scopes\", then pick Bitbucket as the product");
     output::info("3. grant these scopes:");
-    let width = SCOPES.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
-    for (scope, why) in SCOPES {
-        println!("     {scope:<width$}  {why}");
-    }
-    output::info("   the write scope is only needed to create pull requests and comment");
+    println!("{}", scope_lines("     "));
+    output::info(
+        "   the first three are the read-only floor; grant the rest only for the commands \
+         beside them",
+    );
     output::info("4. copy the token — atlassian shows it once — and paste it below");
     println!();
 }
