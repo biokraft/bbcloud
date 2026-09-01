@@ -133,8 +133,10 @@ file is never overwritten; it is reported and left alone. Set `BB_SKILL_NO_AUTO_
 the files entirely by hand.
 
 Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
-home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
-as `install`.
+home directory instead). It deletes only files `bb` itself wrote. A locally edited copy is left
+alone, and so is one `bb` merely found already in place — a copy you vendored and committed, say,
+which matches the embedded text byte for byte. Both are reported and left on disk unless you pass
+`--force`, same rule as `install`.
 
 Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
 *"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
