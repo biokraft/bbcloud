@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2](https://github.com/biokraft/bbcloud/compare/v0.19.1...v0.19.2) - 2026-09-01
+
+### Added
+
+- *(skill)* `bb skills` now works everywhere `bb skill` does. The singular reads oddly for a
+  command group that manages four files, and "skills" is the noun every agent's own documentation
+  uses, so it is what people type first. The singular stays canonical — every other group is
+  singular (`pr`, `repo`, `branch`, `auth`, `project`), and renaming would break existing scripts —
+  but the plural is a visible alias, so `bb --help` advertises it rather than leaving it for people
+  to guess. Shell completions cover both ([#55](https://github.com/biokraft/bbcloud/pull/55))
+
 ## [0.19.1](https://github.com/biokraft/bbcloud/compare/v0.19.0...v0.19.1) - 2026-09-01
 
 ### Documentation
