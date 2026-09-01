@@ -108,6 +108,8 @@ repository with `gh`: it reproduces the problem first, replaces your workspace, 
 colleague names with placeholders before drafting, searches for a duplicate, and shows you the
 finished issue for approval before anything is created.
 
+Every `bb skill` command is also spelled `bb skills`, whichever comes to hand first.
+
 The skill text ships inside the `bb` binary, so `bb skill install` needs no network and no
 credentials. Run it on a terminal with none of `--skill`, `--all` or `--json`, and it asks which
 skills to install; pick none and it exits 0 having written nothing. Pass `--all` to install every

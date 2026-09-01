@@ -74,7 +74,13 @@ enum Command {
     },
     /// Check for a newer release and update this install
     Update,
-    /// Install the bundled agent skill so your coding agent can drive `bb`
+    /// Install the bundled agent skills so your coding agent can drive `bb`
+    ///
+    /// `bb skills` is accepted too. The singular is canonical, for consistency
+    /// with every other command group, but the plural is what people reach for
+    /// — the thing being managed is a set of files, and "skills" is the noun
+    /// every agent's own documentation uses.
+    #[command(visible_alias = "skills")]
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
