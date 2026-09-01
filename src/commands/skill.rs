@@ -23,7 +23,8 @@ struct StatusRowJson {
 struct UninstallRowJson {
     path: String,
     skill: String,
-    /// One of "removed", "refused_modified", "refused_unsafe_path", "absent" —
+    /// One of "removed", "refused_modified", "refused_not_written",
+    /// "refused_unsafe_path", "absent" —
     /// kept as an explicit outcome string rather than a boolean so a consumer
     /// can tell "we refused to touch a local edit" apart from "there was
     /// nothing there to remove"; collapsing those into one `removed: false`
@@ -269,6 +270,10 @@ pub fn uninstall(
                     }
                     skill::RemovalOutcome::RefusedModified => output::warn(&format!(
                         "{} was edited locally — left alone (pass --force to remove)",
+                        path.display()
+                    )),
+                    skill::RemovalOutcome::RefusedNotWritten => output::warn(&format!(
+                        "{} was not written by bb — left alone (pass --force to remove)",
                         path.display()
                     )),
                     skill::RemovalOutcome::RefusedUnsafePath => output::warn(&format!(

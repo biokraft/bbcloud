@@ -98,6 +98,21 @@ pub struct Entry {
     pub version: String,
     #[serde(default = "default_skill_name")]
     pub skill: String,
+    /// Whether `bb` is what put this file on disk. A content hash cannot answer
+    /// this — it proves the bytes match, never who wrote them — so it is
+    /// recorded at write time and carried forward. `uninstall` deletes only
+    /// what this marks as ours.
+    ///
+    /// State files written before this field existed carry no value. They
+    /// default to `true`: those entries were overwhelmingly bb's own writes,
+    /// and defaulting to `false` would strand every skill installed before the
+    /// upgrade as un-removable.
+    #[serde(default = "default_created")]
+    pub created: bool,
+}
+
+fn default_created() -> bool {
+    true
 }
 
 pub fn state_path() -> PathBuf {
@@ -347,6 +362,9 @@ pub fn status() -> (Vec<StatusRow>, Option<String>) {
 pub enum RemovalOutcome {
     Removed,
     RefusedModified,
+    /// Tracked, but `bb` never wrote it — a vendored or hand-placed copy that
+    /// merely matched the embedded text. Left on disk; the entry is dropped.
+    RefusedNotWritten,
     RefusedUnsafePath,
     Absent,
 }
@@ -356,6 +374,7 @@ impl RemovalOutcome {
         match self {
             Self::Removed => "removed",
             Self::RefusedModified => "refused_modified",
+            Self::RefusedNotWritten => "refused_not_written",
             Self::RefusedUnsafePath => "refused_unsafe_path",
             Self::Absent => "absent",
         }
@@ -413,6 +432,33 @@ pub fn uninstall(
         let wanted = skill_by_name(&entry.skill)
             .map(|s| content_hash(s.content.as_bytes()))
             .unwrap_or_default();
+        // A symlinked Claude entry's `path` is `SKILL.md` *inside* the linked
+        // directory, so removing it directly would follow the link and delete
+        // the `.agents` copy it points at. The thing actually on disk at the
+        // Claude location is the symlink one level up — remove that instead,
+        // and don't recurse into what it points to. Trusts disk over the
+        // recorded `kind`: a hand-made symlink that predates any bb-recorded
+        // `kind` must still be removed as a link, not followed.
+        let is_symlinked_dir = entry.kind == "symlink" || parent_is_symlink(&entry.path);
+
+        // Never delete a *file* bb did not write. `--force` still overrides, so
+        // someone who vendored a copy and explicitly asks for it gone gets
+        // that; the entry is dropped either way, because "uninstall" means stop
+        // managing it and a refusal that stays tracked is re-reported forever.
+        //
+        // A symlink is exempt: the guard exists to protect content bb did not
+        // author, and a link holds none. Removing a hand-made one — the shape
+        // older docs told users to create by hand — loses nothing, and the
+        // `.agents` file it points at is protected by this same rule under its
+        // own entry.
+        if !entry.created && !is_symlinked_dir && !force {
+            results.push((
+                entry.path.clone(),
+                entry.skill.clone(),
+                RemovalOutcome::RefusedNotWritten,
+            ));
+            continue;
+        }
         let modified = matches!(state_of(&entry, &wanted), State::Modified);
         if modified && !force {
             results.push((
@@ -423,14 +469,6 @@ pub fn uninstall(
             keep.push(entry);
             continue;
         }
-        // A symlinked Claude entry's `path` is `SKILL.md` *inside* the linked
-        // directory, so removing it directly would follow the link and delete
-        // the `.agents` copy it points at. The thing actually on disk at the
-        // Claude location is the symlink one level up — remove that instead,
-        // and don't recurse into what it points to. Trusts disk over the
-        // recorded `kind`: a hand-made symlink that predates any bb-recorded
-        // `kind` must still be removed as a link, not followed.
-        let is_symlinked_dir = entry.kind == "symlink" || parent_is_symlink(&entry.path);
         let removal_target: &Path = if is_symlinked_dir {
             entry.path.parent().unwrap_or(&entry.path)
         } else {
@@ -574,6 +612,15 @@ pub fn install(
                 (Some(_), _) => Action::SkippedModified,
             };
 
+            // Did *this* call put the file there? `Unchanged` means we wrote
+            // nothing, so ownership can only be inherited from an existing
+            // entry — and when there is none, the file was already on disk and
+            // is somebody else's.
+            let created = match action {
+                Action::Unchanged => recorded.as_ref().map(|e| e.created).unwrap_or(false),
+                _ => true,
+            };
+
             let mut kind = "file".to_string();
             if action != Action::SkippedModified && action != Action::Unchanged {
                 if *agent == Agent::Claude {
@@ -601,6 +648,7 @@ pub fn install(
                     sha256: wanted.clone(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     skill: skill.name.to_string(),
+                    created,
                 });
             }
 
@@ -882,6 +930,7 @@ mod tests {
                     sha256: content_hash(bb_skill().content.as_bytes()),
                     version: env!("CARGO_PKG_VERSION").into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }];
                 save_state(&entries).unwrap();
                 let (loaded, warning) = load_state();
@@ -940,6 +989,7 @@ mod tests {
                     sha256: content_hash(old.as_bytes()),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -962,6 +1012,7 @@ mod tests {
                     sha256: content_hash(bb_skill().content.as_bytes()),
                     version: env!("CARGO_PKG_VERSION").into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
                 let (rows, _) = status();
@@ -1234,6 +1285,7 @@ mod tests {
                     sha256: content_hash(old.as_bytes()),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -1570,6 +1622,7 @@ mod tests {
                         sha256: "deadbeef".into(),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                     Entry {
                         path: victim_file.clone(),
@@ -1578,6 +1631,7 @@ mod tests {
                         sha256: "deadbeef".into(),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                 ])
                 .unwrap();
@@ -1628,6 +1682,159 @@ mod tests {
         );
     }
 
+    /// The bug from #50, and the invariant `uninstall`'s own doc comment already
+    /// claims: "an untracked file is never touched at all".
+    ///
+    /// `install` decided what to record from a content hash alone. A hash match
+    /// proves the bytes are identical, never that `bb` is what put them there,
+    /// so a `SKILL.md` that already existed and happened to match was reported
+    /// `Unchanged` — accurate, `bb` wrote nothing — and then recorded as a file
+    /// `bb` owns. The next `uninstall` deleted it.
+    ///
+    /// The sharp case is this crate's own checkout, where `.agents/skills/*/SKILL.md`
+    /// are the tracked sources `include_str!` compiles in. They match the embedded
+    /// copies by construction, so `install` claimed all of them and `uninstall`
+    /// deleted the crate's own sources, breaking the build.
+    #[test]
+    #[serial_test::serial]
+    fn uninstall_leaves_a_file_bb_never_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                // Someone else's file, byte-identical to what bb ships — a
+                // vendored copy, or this crate's own source tree.
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, bb_skill().content).unwrap();
+
+                let installed =
+                    install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                assert_eq!(
+                    installed[0].action,
+                    Action::Unchanged,
+                    "bb wrote nothing, so the action is still Unchanged"
+                );
+
+                let results = uninstall(None, &[bb_skill()], false).unwrap();
+                assert_eq!(
+                    results,
+                    vec![(
+                        path.clone(),
+                        bb_skill().name.to_string(),
+                        RemovalOutcome::RefusedNotWritten
+                    )]
+                );
+                assert!(
+                    path.exists(),
+                    "uninstall deleted a file bb never wrote: {}",
+                    path.display()
+                );
+
+                // "Uninstall" still means stop managing it, so the entry is
+                // dropped — otherwise every later run re-reports the refusal.
+                let (entries, _) = load_state();
+                assert!(
+                    !entries.iter().any(|e| e.path == path),
+                    "the adopted entry should be untracked after uninstall"
+                );
+            },
+        );
+    }
+
+    /// The escape hatch. `--force` already means "remove it even though I would
+    /// normally refuse", and someone who vendored a copy and then asked for it
+    /// to go, explicitly, gets what they asked for.
+    #[test]
+    #[serial_test::serial]
+    fn force_removes_a_file_bb_never_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, bb_skill().content).unwrap();
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+
+                let results = uninstall(None, &[bb_skill()], true).unwrap();
+                assert_eq!(results[0].2, RemovalOutcome::Removed);
+                assert!(!path.exists());
+            },
+        );
+    }
+
+    /// A file bb wrote itself, then found unchanged on a second install, stays
+    /// removable. Provenance has to survive the `Unchanged` path, or the fix
+    /// above would quietly strand every skill after its second install.
+    #[test]
+    #[serial_test::serial]
+    fn a_reinstalled_file_is_still_removable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                let again = install(dir.path(), &[Agent::Agents], &[bb_skill()], false).unwrap();
+                assert_eq!(again[0].action, Action::Unchanged);
+
+                let results = uninstall(None, &[bb_skill()], false).unwrap();
+                assert_eq!(results[0].2, RemovalOutcome::Removed);
+            },
+        );
+    }
+
+    /// State files written before this field existed carry no `created`. They
+    /// were, overwhelmingly, written by `bb` — so they default to true and stay
+    /// removable, rather than stranding every skill installed before the upgrade.
+    #[test]
+    #[serial_test::serial]
+    fn a_legacy_state_entry_without_the_field_is_still_removable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        temp_env(
+            &[
+                ("XDG_CONFIG_HOME", Some(cfg.path().to_str().unwrap())),
+                ("HOME", None),
+            ],
+            || {
+                let path = skill_file(dir.path(), Agent::Agents, bb_skill());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, bb_skill().content).unwrap();
+
+                let legacy = serde_json::json!([{
+                    "path": path,
+                    "agent": "agents",
+                    "kind": "file",
+                    "sha256": content_hash(bb_skill().content.as_bytes()),
+                    "version": "0.18.0",
+                    "skill": bb_skill().name,
+                }]);
+                std::fs::create_dir_all(cfg.path().join("bb")).unwrap();
+                std::fs::write(
+                    cfg.path().join("bb").join("skills.json"),
+                    serde_json::to_string(&legacy).unwrap(),
+                )
+                .unwrap();
+
+                let results = uninstall(None, &[bb_skill()], false).unwrap();
+                assert_eq!(results[0].2, RemovalOutcome::Removed);
+            },
+        );
+    }
+
     /// The design's core claim: one customized skill must not block another
     /// tracked skill's refresh, and the skipped one must be named in the
     /// output rather than silently dropped.
@@ -1661,6 +1868,7 @@ mod tests {
                         sha256: content_hash(old.as_bytes()),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                     Entry {
                         path: modified_path.clone(),
@@ -1671,6 +1879,7 @@ mod tests {
                         sha256: content_hash(old.as_bytes()),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                 ])
                 .unwrap();
@@ -1801,6 +2010,7 @@ mod tests {
             sha256: content_hash(brief.content.as_bytes()),
             version: "0.1.0".into(),
             skill: "bbc-daily-brief".into(),
+            created: true,
         };
         assert_eq!(
             state_of(&entry, &content_hash(brief.content.as_bytes())),
@@ -1840,6 +2050,7 @@ mod tests {
                     sha256: content_hash(content.as_bytes()),
                     version: "9.9.9".into(),
                     skill: "some-future-skill".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -1870,6 +2081,7 @@ mod tests {
             sha256: "abc".into(),
             version: current.clone(),
             skill: "bitbucket-cloud".into(),
+            created: true,
         };
         assert!(!tracked_version_differs(std::slice::from_ref(&up_to_date)));
 
@@ -1899,6 +2111,7 @@ mod tests {
                     sha256: "abc".into(),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -1938,6 +2151,7 @@ mod tests {
                     sha256: content_hash(bb_skill().content.as_bytes()),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -1969,6 +2183,7 @@ mod tests {
                     sha256: content_hash(b"something else"),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -2016,6 +2231,7 @@ mod tests {
                     sha256: "abc".into(),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -2061,6 +2277,7 @@ mod tests {
                     sha256: "abc".into(),
                     version: "0.0.1".into(),
                     skill: "some-future-skill".into(),
+                    created: true,
                 }])
                 .unwrap();
 
@@ -2199,6 +2416,7 @@ mod tests {
                         sha256: old_hash.clone(),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                     Entry {
                         path: locked_path.clone(),
@@ -2207,6 +2425,7 @@ mod tests {
                         sha256: old_hash.clone(),
                         version: "0.0.1".into(),
                         skill: "bitbucket-cloud".into(),
+                        created: true,
                     },
                 ])
                 .unwrap();
@@ -2288,6 +2507,7 @@ mod tests {
                     sha256: content_hash(bb_skill().content.as_bytes()),
                     version: "0.0.1".into(),
                     skill: "bitbucket-cloud".into(),
+                    created: true,
                 }])
                 .unwrap();
 
