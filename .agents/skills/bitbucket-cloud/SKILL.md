@@ -194,6 +194,24 @@ it, ask first, and never do it to clear the way for a merge:
 bb pr no-request-changes 42 --yes --json
 ```
 
+## Retargeting
+
+A pull request opened against the wrong destination branch is fixed in place — there is no need
+to close it and open another, and doing so throws away its review history:
+
+```bash
+bb pr retarget 42 --to main --json
+```
+
+Only the destination moves; the API does not let a pull request's source branch change. The
+pull request must be open, and retargeting one that already targets that branch makes no write
+and exits 0. Bitbucket recomputes the diff afterwards, so inline comments anchored to the old
+base may start reading as outdated — say so when you report the change.
+
+Unlike `resolve` and `request-changes`, this needs no confirmation: it corrects a mistake rather
+than hiding or asserting a review point. Retarget when the user asks, or when you opened the
+pull request against the wrong branch yourself.
+
 ## Reviewers
 
 ```bash
@@ -260,6 +278,7 @@ Both filters match a substring, and ignore case.
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
+| `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
@@ -280,7 +299,7 @@ the commit or the diff.
   the id, and confirm the repository with `bb auth status` and `-R`.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
   `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr unresolve`, `pr create` and
-  `pr request-changes` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `pr request-changes` and `pr retarget` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
 - **`is a reply`, or `is not on the diff`** — the id is not the first comment of an inline thread.
   Read `parent` from `bb pr view`, and pass the id that has none.
