@@ -60,11 +60,13 @@ fails the build if the upload itself fails, because a silently skipped upload on
 badge reading "unknown" for weeks; `publish dry run` catches crates.io packaging problems before
 a real release depends on them.
 
-**Commit messages are functional, not cosmetic.** release-plz parses them to build the changelog
-and pick the next version: `feat:` earns a minor bump, `fix:` a patch, a `!` suffix or a
-`BREAKING CHANGE:` trailer a major, and `test:`/`chore:`/`ci:` are skipped from the changelog
-entirely. Get the prefix wrong and you get a wrong version number, so it matters more here than
-in a repo where the changelog is written by hand.
+**Commit messages are functional, not cosmetic.** release-plz parses them to build the changelog:
+`feat:` lands under "Added", `fix:` under "Fixed", `docs:`/`refactor:`/`perf:` under their own
+groups, and `test:`/`chore:`/`ci:` are skipped entirely. Get the prefix wrong and the change is
+filed wrong, or vanishes from the changelog altogether.
+
+The prefix does **not** pick the version — see [Release flow](#release-flow). That is decided by
+`cargo-semver-checks`, from the crate's public API.
 
 **Releases are automated end to end. Never do any of these by hand:** edit `version` in
 `Cargo.toml`, write `CHANGELOG.md`, or create a git tag. Merging to `main` makes release-plz open
@@ -301,15 +303,35 @@ desynchronises the crate version from the git tag.
 To cut a release:
 
 1. Land the change on `main` with a conventional-commit message. `feat`, `fix`, `docs`, `refactor`
-   and `perf` appear in the changelog; `test`, `chore` and `ci` are skipped. A `!` suffix
-   (`feat!:`) marks a breaking change and forces a minor/major bump.
+   and `perf` appear in the changelog; `test`, `chore` and `ci` are skipped.
 2. `release-plz` opens or updates a **release PR** carrying the version bump and the generated
-   `CHANGELOG.md` entries, computed from the conventional commits since the last release. Review
-   it like any other PR. The version is chosen by release-plz from the commit prefixes, not by
-   hand: since the project is pre-1.0, a `feat:` commit produces a minor bump (e.g. 0.9.x →
-   0.10.0) and a `fix:` produces a patch (e.g. 0.9.1 → 0.9.2). The one exception is a milestone
-   version such as 1.0.0, once the project is ready for it — the maintainer sets that version
-   deliberately as a conscious decision, not as routine practice.
+   `CHANGELOG.md` entries. Review it like any other PR.
+
+   **The version comes from the public API, not from the commit prefixes.** release-plz runs
+   `cargo-semver-checks` against the packaged crate and compares it to the released one. Since
+   the project is pre-1.0, the rule is:
+
+   | semver-checks verdict | Bump | Example |
+   |---|---|---|
+   | `⚠️ API breaking changes` | minor | 0.18.2 → 0.19.0 |
+   | `✓ API compatible changes` | patch | 0.18.1 → 0.18.2 |
+
+   A `feat:` commit does **not** on its own produce a minor bump, whatever the prefix suggests —
+   v0.18.2 shipped a `feat:` and a `fix:` together and was a patch, because neither touched the
+   public API. v0.19.0, one commit later, was a `fix:` alone and got a minor, because it added a
+   variant to a public enum. There is a library target, so anything `pub` in `src/lib.rs`'s tree
+   counts as API — including enum variants and struct fields that exist only to serve the binary.
+
+   The verdict is printed in the `release-plz` workflow log (`next version is X (…)`), which is
+   the place to look when a version is not what you expected.
+
+   A `!` suffix or a `BREAKING CHANGE:` trailer also forces a bump — pre-1.0 that is a minor, not
+   a major. This has not come up in this repository yet, so treat it as release-plz's documented
+   behaviour rather than something observed here.
+
+   The one exception to all of the above is a milestone version such as 1.0.0, once the project is
+   ready for it — the maintainer sets that version deliberately as a conscious decision, not as
+   routine practice.
 3. Merge the release PR. That triggers, in order: the git tag `v<version>`, the GitHub Release,
    `cargo publish` to crates.io, then `release.yml` builds the four target triples and attaches
    `bbcloud-v<version>-<triple>.tar.gz` archives, each with its own `<archive>.sha256` file (there
