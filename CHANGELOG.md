@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0](https://github.com/biokraft/bbcloud/compare/v0.18.2...v0.19.0) - 2026-09-01
+
+### Fixed
+
+- *(skill)* only delete skill files bb actually wrote ([#51](https://github.com/biokraft/bbcloud/pull/51))
+
 ## [0.18.2](https://github.com/biokraft/bbcloud/compare/v0.18.1...v0.18.2) - 2026-09-01
 
 v0.18.1 documented the scopes `repo create` and `project list` need. It documented them in the
