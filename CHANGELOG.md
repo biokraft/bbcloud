@@ -8,7 +8,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- *(skill)* accept `bb skills` as well as `bb skill` ([#55](https://github.com/biokraft/bbcloud/pull/55))
+- *(skill)* `bb skills` now works everywhere `bb skill` does. The singular reads oddly for a
+  command group that manages four files, and "skills" is the noun every agent's own documentation
+  uses, so it is what people type first. The singular stays canonical — every other group is
+  singular (`pr`, `repo`, `branch`, `auth`, `project`), and renaming would break existing scripts —
+  but the plural is a visible alias, so `bb --help` advertises it rather than leaving it for people
+  to guess. Shell completions cover both ([#55](https://github.com/biokraft/bbcloud/pull/55))
 
 ## [0.19.1](https://github.com/biokraft/bbcloud/compare/v0.19.0...v0.19.1) - 2026-09-01
 
