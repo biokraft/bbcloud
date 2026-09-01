@@ -4,6 +4,50 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2](https://github.com/biokraft/bbcloud/compare/v0.18.1...v0.18.2) - 2026-09-01
+
+v0.18.1 documented the scopes `repo create` and `project list` need. It documented them in the
+README only — `bb auth login` went on printing the old four, so following the tool's own
+walkthrough still produced a token that fails on those commands. This release fixes the
+walkthrough and removes the duplicate list that let it drift. It also adds a fourth agent skill,
+for reporting `bb` bugs upstream.
+
+### Fixed
+
+- *(auth)* `bb auth login` now names all six scopes. It listed four, omitting
+  `read:project:bitbucket` and `admin:repository:bitbucket` — the two the README's table gained
+  when `repo create` and `project list` shipped in v0.18.0. Anyone who followed the walkthrough
+  minted a token that returned 403 on their first `repo create`, with nothing in the login output
+  to explain which grant was missing. The list also existed three times over — in `SCOPES`, in the
+  `auth login --help` text, and in the README — and two of the three fell behind; `--help` is now
+  rendered from `SCOPES`, and a test asserts the README table and `SCOPES` hold the same set, so
+  neither copy can drift alone again. Every pre-existing scope test iterated `SCOPES`, which is
+  why all of them stayed green throughout ([#47](https://github.com/biokraft/bbcloud/pull/47))
+
+### Added
+
+- *(skill)* `bbc-report-bug`, a fourth bundled agent skill: it files a bug about `bb` itself
+  against this repository with `gh`. An agent that trips over a `bb` bug mid-task holds the best
+  evidence there is — the exact commands, the `--json` output, the version — and until now had
+  nowhere to put it. That evidence is the problem, though, since it comes out of a private
+  Bitbucket workspace and a GitHub issue is public forever, so the skill redacts workspace,
+  repository, project and human names to placeholders before it drafts anything, never includes a
+  token in any form, prints the finished issue and waits for you to approve it, and never files on
+  its own initiative — the same gate `pr resolve` and `pr request-changes` apply. It is hardcoded
+  to `biokraft/bbcloud` and cannot be pointed at another repository. Install it with
+  `bb skill install --skill bbc-report-bug`
+  ([#48](https://github.com/biokraft/bbcloud/pull/48))
+
+### Upgrading
+
+Nothing breaks and no token needs replacing. But if you authenticated before this release and
+have not used `bb repo create` or `bb project list`, your token is probably missing the two
+scopes the walkthrough never mentioned — run `bb auth login` again and grant all six from the new
+list rather than waiting to be surprised by a 403.
+
+Existing skill files are untouched by the upgrade. `bb skill install` will offer the new
+`bbc-report-bug` alongside the three you already have.
+
 ## [0.18.1](https://github.com/biokraft/bbcloud/compare/v0.18.0...v0.18.1) - 2026-08-26
 
 A follow-up to v0.18.0, from using it: the upgrade instruction `bb update` printed could not
