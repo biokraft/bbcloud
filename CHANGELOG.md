@@ -6,9 +6,44 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [0.19.0](https://github.com/biokraft/bbcloud/compare/v0.18.2...v0.19.0) - 2026-09-01
 
+Data loss: `bb skill uninstall` could delete `SKILL.md` files `bb` never wrote. If you keep skill
+files under version control, upgrade before you next run it.
+
 ### Fixed
 
-- *(skill)* only delete skill files bb actually wrote ([#51](https://github.com/biokraft/bbcloud/pull/51))
+- *(skill)* `bb skill uninstall` now deletes only files `bb` itself wrote. `install` decided what
+  to record from a content hash alone — and a hash match proves the bytes are identical, never
+  that `bb` is what put them there. So a `SKILL.md` that already existed and happened to match was
+  reported `unchanged`, which was accurate since `bb` wrote nothing and left git clean, and then
+  recorded as a file `bb` owns. The next `uninstall` deleted it.
+
+  The sharp case was this crate's own checkout, where `.agents/skills/*/SKILL.md` are the tracked
+  sources `include_str!` compiles in: byte-identical to the embedded copies by construction, so
+  `bb skill install` claimed all four and `bb skill uninstall` removed the crate's own sources and
+  broke the build. Any project that vendors and commits a bundled skill was exposed to the same
+  path.
+
+  State entries now record whether `bb` created the file, at write time rather than inferred from
+  a hash afterwards, and uninstall refuses anything else — restoring the guarantee its own
+  documentation already made, that an untracked file is never touched. A refusal reports
+  `refused_not_written` and stops tracking the file; `--force` still removes it. A hand-made
+  Claude symlink is still removed, because the guard protects content and a link holds none, and
+  the `.agents` file it points at keeps its own protection
+  ([#51](https://github.com/biokraft/bbcloud/pull/51))
+
+### Upgrading
+
+Nothing to do, and no state file to migrate — entries written by earlier versions are treated as
+`bb`'s own writes, so everything you installed before this release stays removable exactly as it
+was.
+
+One behaviour change worth knowing if you script against it: `bb skill uninstall --json` can now
+report `refused_not_written` in a row's `outcome`, alongside the existing `removed`,
+`refused_modified`, `refused_unsafe_path` and `absent`. If you vendored a copy of a bundled skill
+and want `bb` to delete it anyway, pass `--force`.
+
+This is a minor rather than a patch release only because that new value is an addition to a public
+enum. There is no change to any command's arguments or behaviour beyond the fix above.
 
 ## [0.18.2](https://github.com/biokraft/bbcloud/compare/v0.18.1...v0.18.2) - 2026-09-01
 
