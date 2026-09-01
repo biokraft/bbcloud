@@ -8,7 +8,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- *(pr)* add `bb pr retarget` to move a PR's destination branch ([#57](https://github.com/biokraft/bbcloud/pull/57))
+- *(pr)* `bb pr retarget <id> --to <branch>` moves an open pull request to a
+  different destination branch, so one opened against the wrong base is fixed in
+  place instead of being closed and reopened with its review history discarded
+  ([#57](https://github.com/biokraft/bbcloud/pull/57)).
+
+  It resends the existing title, which the api requires on the update, refuses a
+  pull request that is not open with a message naming its state, and makes no
+  write at all when the pull request already targets that branch. Bitbucket
+  recomputes the diff, so inline comments anchored to the old base can start
+  reading as outdated — the command says so. The source branch cannot be moved;
+  that is the api's rule, not an omission. No confirmation prompt: retargeting
+  corrects a mistake rather than hiding a review point like `pr resolve` or
+  asserting a verdict like `pr request-changes`.
+
+  The bundled agent skill documents the command, so `bb skill install` picks it
+  up and agents can fix their own mis-targeted pull requests.
 
 ## [0.19.2](https://github.com/biokraft/bbcloud/compare/v0.19.1...v0.19.2) - 2026-09-01
 
