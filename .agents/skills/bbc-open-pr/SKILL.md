@@ -7,8 +7,9 @@ description: Open a Bitbucket Cloud pull request with the `bb` CLI — suggest r
 
 Opening a good pull request is three jobs: get the branch into a state Bitbucket can see,
 write a description someone can act on in ten seconds, and put it in front of the people who
-know the code. `bb pr create` does none of that for you — it takes a title and a target and
-attaches whatever static list the repository has configured as default reviewers.
+know the code. `bb pr create` does none of that for you — it takes a title, a target, and the
+reviewers you name, and attaches whatever static list the repository has configured as default
+reviewers when you name none.
 
 Work through the steps in order. Two of them stop and ask the user; neither is optional.
 
@@ -81,8 +82,8 @@ wrote one line in 2019 is not the reviewer; whoever has been maintaining the fil
 Git records an author as a name and an email. `bb pr reviewers add` resolves a
 case-insensitive substring of a Bitbucket display name or nickname, matched against workspace
 members, the repository's permission-config users, and its default reviewers — a pool no `bb`
-command lists. An unresolvable name fails at add time with exit 1 — after the pull request
-already exists.
+command lists. `bb pr create --reviewer` resolves names from the same pool, and resolves them
+before the create, so an unresolvable name fails with exit 1 having opened nothing.
 
 No command can tell you the full resolvable pool, so resolvability cannot be fully verified
 before the write. The best available read-only approximation is the names Bitbucket already
@@ -100,7 +101,8 @@ case-insensitive substring.
 - A candidate that matches the pool is a reasonably safe suggestion.
 - A candidate that does not match the pool is not necessarily unresolvable — the pool is only an
   approximation — but suggest them labeled explicitly as **unverified**, so the user knows the
-  add can still fail with exit 1.
+  create can still fail with exit 1 — at which point nothing has been opened, so you fix the
+  name and re-run the same command.
 - A candidate you cannot match at all — no plausible name in the pool, nothing close — goes
   under the heading `could not be mapped`, with their git name. Never silently drop them: the
   most likely reviewer is often behind a name-format mismatch, and the user can map them by hand
@@ -111,8 +113,8 @@ The only source for a uuid is `bb pr reviewers <pr-id> --json` on some pull requ
 is already tagged on — so this only works for people who have reviewed before. When no uuid is
 available, ask the user for the person's exact Bitbucket display name instead of guessing.
 
-Every one of these checks happens before any write: one bad name in a later `add` call fails
-the whole call, but nothing has been created yet at this point.
+Every one of these checks happens before any write, and so does `--reviewer`'s own resolution:
+one bad name fails the create, and nothing has been created at that point either.
 
 ## Step 4 — draft the description, then get it approved
 
@@ -179,20 +181,33 @@ attention. "No one" is a valid answer, and so is a name you did not suggest.
 
 ## Step 6 — create, then tag
 
-Both gates are behind you, so the pull request can be created complete:
+Both gates are behind you, so the pull request can be created complete, in one call:
 
 ```bash
-bb pr create <target> --title "<title>" --description "<body>" --json
-bb pr reviewers add <id> dana,ash --json
+bb pr create <target> --title "<title>" --description "<body>" --reviewer dana,ash --json
 ```
 
-Two calls, because `bb pr create` has no reviewer flag. Report the URL from the first call's
-JSON.
+`--reviewer` is the whole reviewer set. The repository's default reviewers are not attached at
+all, so the user's pick is exactly who ends up on the pull request — no one arrives uninvited and
+there is nothing to clean up afterwards. Report the URL from the JSON.
 
-`bb pr create` attaches the repository's default reviewers and removes you from that list.
-Pass `--no-default-reviewers` when the user's pick should be the whole list.
+When the user picked nobody, pass `--no-default-reviewers` and no `--reviewer`. Omitting both
+attaches whatever static default list the repository has, which is not a pick the user made.
 
-Every name is resolved before any write, so one bad name in `add <id> a,b` writes nothing.
+Every name resolves before the create, so one bad name opens nothing — fix the name and run the
+same command again. Yourself is dropped rather than rejected.
+
+If the reviewer set has to change after the fact — the user changes their mind, or a default list
+came along from an earlier create — edit it in place:
+
+```bash
+bb pr reviewers <id> --json                 # who is tagged now, and each decision
+bb pr reviewers remove <id> unwanted --json # untag; comma-separate for several
+bb pr reviewers add <id> dana --json
+```
+
+`remove` errors if the name is not a reviewer on that pull request, so a mistyped removal cannot
+look like it worked.
 
 ## Never
 

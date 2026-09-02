@@ -269,6 +269,10 @@ enum PrCommand {
         /// Do not attach the repository's default reviewers
         #[arg(long)]
         no_default_reviewers: bool,
+        /// Tag exactly these reviewers, comma-separated; a `{uuid}` is taken
+        /// verbatim. Replaces the repository's default reviewers entirely
+        #[arg(long, value_name = "NAMES")]
+        reviewer: Option<String>,
         /// Prompt for title and description
         #[arg(long, short = 'i')]
         interactive: bool,
@@ -555,6 +559,7 @@ async fn run(cli: Cli) -> Result<()> {
                     title,
                     description,
                     no_default_reviewers,
+                    reviewer,
                     interactive,
                     web,
                     close_source_branch,
@@ -567,6 +572,7 @@ async fn run(cli: Cli) -> Result<()> {
                             title,
                             description,
                             no_default_reviewers,
+                            reviewer,
                             interactive,
                             web,
                             close_source_branch,
