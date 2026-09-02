@@ -96,7 +96,8 @@ errors rather than silently scanning nothing.
 
 It returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`
 (`workspace/repo`), `my_role` (`author` | `reviewer` | `both`), `my_review_state`, `updated_on`,
-and — with `--build` — `build_state` and `build[]`.
+`comment_count` (`null` when bitbucket did not report one), and — with `--build` — `build_state`
+and `build[]`.
 
 `--role author` costs one request to find who you are, then one paginated call per workspace. The
 reviewer half costs one request to find who you are, one repository-listing call per workspace,
@@ -286,7 +287,7 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr build <id>` | `{build_state,statuses[{key,name,state,url}]}` |
-| `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on}],partial[]}` |
+| `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on,comment_count}],partial[]}` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |

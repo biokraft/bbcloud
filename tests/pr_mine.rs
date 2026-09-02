@@ -546,7 +546,7 @@ async fn authored_request_carries_the_reviewer_fields_parameter() {
         .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
         .and(query_param(
             "fields",
-            "+values.reviewers,+values.participants,+values.draft",
+            "+values.reviewers,+values.participants,+values.draft,+values.comment_count",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![])))
         .expect(1)
@@ -921,4 +921,89 @@ async fn no_workspace_source_is_a_config_error_not_an_empty_success() {
     let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("--workspace"), "got {stderr}");
     assert!(stderr.contains("BB_WORKSPACE"), "got {stderr}");
+}
+
+/// The bug this field exists for: a reviewer comments without approving or
+/// requesting changes, so `my_review_state` stays `pending` and the row looks
+/// idle. `comment_count` is the only signal in phase 1 that says otherwise, so
+/// it has to reach `--json`.
+#[tokio::test]
+async fn a_commented_on_authored_row_carries_the_comment_count() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
+    let mut commented = pr(42, "acme/api", "{me}", Some("{dana}"));
+    commented["comment_count"] = serde_json::json!(3);
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![commented])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "author", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let row = &value["pull_requests"][0];
+    // The reviewer never acted, so the state alone still reads as idle.
+    assert_eq!(row["my_review_state"], serde_json::Value::Null);
+    assert_eq!(row["comment_count"], 3);
+}
+
+/// A pull request nobody has commented on reports zero rather than nothing:
+/// the brief's candidate rule reads the field on every row, and a missing key
+/// there would be indistinguishable from an api that did not answer.
+#[tokio::test]
+async fn an_untouched_row_reports_zero_comments() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
+    let mut quiet = pr(7, "acme/api", "{me}", None);
+    quiet["comment_count"] = serde_json::json!(0);
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(vec![quiet])))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "author", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["pull_requests"][0]["comment_count"], 0);
+}
+
+/// When the api omits the counter the key is still present and null, never
+/// absent and never coerced to 0 — a consumer must be able to tell "no
+/// comments" from "the api did not say", because the second one means it has
+/// to fetch the pull request to find out.
+#[tokio::test]
+async fn a_missing_comment_count_is_null_not_zero() {
+    let server = MockServer::start().await;
+    mock_user(&server).await;
+    mock_removed_authored_endpoint(&server).await;
+    mock_removed_endpoints(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/pullrequests/%7Bme%7D"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page(vec![pr(9, "acme/api", "{me}", None)])),
+        )
+        .mount(&server)
+        .await;
+
+    let out = bb(&server.uri())
+        .args(["pr", "mine", "--role", "author", "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let row = value["pull_requests"][0].as_object().unwrap();
+    assert!(row.contains_key("comment_count"));
+    assert_eq!(row["comment_count"], serde_json::Value::Null);
 }
