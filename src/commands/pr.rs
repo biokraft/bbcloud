@@ -5,6 +5,7 @@ use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
 use crate::repo::{self, RepoSlug};
+use crate::users;
 use serde::Serialize;
 
 pub struct Ctx {
@@ -242,6 +243,7 @@ pub struct CreateArgs {
     pub title: Option<String>,
     pub description: Option<String>,
     pub no_default_reviewers: bool,
+    pub reviewer: Option<String>,
     pub interactive: bool,
     pub web: bool,
     pub close_source_branch: bool,
@@ -257,6 +259,40 @@ async fn default_reviewers(ctx: &Ctx) -> Result<Vec<ReviewerRef>> {
         .filter(|uuid| *uuid != my_uuid)
         .map(|uuid| ReviewerRef { uuid })
         .collect())
+}
+
+/// Resolves an explicit `--reviewer` list to uuids, dropping the author because
+/// bitbucket answers 400 when the author is tagged as a reviewer. Every name is
+/// resolved before the caller opens anything, so one bad name creates no pull
+/// request rather than one with a reviewer set nobody chose.
+async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
+    let requested: Vec<&str> = names
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if requested.is_empty() {
+        return Err(BbError::Config("no reviewer name given".into()));
+    }
+
+    // Names first, so a typo fails before anything else is asked of the api.
+    let mut uuids: Vec<String> = Vec::new();
+    for name in requested {
+        let user = users::resolve_user(&ctx.client, &ctx.slug, name, &[]).await?;
+        let uuid = user
+            .uuid
+            .clone()
+            .ok_or_else(|| BbError::Config(format!("`{}` has no uuid to tag", user.name())))?;
+        if !uuids.contains(&uuid) {
+            uuids.push(uuid);
+        }
+    }
+
+    let me: User = ctx.client.get_json("/user").await?;
+    let my_uuid = me.uuid.unwrap_or_default();
+    uuids.retain(|uuid| *uuid != my_uuid);
+
+    Ok(uuids.into_iter().map(|uuid| ReviewerRef { uuid }).collect())
 }
 
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
@@ -300,10 +336,12 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         }
     }
 
-    let reviewers = if args.no_default_reviewers {
-        Vec::new()
-    } else {
-        default_reviewers(ctx).await?
+    // An explicit list is the whole list: naming reviewers means the repository's
+    // default set never arrives uninvited, which is the reason to name them.
+    let reviewers = match args.reviewer.as_deref() {
+        Some(names) => named_reviewers(ctx, names).await?,
+        None if args.no_default_reviewers => Vec::new(),
+        None => default_reviewers(ctx).await?,
     };
 
     #[derive(Serialize)]

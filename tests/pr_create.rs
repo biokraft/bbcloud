@@ -261,3 +261,216 @@ async fn create_rejects_a_source_equal_to_the_target() {
         .failure()
         .stderr(contains("source and target are both `main`"));
 }
+
+/// `--reviewer` names the whole set, so the repository's default reviewers must
+/// not be fetched at all — the point of the flag is that nobody arrives
+/// uninvited.
+#[tokio::test]
+async fn reviewer_flag_replaces_the_default_reviewers() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    // Reached by the name resolver's pool, never as a source of reviewers.
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [
+                { "uuid": "{me}", "display_name": "Me" },
+                { "uuid": "{dana}", "display_name": "Dana Scully" },
+                { "uuid": "{unwanted}", "display_name": "Unwanted Person" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "reviewers": [{ "uuid": "{dana}" }]
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 20 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "dana",
+        ])
+        .assert()
+        .success();
+}
+
+/// A `{uuid}` is taken verbatim: the member and default-reviewer listings are
+/// never read, so an ambiguous or unlistable name is still addressable.
+#[tokio::test]
+async fn reviewer_flag_takes_a_uuid_verbatim_without_a_name_lookup() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "reviewers": [{ "uuid": "{dana}" }, { "uuid": "{ash}" }]
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 21 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "{dana},{ash}",
+        ])
+        .assert()
+        .success();
+}
+
+/// Every name resolves before the POST, so an unresolvable one opens nothing —
+/// otherwise the pull request exists with a reviewer set the user never chose.
+#[tokio::test]
+async fn an_unresolvable_reviewer_opens_no_pull_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 22 })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "nobody-here",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("nobody-here"));
+}
+
+/// The author cannot review their own pull request — bitbucket answers 400 — so
+/// naming yourself is dropped rather than turned into a failed write.
+#[tokio::test]
+async fn reviewer_flag_drops_the_author() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({ "reviewers": [] })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 23 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "{me}",
+        ])
+        .assert()
+        .success();
+}
+
+/// Names are resolved once, not once per target, and every pull request in a
+/// multi-target create carries the same set.
+#[tokio::test]
+async fn reviewer_flag_applies_to_every_target() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "reviewers": [{ "uuid": "{dana}" }]
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 24 })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main,release/1.x",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "{dana}",
+        ])
+        .assert()
+        .success();
+}

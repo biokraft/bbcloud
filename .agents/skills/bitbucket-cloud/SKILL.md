@@ -240,12 +240,23 @@ thread is supported, but only on the user's request — see
 bb pr create main --title "Cache session lookups" --json
 bb pr create main feat/cache --title "..." --description "..." --close-source-branch --json
 bb pr create main,develop --title "..." --json      # one pull request per target
+bb pr create main --title "..." --reviewer dana,ash --json   # exactly these two reviewers
 ```
 
 The source branch defaults to the current checkout. The title defaults to
 `Merge <source> into <target>`. `bb` attaches the default reviewers of the repository, and removes
 you from that list. Pass `--no-default-reviewers` to attach none. Do not pass `-i`, because it
 prompts.
+
+`--reviewer` names the whole reviewer set: the repository's default reviewers are not attached at
+all, so nobody the user did not pick arrives on the pull request. It takes the same names
+`bb pr reviewers add` does — a case-insensitive substring of a display name or nickname,
+comma-separated, or a `{uuid}` taken verbatim — and resolves every one of them **before** the pull
+request is created, so a name that does not resolve opens nothing. Yourself is dropped rather than
+rejected, because bitbucket answers 400 when the author is tagged.
+
+Prefer `--reviewer` over creating first and fixing the list afterwards. To change the set on a pull
+request that already exists, use `bb pr reviewers add|remove <id> <names>`.
 
 For the full workflow — suggesting reviewers from the history of the files you changed, and
 writing a description a human can skim — use the `bbc-open-pr` skill. It is installed by

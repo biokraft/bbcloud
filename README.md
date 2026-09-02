@@ -213,6 +213,7 @@ bb pr view 42 --unresolved                # the PR plus comment threads still ne
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
+bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
