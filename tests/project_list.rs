@@ -8,6 +8,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())
@@ -139,6 +140,7 @@ async fn without_a_resolvable_workspace_it_names_the_flag_and_sends_nothing() {
         .await;
 
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     // No BB_WORKSPACE, no BB_REPO, and a cwd that is not a git checkout, so
     // every source of a workspace is absent.
     let empty = tempfile::tempdir().unwrap();

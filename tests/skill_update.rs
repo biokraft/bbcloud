@@ -53,6 +53,7 @@ fn track(project: &std::path::Path, cfg: &std::path::Path, contents: &str) -> st
 
 fn bb(project: &std::path::Path, cfg: &std::path::Path, api: &str) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.current_dir(project)
         .env("HOME", cfg)
         .env("XDG_CONFIG_HOME", cfg)

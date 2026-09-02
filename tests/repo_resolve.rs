@@ -9,6 +9,7 @@ use tempfile::{tempdir, TempDir};
 /// Every ambient variable that could short-circuit resolution is removed.
 fn bb_in(dir: &Path) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.current_dir(dir)
         .args(["browse", "--print"])
         .env("BB_KEYRING_DISABLE", "1")
@@ -45,6 +46,7 @@ fn bb_repo_env_var_wins_without_consulting_git() {
     // An empty directory: if this consulted git it would fail outright.
     let tmp = tempdir().unwrap();
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.current_dir(tmp.path())
         .args(["browse", "--print"])
         .env("BB_KEYRING_DISABLE", "1")
@@ -77,6 +79,7 @@ fn a_whitespace_only_bb_repo_fails_to_parse_as_a_slug() {
     );
 
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.current_dir(repo.path())
         .args(["browse", "--print"])
         .env("BB_KEYRING_DISABLE", "1")
@@ -201,6 +204,7 @@ fn a_detached_head_is_reported_when_the_source_branch_is_inferred() {
 
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .current_dir(repo.path())
         .args(["pr", "create", "main"])
         .env("BB_KEYRING_DISABLE", "1")

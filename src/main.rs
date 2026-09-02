@@ -4,6 +4,7 @@ use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
 use bb_cli::output::{self, Format};
 use bb_cli::skill;
+use bb_cli::update_check;
 use bb_cli::workspace;
 use clap::{CommandFactory, Parser, Subcommand};
 
@@ -486,6 +487,12 @@ fn auto_refresh_skills(format: Format) {
 async fn run(cli: Cli) -> Result<()> {
     let format = Format::from_json_flag(cli.json);
     auto_refresh_skills(format);
+    // `bb update` asks the release api itself and reports the answer as its
+    // whole output, so a passive notice ahead of it would be a duplicate
+    // request and a duplicate line.
+    if !matches!(cli.command, Command::Update) {
+        update_check::maybe_notify(format, &commands::update::release_api_base()).await;
+    }
     match cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Login { email, token_stdin } => {

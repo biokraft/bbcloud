@@ -22,6 +22,10 @@ Do not use `gh`. Do not ask the user to open the web UI.
    paragraph. Without a body and without a terminal, the command fails.
 6. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
 7. In a new checkout, run `bb skill install` to set up this skill. It needs no authentication.
+8. `bb` may print `bb X.Y.Z is available (you have …) — upgrade with: <command>` on **stderr**. It
+   is a notice, not an error: the command still succeeded, and stdout is unaffected. Tell the user
+   once, quoting the command it names. Do not run the upgrade yourself, and do not repeat the
+   notice on every later command in the same session.
 
 ## Read a pull request
 
@@ -328,6 +332,7 @@ email and an API token. Never suggest an app password.
 | `BB_EMAIL`, `BB_TOKEN` | credentials for CI and other non-interactive use |
 | `BB_REPO` | default repository, the same as `-R` |
 | `NO_COLOR` | disable colour and spinners |
+| `BB_NO_UPDATE_CHECK` | set to `1` to silence the once-a-day newer-release notice |
 
 Install: `brew install biokraft/tap/bb`, or `cargo install bbcloud --locked`. Run `bb --help` and
 `bb <command> --help` for the full surface. Source and issues:
