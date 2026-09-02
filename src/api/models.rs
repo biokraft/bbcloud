@@ -177,6 +177,12 @@ pub struct PullRequest {
     /// usually an agent computing an age, and a pre-formatted "3 days ago" would
     /// throw away the precision it needs.
     pub updated_on: Option<String>,
+    /// Every comment on the pull request, inline and general, replies included —
+    /// bitbucket's own counter. `None` when the api did not return the field,
+    /// which is not the same as zero: a caller that treats absence as "no
+    /// comments" would silently hide the very activity this exists to surface,
+    /// so absence must be read as "unknown, look properly".
+    pub comment_count: Option<u64>,
 }
 
 /// A Bitbucket project, the container a repository lives in.

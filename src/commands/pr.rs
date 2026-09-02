@@ -446,6 +446,7 @@ mod tests {
             participants: Vec::new(),
             draft: false,
             updated_on: None,
+            comment_count: None,
         };
         let line = prompt_line("request changes on", &pr);
         assert!(line.contains("#42"), "got: {line}");

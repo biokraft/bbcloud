@@ -49,6 +49,15 @@ struct MineRow {
     my_review_state: Option<ReviewState>,
     reviewers: Vec<ReviewerState>,
     updated_on: Option<String>,
+    /// Bitbucket's own comment counter, so a brief can tell a pull request
+    /// somebody has commented on from one nobody has touched. It is the only
+    /// comment signal phase 1 carries: `my_review_state` stays `pending` when a
+    /// reviewer comments without approving or requesting changes, so without
+    /// this a reviewer's unanswered thread is invisible until somebody fetches
+    /// the pull request individually. Serialized even when `None` — absence is
+    /// "the api did not say", which a consumer must treat as "look properly",
+    /// not as zero.
+    comment_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_state: Option<BuildState>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +130,7 @@ fn to_row(repo: &str, pr: &PullRequest, my_uuid: &str) -> MineRow {
         my_review_state,
         reviewers,
         updated_on: pr.updated_on.clone(),
+        comment_count: pr.comment_count,
         build_state: None,
         build: None,
     }
