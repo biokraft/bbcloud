@@ -153,13 +153,14 @@ async fn the_kill_switch_makes_no_request_and_prints_nothing() {
 
 #[tokio::test]
 async fn an_unreachable_release_api_is_silent() {
-    // A server that is started and immediately dropped leaves a port nothing
-    // is listening on, which is what being offline looks like from here.
-    let uri = {
-        let server = MockServer::start().await;
-        server.uri()
-    };
-    let (mut cmd, _cfg) = bb(&uri);
+    // Port 1 is a privileged port nothing in the test suite can bind and the
+    // kernel never hands out as an ephemeral port, so a connection there is
+    // refused immediately — which is what being offline looks like from here.
+    // Do *not* get this address by starting a `MockServer` and dropping it:
+    // on Linux the freed ephemeral port gets recycled to a later test's mock
+    // server, and this command's update check then lands on that server and
+    // breaks its request count.
+    let (mut cmd, _cfg) = bb("http://127.0.0.1:1");
     let out = cmd.args(["skill", "status"]).output().unwrap();
 
     assert!(out.status.success(), "the check must never fail a command");
