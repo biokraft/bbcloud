@@ -12,6 +12,7 @@ fn auth_status_redacts_the_token() {
     for args in [vec!["auth", "status"], vec!["auth", "status", "--json"]] {
         let out = Command::cargo_bin("bb")
             .unwrap()
+            .env("BB_NO_UPDATE_CHECK", "1")
             .args(&args)
             .env("BB_EMAIL", "dev@example.com")
             .env("BB_TOKEN", "ATATT3xFfGF0_super_secret_value")
@@ -39,6 +40,7 @@ fn auth_status_redacts_the_token() {
 fn auth_status_shows_email_and_redacted_tail() {
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "status"])
         .env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "ATATT3xFfGF0abcd")
@@ -52,6 +54,7 @@ fn auth_status_shows_email_and_redacted_tail() {
 fn auth_status_without_credentials_exits_two() {
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "status"])
         .env("BB_EMAIL", "")
         .env("BB_TOKEN", "")
@@ -66,6 +69,7 @@ fn auth_status_without_credentials_exits_two() {
 fn auth_logout_json_emits_parseable_json() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "logout", "--json"])
         .env("BB_KEYRING_DISABLE", "1")
         .output()
@@ -82,6 +86,7 @@ fn auth_logout_json_emits_parseable_json() {
 fn auth_login_non_tty_names_required_flags() {
     let assert = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "login"])
         .env("BB_API_BASE", "http://127.0.0.1:1")
         .write_stdin("")
@@ -106,6 +111,7 @@ fn auth_login_non_tty_never_leaks_secret() {
     for args in [vec!["auth", "login"], vec!["auth", "login", "--json"]] {
         let out = Command::cargo_bin("bb")
             .unwrap()
+            .env("BB_NO_UPDATE_CHECK", "1")
             .args(&args)
             .env("BB_API_BASE", "http://127.0.0.1:1")
             .write_stdin("super-secret-token-value")
@@ -127,6 +133,7 @@ fn auth_login_non_tty_never_leaks_secret() {
 fn auth_help_mentions_api_token_not_app_password() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "login", "--help"])
         .output()
         .unwrap();
@@ -151,6 +158,7 @@ async fn login_verifies_the_token_and_reports_the_account() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args([
             "auth",
             "login",
@@ -192,6 +200,7 @@ async fn login_json_emits_pure_json() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args([
             "auth",
             "login",
@@ -223,6 +232,7 @@ async fn login_json_emits_pure_json() {
 fn login_rejects_an_email_without_an_at_sign() {
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "login", "--email", "not-an-email", "--token-stdin"])
         .env("BB_API_BASE", "http://127.0.0.1:1")
         .env("BB_KEYRING_DISABLE", "1")
@@ -247,6 +257,7 @@ fn logout_warns_about_a_legacy_plaintext_credential_file() {
 
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "logout"])
         .env("HOME", home.path())
         .env("BB_KEYRING_DISABLE", "1")
@@ -268,6 +279,7 @@ async fn status_reports_an_unverified_account_when_the_identity_check_fails() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "status", "--json"])
         .env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "ATATT3xFfGF0abcd")
@@ -292,6 +304,7 @@ async fn status_reports_an_unverified_account_when_the_identity_check_fails() {
 fn login_prints_the_token_url_and_every_required_scope() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "login"])
         .env("BB_API_BASE", "http://127.0.0.1:1")
         .env("BB_KEYRING_DISABLE", "1")
@@ -338,6 +351,7 @@ async fn login_with_both_values_supplied_prints_no_walkthrough() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args([
             "auth",
             "login",
@@ -368,6 +382,7 @@ async fn login_with_both_values_supplied_prints_no_walkthrough() {
 fn auth_login_help_lists_the_required_scopes() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["auth", "login", "--help"])
         .output()
         .unwrap();
@@ -394,6 +409,7 @@ async fn login_names_the_missing_user_scope_on_a_403() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args([
             "auth",
             "login",
@@ -436,6 +452,7 @@ async fn login_explains_a_rejected_email_and_token_pair() {
 
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args([
             "auth",
             "login",

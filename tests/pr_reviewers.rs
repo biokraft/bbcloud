@@ -7,6 +7,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())

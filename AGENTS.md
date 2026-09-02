@@ -266,6 +266,20 @@ echoes a raw response body.
   test asserting on stderr can see its "refreshed N skill file(s) for bb …" line unless the
   fixture has nothing tracked, or `BB_SKILL_NO_AUTO_REFRESH=1` is set.
 
+### The passive update check
+
+`update_check::maybe_notify` (`src/update_check.rs`) runs in `main.rs` ahead of every command
+except `bb update`, and prints at most one line about a newer release. Four properties, each with
+a test in `tests/update_notice.rs`: the line goes to **stderr** in human and `--json` mode alike
+(so the stdout contract holds and an agent still sees it), the network is touched at most once per
+`CHECK_TTL` and every other invocation reads `~/.config/bb/update-check.json`, every failure is
+swallowed silently because the user asked for a different command, and `BB_NO_UPDATE_CHECK=1`
+turns it off.
+
+Because it runs before *every* command, integration tests that assert on stderr must set
+`BB_NO_UPDATE_CHECK=1` — the same hazard `auto_refresh_skills` has. Every existing test harness
+does; a new one must too, or it will reach the real GitHub API.
+
 ### Live smoke test
 
 The mocked suite proves the code calls an endpoint correctly, never that the endpoint still
@@ -290,6 +304,7 @@ BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
 | `BB_KEYRING_DISABLE` | force keyring lookup failure (testing) |
 | `BB_SKILL_NO_AUTO_REFRESH` | disable the pre-command auto-refresh of tracked agent skill files |
+| `BB_NO_UPDATE_CHECK` | disable the once-a-day passive check for a newer release |
 | `NO_COLOR` | disable color and spinners |
 
 ## Releasing

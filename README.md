@@ -66,6 +66,22 @@ Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknow
 The cargo routes install `bb` into `~/.cargo/bin` — add that to your `PATH` if the command isn't
 found afterwards.
 
+### Staying current
+
+`bb` asks the release API once a day whether a newer version exists, and when there is one it
+prints a single line to **stderr** naming the version and the one command that upgrades your
+install — `brew`, `cargo install` or `bb update`, whichever owns the binary:
+
+```
+warning: bb 0.20.0 is available (you have 0.19.4) — upgrade with: bb update
+```
+
+The answer is cached in `~/.config/bb/update-check.json`, so every other command reads a file
+rather than the network. The notice always goes to stderr, never stdout, so it cannot corrupt
+`--json` output — which is also how an agent shelling out to `bb` gets told to suggest the
+upgrade. Set `BB_NO_UPDATE_CHECK=1` to switch the check off; failures (offline, rate limited,
+read-only config directory) are silent and never affect the command you ran.
+
 ## Get started
 
 Three commands, once per machine — step 1 is Homebrew here because it is the recommended route;
@@ -295,6 +311,7 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
 | `BB_SKILL_NO_AUTO_REFRESH` | set to `1` to stop `bb` refreshing installed skill files when the binary version changes |
+| `BB_NO_UPDATE_CHECK` | set to `1` to stop `bb` checking once a day whether a newer release exists |
 | `NO_COLOR` | disable colour and spinners |
 
 | Exit code | Meaning |

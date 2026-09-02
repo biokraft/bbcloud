@@ -7,6 +7,7 @@ use predicates::str::contains;
 fn prints_version() {
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .arg("--version")
         .assert()
         .success()
@@ -17,6 +18,7 @@ fn prints_version() {
 fn help_lists_every_top_level_command() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .arg("--help")
         .output()
         .unwrap();
@@ -41,6 +43,7 @@ fn help_lists_every_top_level_command() {
 fn repo_help_documents_that_private_is_the_default() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["repo", "create", "--help"])
         .output()
         .unwrap();
@@ -55,6 +58,7 @@ fn repo_help_documents_that_private_is_the_default() {
 fn pr_help_lists_read_and_write_commands() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .args(["pr", "--help"])
         .output()
         .unwrap();
@@ -98,6 +102,7 @@ fn no_php_sources_remain() {
 fn help_does_not_mention_app_passwords() {
     let out = Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .arg("--help")
         .output()
         .unwrap();

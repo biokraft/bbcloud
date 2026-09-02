@@ -9,6 +9,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// care about resolution order override or remove it.
 fn bb(base: &str) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "me@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", base)
