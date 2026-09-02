@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0](https://github.com/biokraft/bbcloud/compare/v0.20.0...v0.21.0) - 2026-09-02
+
+### Added
+
+- *(pr mine)* expose comment_count so a commented-on PR stops looking idle ([#67](https://github.com/biokraft/bbcloud/pull/67))
+- *(update)* notify once a day when a newer bb release exists ([#63](https://github.com/biokraft/bbcloud/pull/63))
+
 ## [0.20.0](https://github.com/biokraft/bbcloud/compare/v0.19.4...v0.20.0) - 2026-09-02
 
 ### Added
