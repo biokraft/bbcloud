@@ -26,7 +26,7 @@ struct Requested {
     description: Option<String>,
 }
 
-/// Only the fields that actually differ from what the pull request says now.
+/// Only the fields that differ from what the pull request says now.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Plan {
     title: Option<String>,
@@ -78,7 +78,9 @@ fn from_flags(args: &EditArgs) -> Result<Option<Requested>> {
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
         Some(buf.trim_end_matches('\n').to_string())
     } else {
-        args.description.clone()
+        args.description
+            .as_deref()
+            .map(|d| d.trim_end_matches('\n').to_string())
     };
     Ok(Some(Requested { title, description }))
 }

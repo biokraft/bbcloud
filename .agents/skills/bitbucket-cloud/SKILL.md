@@ -232,7 +232,8 @@ clears it. The pull request must be open. If the text already matches, nothing i
 `changed` comes back empty. Never run it with no flag, because it prompts.
 
 Edit when the user asks, or on a pull request you opened yourself. Print the new title and
-description back to the user before running it — they will be read by reviewers.
+description back to the user and wait for their yes before running it; reviewers will read
+the new text.
 
 ## Reviewers
 

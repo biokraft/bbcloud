@@ -231,7 +231,7 @@ bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for seve
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
-bb pr edit 42 --title "Cache session lookups"   # fix a title; --description-stdin < body.md for the text
+bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb pr request-changes 42 --yes            # confirms first unless --yes is given

@@ -121,6 +121,33 @@ async fn description_only_edit_resends_the_current_title() {
 }
 
 #[tokio::test]
+async fn description_flag_trims_trailing_newline_like_stdin() {
+    let server = MockServer::start().await;
+    mount_get(&server, "OPEN").await;
+    Mock::given(method("PUT"))
+        .and(path(PR_PATH))
+        .and(body_partial_json(serde_json::json!({
+            "description": "New text"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body(
+            "OPEN",
+            "Add widget cache",
+            "New text",
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "edit", "7", "--description", "New text\n"])
+        .assert()
+        .success();
+
+    let bodies = put_bodies(&server).await;
+    assert_eq!(bodies[0]["description"], "New text");
+}
+
+#[tokio::test]
 async fn description_stdin_is_read_and_trailing_newline_trimmed() {
     let server = MockServer::start().await;
     mount_get(&server, "OPEN").await;
