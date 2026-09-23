@@ -209,6 +209,14 @@ bb pr reviewers add <id> dana --json
 `remove` errors if the name is not a reviewer on that pull request, so a mistyped removal cannot
 look like it worked.
 
+If the title or description has to change after the pull request exists, edit it in place —
+print the new text back and get the user's yes first, exactly as in Step 4:
+
+```bash
+bb pr edit <id> --title "<title>" --json
+bb pr edit <id> --description-stdin --json < <path-to-body-file>
+```
+
 ## Never
 
 - Never approve, merge or decline a pull request. Not supported, and not yours to do.

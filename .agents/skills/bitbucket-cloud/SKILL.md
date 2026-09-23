@@ -217,6 +217,23 @@ Unlike `resolve` and `request-changes`, this needs no confirmation: it corrects 
 than hiding or asserting a review point. Retarget when the user asks, or when you opened the
 pull request against the wrong branch yourself.
 
+## Editing a title or description
+
+Fix a pull request's title or description in place, rather than closing it and opening another:
+
+```bash
+bb pr edit 42 --title "Cache session lookups" --json
+bb pr edit 42 --description-stdin --json < body.md     # long text: write a file, pipe it in
+bb pr edit 42 --title "..." --description "..." --json
+```
+
+Only the fields you pass change; a title-only edit leaves the description alone. `--description ""`
+clears it. The pull request must be open. If the text already matches, nothing is written and
+`changed` comes back empty. Never run it with no flag, because it prompts.
+
+Edit when the user asks, or on a pull request you opened yourself. Print the new title and
+description back to the user before running it — they will be read by reviewers.
+
 ## Reviewers
 
 ```bash
@@ -295,6 +312,7 @@ Both filters match a substring, and ignore case.
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
+| `bb pr edit <id> [--title] [--description \| --description-stdin]` | `{id,title,description,url,changed[]}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
@@ -315,7 +333,7 @@ the commit or the diff.
   the id, and confirm the repository with `bb auth status` and `-R`.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
   `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr unresolve`, `pr create` and
-  `pr request-changes` and `pr retarget` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `pr request-changes`, `pr retarget` and `pr edit` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
 - **`is a reply`, or `is not on the diff`** — the id is not the first comment of an inline thread.
   Read `parent` from `bb pr view`, and pass the id that has none.
