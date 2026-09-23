@@ -19,6 +19,7 @@ fn release_body(tag: &str) -> serde_json::Value {
 fn bb(api: &str) -> (Command, tempfile::TempDir) {
     let cfg = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("HOME", cfg.path())
         .env("XDG_CONFIG_HOME", cfg.path())
         .env("BB_UPDATE_API_BASE", api)
@@ -475,6 +476,7 @@ async fn update_restores_a_deleted_skill_file() {
 
     Command::cargo_bin("bb")
         .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
         .env("HOME", cfg.path())
         .env("XDG_CONFIG_HOME", cfg.path())
         .env("BB_UPDATE_API_BASE", server.uri())

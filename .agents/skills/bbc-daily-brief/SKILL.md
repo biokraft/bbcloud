@@ -36,9 +36,10 @@ bb pr mine --build --json
 Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`, `id`, `title`,
 `url`, `state`, `draft`, `author`, `my_role` (`author` | `reviewer` | `both`), `my_review_state`
 (`approved` | `changes_requested` | `pending`, or `null` when the user is not a reviewer),
-`reviewers[]`, `updated_on` (rfc3339), and — because `--build` was passed — `build_state`
-(worst-wins rollup: `failed` | `stopped` | `inprogress` | `successful` | `none`) plus `build[]` for
-the individual checks.
+`reviewers[]`, `updated_on` (rfc3339), `comment_count` (every comment on the pull request, inline
+and general, replies included — `null` when bitbucket did not return the field), and — because
+`--build` was passed — `build_state` (worst-wins rollup: `failed` | `stopped` | `inprogress` |
+`successful` | `none`) plus `build[]` for the individual checks.
 
 There is no api call left that discovers which workspaces the user belongs to. The workspace(s)
 scanned are resolved from `--workspace <slug>[,<slug>...]`, then `BB_WORKSPACE`, then the git remote
@@ -77,14 +78,29 @@ Ranking, thresholds and output format are identical in both modes.
 
 ## Phase 2 — enrich only the candidates
 
-Phase 1 cannot see comments. Select candidates from phase 1 on structure alone:
+Phase 1 cannot read comment threads, only count them. Select candidates from phase 1 on structure
+alone:
 
 - every non-draft row where `my_role` is `reviewer` or `both`
 - every row the user authored whose `build_state` is `failed` or `stopped`
 - every row the user authored whose `my_review_state` is `changes_requested`
+- every non-draft row the user authored whose `comment_count` is above `0` or `null`
 - every row the user authored past the nudge threshold below
 
-Take at most 12 candidates, oldest `updated_on` first. For each:
+The `comment_count` rule is the one that catches a reviewer who commented without acting on the
+approval: `my_review_state` stays `pending` in that case, so none of the other rules fire and the
+pull request would drop out of the brief entirely. A count above zero does not mean something waits
+on the user — the user's own comments are counted too, and threads may all be resolved — it only
+means phase 2 has to look. `null` means bitbucket did not report a count, so it is treated the same
+way: look rather than assume quiet.
+
+Take at most 12 candidates. Order them by how likely they are to be blocking somebody: rows where
+`my_role` is `reviewer` or `both` first, then the authored rows, each group oldest `updated_on`
+first. The `comment_count` rule widens this set considerably — most authored pull requests have
+some comment on them — so without that ordering a busy morning's twelve slots fill with the user's
+own pull requests and a review they are holding up never gets enriched.
+
+For each:
 
 ```bash
 bb pr view <id> -R <repo> --unresolved --json

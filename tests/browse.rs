@@ -5,6 +5,7 @@ use predicates::str::contains;
 
 fn bb() -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_REPO", "acme/widgets")
@@ -35,6 +36,7 @@ fn browse_pr_targets_the_pull_request_page() {
 #[test]
 fn hostile_repo_value_is_rejected() {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("NO_COLOR", "1")

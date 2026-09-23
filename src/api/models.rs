@@ -177,6 +177,17 @@ pub struct PullRequest {
     /// usually an agent computing an age, and a pre-formatted "3 days ago" would
     /// throw away the precision it needs.
     pub updated_on: Option<String>,
+    /// Every comment on the pull request, inline and general, replies included —
+    /// bitbucket's own counter. `None` when the api did not return the field,
+    /// which is not the same as zero: a caller that treats absence as "no
+    /// comments" would silently hide the very activity this exists to surface,
+    /// so absence must be read as "unknown, look properly".
+    pub comment_count: Option<u64>,
+    /// The description as bitbucket still returns it at the top level. The
+    /// OpenAPI schema documents `summary.raw` instead, so read through
+    /// `description_text`, which prefers that.
+    pub description: Option<String>,
+    pub summary: Option<CommentContent>,
 }
 
 /// A Bitbucket project, the container a repository lives in.
@@ -282,6 +293,16 @@ impl Repository {
 }
 
 impl PullRequest {
+    /// The description text, empty when there is none. `summary.raw` is the
+    /// documented field; the top-level `description` is the fallback.
+    pub fn description_text(&self) -> &str {
+        self.summary
+            .as_ref()
+            .and_then(|s| s.raw.as_deref())
+            .or(self.description.as_deref())
+            .unwrap_or("")
+    }
+
     pub fn source_branch(&self) -> &str {
         self.source
             .as_ref()
@@ -519,6 +540,24 @@ mod tests {
 
     fn pr_from(json: serde_json::Value) -> PullRequest {
         serde_json::from_value(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn description_text_prefers_summary_raw() {
+        let pr = pr_from(serde_json::json!({
+            "id": 1,
+            "description": "old copy",
+            "summary": { "raw": "documented copy", "markup": "markdown" }
+        }));
+        assert_eq!(pr.description_text(), "documented copy");
+    }
+
+    #[test]
+    fn description_text_falls_back_to_description_then_empty() {
+        let pr = pr_from(serde_json::json!({ "id": 1, "description": "only this" }));
+        assert_eq!(pr.description_text(), "only this");
+        let bare = pr_from(serde_json::json!({ "id": 1 }));
+        assert_eq!(bare.description_text(), "");
     }
 
     #[test]

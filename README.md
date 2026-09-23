@@ -66,6 +66,22 @@ Supported targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknow
 The cargo routes install `bb` into `~/.cargo/bin` — add that to your `PATH` if the command isn't
 found afterwards.
 
+### Staying current
+
+`bb` asks the release API once a day whether a newer version exists, and when there is one it
+prints a single line to **stderr** naming the version and the one command that upgrades your
+install — `brew`, `cargo install` or `bb update`, whichever owns the binary:
+
+```
+warning: bb 0.20.0 is available (you have 0.19.4) — upgrade with: bb update
+```
+
+The answer is cached in `~/.config/bb/update-check.json`, so every other command reads a file
+rather than the network. The notice always goes to stderr, never stdout, so it cannot corrupt
+`--json` output — which is also how an agent shelling out to `bb` gets told to suggest the
+upgrade. Set `BB_NO_UPDATE_CHECK=1` to switch the check off; failures (offline, rate limited,
+read-only config directory) are silent and never affect the command you ran.
+
 ## Get started
 
 Three commands, once per machine — step 1 is Homebrew here because it is the recommended route;
@@ -103,7 +119,12 @@ the agent to answer comment threads and report them, and to leave the resolve de
 you explicitly ask for one. `bbc-open-pr` walks the agent through opening a pull request: it
 suggests reviewers by scanning the recent history of the files the change touches, resolving each
 name against Bitbucket before it is suggested, and it prints the drafted description back to you
-for approval before creating anything.
+for approval before creating anything. `bbc-report-bug` files a bug about `bb` itself against this
+repository with `gh`: it reproduces the problem first, replaces your workspace, repository and
+colleague names with placeholders before drafting, searches for a duplicate, and shows you the
+finished issue for approval before anything is created.
+
+Every `bb skill` command is also spelled `bb skills`, whichever comes to hand first.
 
 The skill text ships inside the `bb` binary, so `bb skill install` needs no network and no
 credentials. Run it on a terminal with none of `--skill`, `--all` or `--json`, and it asks which
@@ -130,8 +151,10 @@ file is never overwritten; it is reported and left alone. Set `BB_SKILL_NO_AUTO_
 the files entirely by hand.
 
 Run `bb skill uninstall` to remove every tracked copy (or `--global` to remove the ones under your
-home directory instead). A locally edited copy is left alone unless you pass `--force`, same rule
-as `install`.
+home directory instead). It deletes only files `bb` itself wrote. A locally edited copy is left
+alone, and so is one `bb` merely found already in place — a copy you vendored and committed, say,
+which matches the embedded text byte for byte. Both are reported and left on disk unless you pass
+`--force`, same rule as `install`.
 
 Each agent loads the skill by itself when a task touches Bitbucket. To force it, name it:
 *"use the bitbucket-cloud skill"*. If your tool reads no skills at all, paste the file into
@@ -162,7 +185,7 @@ scopes are enough:
 |---|---|
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
-| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes` |
+| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes`, `pr retarget`, `pr edit` |
 | `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 | `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
@@ -206,6 +229,9 @@ bb pr view 42 --unresolved                # the PR plus comment threads still ne
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
+bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
+bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
+bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb pr request-changes 42 --yes            # confirms first unless --yes is given
@@ -286,6 +312,7 @@ bb completions zsh > ~/.zfunc/_bb         # also bash, fish, powershell, elvish
 | `BB_API_BASE` | override the API base URL (testing) |
 | `BB_UPDATE_API_BASE` | override the release-lookup API base URL for `bb update` (testing) |
 | `BB_SKILL_NO_AUTO_REFRESH` | set to `1` to stop `bb` refreshing installed skill files when the binary version changes |
+| `BB_NO_UPDATE_CHECK` | set to `1` to stop `bb` checking once a day whether a newer release exists |
 | `NO_COLOR` | disable colour and spinners |
 
 | Exit code | Meaning |

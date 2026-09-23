@@ -4,6 +4,167 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0](https://github.com/biokraft/bbcloud/compare/v0.21.0...v0.22.0) - 2026-09-23
+
+### Added
+
+- *(pr edit)* `bb pr edit <id>` changes an open pull request's title or description in place,
+  so a typo in a title or a stale description no longer means a trip to the web ui
+  ([#68](https://github.com/biokraft/bbcloud/pull/68)).
+
+  `--title` sets the title and `--description` the description; `--description ""` clears it,
+  and `--description-stdin` reads a long body from a file or a pipe. Only the fields you pass
+  change: a title-only edit never rewrites the description. Run in a terminal with no flag, it
+  prompts for both, pre-filled with the current text. Without a terminal it errors and names the
+  flags instead of waiting for input. A pull request that is not open is refused with its state
+  named, and when the text already matches nothing is written. `--json` prints
+  `{id,title,description,url,changed}`. No confirmation prompt, for the same reason as
+  `pr retarget`: it corrects your own text rather than asserting or hiding a review point.
+
+  The bundled agent skills document the command, so after `bb skill install` an agent can revise
+  a description it wrote when the user asks for a change. They also require the agent to print
+  the new text back and get a yes first.
+
+  For library users: `PullRequest` gains `description` and `summary` fields and a
+  `description_text()` accessor, which reads the documented `summary.raw` first. The new public
+  fields are why this release is 0.22.0 rather than a patch.
+
+## [0.21.0](https://github.com/biokraft/bbcloud/compare/v0.20.0...v0.21.0) - 2026-09-02
+
+### Added
+
+- *(pr mine)* expose comment_count so a commented-on PR stops looking idle ([#67](https://github.com/biokraft/bbcloud/pull/67))
+- *(update)* notify once a day when a newer bb release exists ([#63](https://github.com/biokraft/bbcloud/pull/63))
+
+## [0.20.0](https://github.com/biokraft/bbcloud/compare/v0.19.4...v0.20.0) - 2026-09-02
+
+### Added
+
+- *(pr)* tag exactly the chosen reviewers with `pr create --reviewer` ([#61](https://github.com/biokraft/bbcloud/pull/61))
+
+## [0.19.3](https://github.com/biokraft/bbcloud/compare/v0.19.2...v0.19.3) - 2026-09-01
+
+### Added
+
+- *(pr)* `bb pr retarget <id> --to <branch>` moves an open pull request to a
+  different destination branch, so one opened against the wrong base is fixed in
+  place instead of being closed and reopened with its review history discarded
+  ([#57](https://github.com/biokraft/bbcloud/pull/57)).
+
+  It resends the existing title, which the api requires on the update, refuses a
+  pull request that is not open with a message naming its state, and makes no
+  write at all when the pull request already targets that branch. Bitbucket
+  recomputes the diff, so inline comments anchored to the old base can start
+  reading as outdated — the command says so. The source branch cannot be moved;
+  that is the api's rule, not an omission. No confirmation prompt: retargeting
+  corrects a mistake rather than hiding a review point like `pr resolve` or
+  asserting a verdict like `pr request-changes`.
+
+  The bundled agent skill documents the command, so `bb skill install` picks it
+  up and agents can fix their own mis-targeted pull requests.
+
+## [0.19.2](https://github.com/biokraft/bbcloud/compare/v0.19.1...v0.19.2) - 2026-09-01
+
+### Added
+
+- *(skill)* `bb skills` now works everywhere `bb skill` does. The singular reads oddly for a
+  command group that manages four files, and "skills" is the noun every agent's own documentation
+  uses, so it is what people type first. The singular stays canonical — every other group is
+  singular (`pr`, `repo`, `branch`, `auth`, `project`), and renaming would break existing scripts —
+  but the plural is a visible alias, so `bb --help` advertises it rather than leaving it for people
+  to guess. Shell completions cover both ([#55](https://github.com/biokraft/bbcloud/pull/55))
+
+## [0.19.1](https://github.com/biokraft/bbcloud/compare/v0.19.0...v0.19.1) - 2026-09-01
+
+### Documentation
+
+- *(agents)* correct how release-plz picks the version ([#53](https://github.com/biokraft/bbcloud/pull/53))
+
+## [0.19.0](https://github.com/biokraft/bbcloud/compare/v0.18.2...v0.19.0) - 2026-09-01
+
+Data loss: `bb skill uninstall` could delete `SKILL.md` files `bb` never wrote. If you keep skill
+files under version control, upgrade before you next run it.
+
+### Fixed
+
+- *(skill)* `bb skill uninstall` now deletes only files `bb` itself wrote. `install` decided what
+  to record from a content hash alone — and a hash match proves the bytes are identical, never
+  that `bb` is what put them there. So a `SKILL.md` that already existed and happened to match was
+  reported `unchanged`, which was accurate since `bb` wrote nothing and left git clean, and then
+  recorded as a file `bb` owns. The next `uninstall` deleted it.
+
+  The sharp case was this crate's own checkout, where `.agents/skills/*/SKILL.md` are the tracked
+  sources `include_str!` compiles in: byte-identical to the embedded copies by construction, so
+  `bb skill install` claimed all four and `bb skill uninstall` removed the crate's own sources and
+  broke the build. Any project that vendors and commits a bundled skill was exposed to the same
+  path.
+
+  State entries now record whether `bb` created the file, at write time rather than inferred from
+  a hash afterwards, and uninstall refuses anything else — restoring the guarantee its own
+  documentation already made, that an untracked file is never touched. A refusal reports
+  `refused_not_written` and stops tracking the file; `--force` still removes it. A hand-made
+  Claude symlink is still removed, because the guard protects content and a link holds none, and
+  the `.agents` file it points at keeps its own protection
+  ([#51](https://github.com/biokraft/bbcloud/pull/51))
+
+### Upgrading
+
+Nothing to do, and no state file to migrate — entries written by earlier versions are treated as
+`bb`'s own writes, so everything you installed before this release stays removable exactly as it
+was.
+
+One behaviour change worth knowing if you script against it: `bb skill uninstall --json` can now
+report `refused_not_written` in a row's `outcome`, alongside the existing `removed`,
+`refused_modified`, `refused_unsafe_path` and `absent`. If you vendored a copy of a bundled skill
+and want `bb` to delete it anyway, pass `--force`.
+
+This is a minor rather than a patch release only because that new value is an addition to a public
+enum. There is no change to any command's arguments or behaviour beyond the fix above.
+
+## [0.18.2](https://github.com/biokraft/bbcloud/compare/v0.18.1...v0.18.2) - 2026-09-01
+
+v0.18.1 documented the scopes `repo create` and `project list` need. It documented them in the
+README only — `bb auth login` went on printing the old four, so following the tool's own
+walkthrough still produced a token that fails on those commands. This release fixes the
+walkthrough and removes the duplicate list that let it drift. It also adds a fourth agent skill,
+for reporting `bb` bugs upstream.
+
+### Fixed
+
+- *(auth)* `bb auth login` now names all six scopes. It listed four, omitting
+  `read:project:bitbucket` and `admin:repository:bitbucket` — the two the README's table gained
+  when `repo create` and `project list` shipped in v0.18.0. Anyone who followed the walkthrough
+  minted a token that returned 403 on their first `repo create`, with nothing in the login output
+  to explain which grant was missing. The list also existed three times over — in `SCOPES`, in the
+  `auth login --help` text, and in the README — and two of the three fell behind; `--help` is now
+  rendered from `SCOPES`, and a test asserts the README table and `SCOPES` hold the same set, so
+  neither copy can drift alone again. Every pre-existing scope test iterated `SCOPES`, which is
+  why all of them stayed green throughout ([#47](https://github.com/biokraft/bbcloud/pull/47))
+
+### Added
+
+- *(skill)* `bbc-report-bug`, a fourth bundled agent skill: it files a bug about `bb` itself
+  against this repository with `gh`. An agent that trips over a `bb` bug mid-task holds the best
+  evidence there is — the exact commands, the `--json` output, the version — and until now had
+  nowhere to put it. That evidence is the problem, though, since it comes out of a private
+  Bitbucket workspace and a GitHub issue is public forever, so the skill redacts workspace,
+  repository, project and human names to placeholders before it drafts anything, never includes a
+  token in any form, prints the finished issue and waits for you to approve it, and never files on
+  its own initiative — the same gate `pr resolve` and `pr request-changes` apply. It is hardcoded
+  to `biokraft/bbcloud` and cannot be pointed at another repository. Install it with
+  `bb skill install --skill bbc-report-bug`
+  ([#48](https://github.com/biokraft/bbcloud/pull/48))
+
+### Upgrading
+
+Nothing breaks and no token needs replacing. But if you authenticated before this release and
+have not used `bb repo create` or `bb project list`, your token is probably missing the two
+scopes the walkthrough never mentioned — run `bb auth login` again and grant all six from the new
+list rather than waiting to be surprised by a 403.
+
+Existing skill files are untouched by the upgrade. `bb skill install` will offer the new
+`bbc-report-bug` alongside the three you already have.
+
 ## [0.18.1](https://github.com/biokraft/bbcloud/compare/v0.18.0...v0.18.1) - 2026-08-26
 
 A follow-up to v0.18.0, from using it: the upgrade instruction `bb update` printed could not

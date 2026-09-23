@@ -89,6 +89,41 @@ pub const DEFAULT_RELEASE_API: &str = "https://api.github.com";
 /// with "Cask 'bb' is not installed" and never touches this install.
 const HOMEBREW_UPDATE_HINT: &str = "brew update && brew upgrade biokraft/tap/bb";
 
+/// The command that upgrades an install of this kind. A standalone install is
+/// the only one `bb` can replace itself, so it is the only one pointed back at
+/// `bb update`; the package-manager cases must go through their own manager or
+/// brew and cargo would keep believing they manage a file they no longer wrote.
+pub fn upgrade_hint(kind: InstallKind) -> &'static str {
+    match kind {
+        InstallKind::Homebrew => HOMEBREW_UPDATE_HINT,
+        InstallKind::Cargo => "cargo install bbcloud --locked --force",
+        InstallKind::Standalone => "bb update",
+    }
+}
+
+/// The tag of the newest published release, e.g. `v0.19.4`.
+///
+/// Split out of `run` so the passive update check can ask the same question
+/// with its own client — it needs a short timeout, since it runs ahead of a
+/// command the user actually asked for, while `run` needs a long one because
+/// it goes on to download a binary.
+pub async fn latest_tag(http: &reqwest::Client, base_url: &str) -> Result<String> {
+    Ok(latest_release(http, base_url).await?.tag_name)
+}
+
+async fn latest_release(http: &reqwest::Client, base_url: &str) -> Result<Release> {
+    let url = format!(
+        "{}/repos/biokraft/bbcloud/releases/latest",
+        base_url.trim_end_matches('/')
+    );
+    let response = http.get(&url).send().await?;
+    if !response.status().is_success() {
+        return Err(release_error(&response));
+    }
+    let body = bound_body(response, MAX_RELEASE_JSON_BYTES, "release metadata").await?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
 #[derive(Debug, Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -237,25 +272,16 @@ fn release_error(response: &reqwest::Response) -> BbError {
 pub async fn run(format: Format, base_url: &str) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     let http = release_client()?;
-    let url = format!(
-        "{}/repos/biokraft/bbcloud/releases/latest",
-        base_url.trim_end_matches('/')
-    );
-    let response = http.get(&url).send().await?;
-    if !response.status().is_success() {
-        return Err(release_error(&response));
-    }
-    let body = bound_body(response, MAX_RELEASE_JSON_BYTES, "release metadata").await?;
-    let release: Release = serde_json::from_slice(&body)?;
+    let release = latest_release(&http, base_url).await?;
     let latest = release.tag_name.clone();
 
     let (action, up_to_date) = if !is_newer(&latest, current) {
         ("none", true)
     } else {
         let exe = std::env::current_exe().map_err(BbError::Io)?;
-        let action = match classify_install(&exe) {
-            InstallKind::Homebrew => HOMEBREW_UPDATE_HINT,
-            InstallKind::Cargo => "cargo install bbcloud --locked --force",
+        let kind = classify_install(&exe);
+        let action = match kind {
+            InstallKind::Homebrew | InstallKind::Cargo => upgrade_hint(kind),
             InstallKind::Standalone => {
                 // The https-only requirement below is scoped to real usage: it
                 // only applies when the release api itself is https (the

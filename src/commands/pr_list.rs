@@ -66,7 +66,7 @@ pub struct ListArgs {
 /// as a space and bitbucket then ignores the whole parameter, which is exactly the
 /// silent failure this feature exists to fix.
 pub(crate) const REVIEWER_FIELDS: &str =
-    "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft";
+    "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft,%2Bvalues.comment_count";
 
 const ALL_STATES: &str = "OPEN,MERGED,DECLINED,SUPERSEDED";
 

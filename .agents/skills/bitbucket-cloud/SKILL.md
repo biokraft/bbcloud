@@ -22,6 +22,10 @@ Do not use `gh`. Do not ask the user to open the web UI.
    paragraph. Without a body and without a terminal, the command fails.
 6. Add `-R workspace/repo` to act on another repository. The default comes from the git remote.
 7. In a new checkout, run `bb skill install` to set up this skill. It needs no authentication.
+8. `bb` may print `bb X.Y.Z is available (you have …) — upgrade with: <command>` on **stderr**. It
+   is a notice, not an error: the command still succeeded, and stdout is unaffected. Tell the user
+   once, quoting the command it names. Do not run the upgrade yourself, and do not repeat the
+   notice on every later command in the same session.
 
 ## Read a pull request
 
@@ -92,7 +96,8 @@ errors rather than silently scanning nothing.
 
 It returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`
 (`workspace/repo`), `my_role` (`author` | `reviewer` | `both`), `my_review_state`, `updated_on`,
-and — with `--build` — `build_state` and `build[]`.
+`comment_count` (`null` when bitbucket did not report one), and — with `--build` — `build_state`
+and `build[]`.
 
 `--role author` costs one request to find who you are, then one paginated call per workspace. The
 reviewer half costs one request to find who you are, one repository-listing call per workspace,
@@ -194,6 +199,42 @@ it, ask first, and never do it to clear the way for a merge:
 bb pr no-request-changes 42 --yes --json
 ```
 
+## Retargeting
+
+A pull request opened against the wrong destination branch is fixed in place — there is no need
+to close it and open another, and doing so throws away its review history:
+
+```bash
+bb pr retarget 42 --to main --json
+```
+
+Only the destination moves; the API does not let a pull request's source branch change. The
+pull request must be open, and retargeting one that already targets that branch makes no write
+and exits 0. Bitbucket recomputes the diff afterwards, so inline comments anchored to the old
+base may start reading as outdated — say so when you report the change.
+
+Unlike `resolve` and `request-changes`, this needs no confirmation: it corrects a mistake rather
+than hiding or asserting a review point. Retarget when the user asks, or when you opened the
+pull request against the wrong branch yourself.
+
+## Editing a title or description
+
+Fix a pull request's title or description in place, rather than closing it and opening another:
+
+```bash
+bb pr edit 42 --title "Cache session lookups" --json
+bb pr edit 42 --description-stdin --json < body.md     # long text: write a file, pipe it in
+bb pr edit 42 --title "..." --description "..." --json
+```
+
+Only the fields you pass change; a title-only edit leaves the description alone. `--description ""`
+clears it. The pull request must be open. If the text already matches, nothing is written and
+`changed` comes back empty. Never run it with no flag, because it prompts.
+
+Edit when the user asks, or on a pull request you opened yourself. Print the new title and
+description back to the user and wait for their yes before running it; reviewers will read
+the new text.
+
 ## Reviewers
 
 ```bash
@@ -222,12 +263,23 @@ thread is supported, but only on the user's request — see
 bb pr create main --title "Cache session lookups" --json
 bb pr create main feat/cache --title "..." --description "..." --close-source-branch --json
 bb pr create main,develop --title "..." --json      # one pull request per target
+bb pr create main --title "..." --reviewer dana,ash --json   # exactly these two reviewers
 ```
 
 The source branch defaults to the current checkout. The title defaults to
 `Merge <source> into <target>`. `bb` attaches the default reviewers of the repository, and removes
 you from that list. Pass `--no-default-reviewers` to attach none. Do not pass `-i`, because it
 prompts.
+
+`--reviewer` names the whole reviewer set: the repository's default reviewers are not attached at
+all, so nobody the user did not pick arrives on the pull request. It takes the same names
+`bb pr reviewers add` does — a case-insensitive substring of a display name or nickname,
+comma-separated, or a `{uuid}` taken verbatim — and resolves every one of them **before** the pull
+request is created, so a name that does not resolve opens nothing. Yourself is dropped rather than
+rejected, because bitbucket answers 400 when the author is tagged.
+
+Prefer `--reviewer` over creating first and fixing the list afterwards. To change the set on a pull
+request that already exists, use `bb pr reviewers add|remove <id> <names>`.
 
 For the full workflow — suggesting reviewers from the history of the files you changed, and
 writing a description a human can skim — use the `bbc-open-pr` skill. It is installed by
@@ -253,13 +305,15 @@ Both filters match a substring, and ignore case.
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr build <id>` | `{build_state,statuses[{key,name,state,url}]}` |
-| `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on}],partial[]}` |
+| `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on,comment_count}],partial[]}` |
 | `bb pr comment <id> …` | `{id,pull_request,url}` |
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] …` | `[{id,target,url}]` |
+| `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
+| `bb pr edit <id> [--title] [--description \| --description-stdin]` | `{id,title,description,url,changed[]}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
@@ -280,7 +334,7 @@ the commit or the diff.
   the id, and confirm the repository with `bb auth status` and `-R`.
 - **A 403 message** — the API token misses a scope. `pr list` and `pr view` need
   `read:pullrequest:bitbucket`. `pr comment`, `pr resolve`, `pr unresolve`, `pr create` and
-  `pr request-changes` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
+  `pr request-changes`, `pr retarget` and `pr edit` need `write:pullrequest:bitbucket`. `branch list` and `pr create` also need
   `read:repository:bitbucket`.
 - **`is a reply`, or `is not on the diff`** — the id is not the first comment of an inline thread.
   Read `parent` from `bb pr view`, and pass the id that has none.
@@ -298,6 +352,7 @@ email and an API token. Never suggest an app password.
 | `BB_EMAIL`, `BB_TOKEN` | credentials for CI and other non-interactive use |
 | `BB_REPO` | default repository, the same as `-R` |
 | `NO_COLOR` | disable colour and spinners |
+| `BB_NO_UPDATE_CHECK` | set to `1` to silence the once-a-day newer-release notice |
 
 Install: `brew install biokraft/tap/bb`, or `cargo install bbcloud --locked`. Run `bb --help` and
 `bb <command> --help` for the full surface. Source and issues:

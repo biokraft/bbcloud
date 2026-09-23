@@ -4,6 +4,7 @@ use bb_cli::commands;
 use bb_cli::error::{BbError, Result};
 use bb_cli::output::{self, Format};
 use bb_cli::skill;
+use bb_cli::update_check;
 use bb_cli::workspace;
 use clap::{CommandFactory, Parser, Subcommand};
 
@@ -74,7 +75,13 @@ enum Command {
     },
     /// Check for a newer release and update this install
     Update,
-    /// Install the bundled agent skill so your coding agent can drive `bb`
+    /// Install the bundled agent skills so your coding agent can drive `bb`
+    ///
+    /// `bb skills` is accepted too. The singular is canonical, for consistency
+    /// with every other command group, but the plural is what people reach for
+    /// — the thing being managed is a set of files, and "skills" is the noun
+    /// every agent's own documentation uses.
+    #[command(visible_alias = "skills")]
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -227,6 +234,29 @@ enum PrCommand {
     Commits { id: u64 },
     /// Show the build statuses reported on a pull request
     Build { id: u64 },
+    /// Point an open pull request at a different destination branch
+    Retarget {
+        id: u64,
+        /// The branch the pull request should merge into
+        #[arg(long = "to")]
+        to: String,
+    },
+    /// Change an open pull request's title or description
+    ///
+    /// With no flag, in a terminal, prompts for both, pre-filled with the
+    /// current text.
+    Edit {
+        id: u64,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New description; pass "" to clear it
+        #[arg(long, conflicts_with = "description_stdin")]
+        description: Option<String>,
+        /// Read the new description from stdin
+        #[arg(long)]
+        description_stdin: bool,
+    },
     /// Request changes on a pull request, after confirming
     #[command(name = "request-changes", alias = "rc")]
     RequestChanges {
@@ -256,6 +286,10 @@ enum PrCommand {
         /// Do not attach the repository's default reviewers
         #[arg(long)]
         no_default_reviewers: bool,
+        /// Tag exactly these reviewers, comma-separated; a `{uuid}` is taken
+        /// verbatim. Replaces the repository's default reviewers entirely
+        #[arg(long, value_name = "NAMES")]
+        reviewer: Option<String>,
         /// Prompt for title and description
         #[arg(long, short = 'i')]
         interactive: bool,
@@ -366,18 +400,7 @@ enum ReviewersCommand {
 #[derive(Subcommand)]
 enum AuthCommand {
     /// Store an atlassian api token in the os keyring
-    #[command(long_about = "Store an atlassian api token in the os keyring.
-
-Create the token at https://id.atlassian.com/manage-profile/security/api-tokens,
-choosing \"Create API token with scopes\" and Bitbucket as the product, then grant:
-
-  read:user:bitbucket          required — login verifies the token against /user
-  read:pullrequest:bitbucket   pr list, view, diff, files, commits, mine
-  read:repository:bitbucket    branch list, default reviewers, the pr mine scan
-  write:pullrequest:bitbucket  pr create, comment, resolve, request-changes
-
-The write scope is only needed to create pull requests and comment; everything
-read-only works with the first three.")]
+    #[command(long_about = bb_cli::commands::auth::login_long_about())]
     Login {
         /// Atlassian account email
         #[arg(long)]
@@ -480,6 +503,12 @@ fn auto_refresh_skills(format: Format) {
 async fn run(cli: Cli) -> Result<()> {
     let format = Format::from_json_flag(cli.json);
     auto_refresh_skills(format);
+    // `bb update` asks the release api itself and reports the answer as its
+    // whole output, so a passive notice ahead of it would be a duplicate
+    // request and a duplicate line.
+    if !matches!(cli.command, Command::Update) {
+        update_check::maybe_notify(format, &commands::update::release_api_base()).await;
+    }
     match cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Login { email, token_stdin } => {
@@ -540,6 +569,24 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
                 PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
                 PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
+                PrCommand::Retarget { id, to } => commands::pr_retarget::run(&ctx, id, &to).await,
+                PrCommand::Edit {
+                    id,
+                    title,
+                    description,
+                    description_stdin,
+                } => {
+                    commands::pr_edit::run(
+                        &ctx,
+                        commands::pr_edit::EditArgs {
+                            id,
+                            title,
+                            description,
+                            description_stdin,
+                        },
+                    )
+                    .await
+                }
                 PrCommand::RequestChanges { id, yes } => {
                     commands::pr::request_changes(&ctx, id, yes).await
                 }
@@ -552,6 +599,7 @@ async fn run(cli: Cli) -> Result<()> {
                     title,
                     description,
                     no_default_reviewers,
+                    reviewer,
                     interactive,
                     web,
                     close_source_branch,
@@ -564,6 +612,7 @@ async fn run(cli: Cli) -> Result<()> {
                             title,
                             description,
                             no_default_reviewers,
+                            reviewer,
                             interactive,
                             web,
                             close_source_branch,

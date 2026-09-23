@@ -6,6 +6,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("BB_EMAIL", "dev@example.com")
         .env("BB_TOKEN", "t0ken-value")
         .env("BB_API_BASE", server.uri())
@@ -62,7 +63,7 @@ async fn list_requests_the_reviewer_fields() {
         .and(path("/repositories/acme/widgets/pullrequests"))
         .and(query_param(
             "fields",
-            "+values.reviewers,+values.participants,+values.draft",
+            "+values.reviewers,+values.participants,+values.draft,+values.comment_count",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(&server)

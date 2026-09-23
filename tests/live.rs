@@ -24,6 +24,7 @@ fn live_env() -> Option<String> {
 
 fn bb() -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
+    cmd.env("BB_NO_UPDATE_CHECK", "1");
     cmd.env("NO_COLOR", "1");
     cmd
 }
