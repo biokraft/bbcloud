@@ -185,7 +185,7 @@ scopes are enough:
 |---|---|
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
-| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes`, `pr retarget` |
+| `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes`, `pr retarget`, `pr edit` |
 | `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 | `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
@@ -231,6 +231,7 @@ bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for seve
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
+bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb pr request-changes 42 --yes            # confirms first unless --yes is given

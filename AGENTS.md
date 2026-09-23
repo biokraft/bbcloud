@@ -147,6 +147,7 @@ src/skill.rs           embedded SKILL.md, agent detection, install/status/uninst
 src/commands/*.rs      one module per command group
 src/commands/pr_list.rs       `pr list`: fetch, filter, render
 src/commands/pr_reviewers.rs  `pr reviewers` list/add/remove
+src/commands/pr_edit.rs       `pr edit`: title/description via the same PUT as retarget
 src/commands/skill.rs         `bb skill install/status/uninstall`
 ```
 

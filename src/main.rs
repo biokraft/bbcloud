@@ -241,6 +241,22 @@ enum PrCommand {
         #[arg(long = "to")]
         to: String,
     },
+    /// Change an open pull request's title or description
+    ///
+    /// With no flag, in a terminal, prompts for both, pre-filled with the
+    /// current text.
+    Edit {
+        id: u64,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New description; pass "" to clear it
+        #[arg(long, conflicts_with = "description_stdin")]
+        description: Option<String>,
+        /// Read the new description from stdin
+        #[arg(long)]
+        description_stdin: bool,
+    },
     /// Request changes on a pull request, after confirming
     #[command(name = "request-changes", alias = "rc")]
     RequestChanges {
@@ -554,6 +570,23 @@ async fn run(cli: Cli) -> Result<()> {
                 PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
                 PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
                 PrCommand::Retarget { id, to } => commands::pr_retarget::run(&ctx, id, &to).await,
+                PrCommand::Edit {
+                    id,
+                    title,
+                    description,
+                    description_stdin,
+                } => {
+                    commands::pr_edit::run(
+                        &ctx,
+                        commands::pr_edit::EditArgs {
+                            id,
+                            title,
+                            description,
+                            description_stdin,
+                        },
+                    )
+                    .await
+                }
                 PrCommand::RequestChanges { id, yes } => {
                     commands::pr::request_changes(&ctx, id, yes).await
                 }

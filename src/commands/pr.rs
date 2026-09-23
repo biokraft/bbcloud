@@ -447,6 +447,8 @@ mod tests {
             draft: false,
             updated_on: None,
             comment_count: None,
+            description: None,
+            summary: None,
         };
         let line = prompt_line("request changes on", &pr);
         assert!(line.contains("#42"), "got: {line}");
