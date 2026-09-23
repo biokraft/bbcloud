@@ -8,7 +8,26 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- *(pr edit)* change a pull request's title or description in place ([#68](https://github.com/biokraft/bbcloud/pull/68))
+- *(pr edit)* `bb pr edit <id>` changes an open pull request's title or description in place,
+  so a typo in a title or a stale description no longer means a trip to the web ui
+  ([#68](https://github.com/biokraft/bbcloud/pull/68)).
+
+  `--title` sets the title and `--description` the description; `--description ""` clears it,
+  and `--description-stdin` reads a long body from a file or a pipe. Only the fields you pass
+  change: a title-only edit never rewrites the description. Run in a terminal with no flag, it
+  prompts for both, pre-filled with the current text. Without a terminal it errors and names the
+  flags instead of waiting for input. A pull request that is not open is refused with its state
+  named, and when the text already matches nothing is written. `--json` prints
+  `{id,title,description,url,changed}`. No confirmation prompt, for the same reason as
+  `pr retarget`: it corrects your own text rather than asserting or hiding a review point.
+
+  The bundled agent skills document the command, so after `bb skill install` an agent can revise
+  a description it wrote when the user asks for a change. They also require the agent to print
+  the new text back and get a yes first.
+
+  For library users: `PullRequest` gains `description` and `summary` fields and a
+  `description_text()` accessor, which reads the documented `summary.raw` first. The new public
+  fields are why this release is 0.22.0 rather than a patch.
 
 ## [0.21.0](https://github.com/biokraft/bbcloud/compare/v0.20.0...v0.21.0) - 2026-09-02
 
