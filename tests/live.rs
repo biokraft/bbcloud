@@ -137,6 +137,57 @@ fn pr_list_build_status() {
 
 #[test]
 #[ignore]
+fn pr_view_context_is_live() {
+    if live_env().is_none() {
+        eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
+        return;
+    }
+    let Some(repo) = std::env::var("BB_LIVE_REPO")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        eprintln!("skipping: set BB_LIVE_REPO=<workspace>/<repo> to exercise pr view context");
+        return;
+    };
+    let Some(pr) = std::env::var("BB_LIVE_PR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        eprintln!("skipping: set BB_LIVE_PR=<id> to exercise pr view context");
+        return;
+    };
+    let output = bb()
+        .args([
+            "pr",
+            "view",
+            &pr,
+            "-R",
+            &repo,
+            "--build",
+            "--conflicts",
+            "--json",
+        ])
+        .output()
+        .expect("run pr view live smoke test");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_not_retired(&stderr, output.status.code());
+    assert!(output.status.success(), "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!("stdout did not parse as JSON: {error}; stdout was {output:?}")
+    });
+    assert!(
+        value.get("pull_request").is_some(),
+        "missing pull_request: {value}"
+    );
+    assert!(value.get("build").is_some(), "missing build: {value}");
+    assert!(
+        value.get("conflicts").is_some(),
+        "missing conflicts: {value}"
+    );
+}
+
+#[test]
+#[ignore]
 fn reviewer_suggestions_are_live() {
     if live_env().is_none() {
         eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
