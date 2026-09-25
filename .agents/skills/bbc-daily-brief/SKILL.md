@@ -139,15 +139,19 @@ This ladder, ties broken oldest first:
    threshold — they are the bottleneck.
 2. Their pull request has `changes_requested`, or unresolved threads waiting on their answer.
 3. Their pull request's `build_state` is `failed` or `stopped`.
-4. Their pull request has every current reviewer approved, phase-2 `build_state` is `successful`,
-   `conflicts.count` is `0`, `unresolved_threads` is `0`, and `task_count` is `0` — merge candidate.
+4. Their pull request has at least one reviewer and **every** one of them approved, phase-2
+   `build_state` is `successful`, `conflicts.count` is `0`, `unresolved_threads` is `0`, and
+   `task_count` is `0` — merge candidate. A pull request nobody has reviewed is not a merge
+   candidate: no human has signed off on it yet, and an empty reviewer list would otherwise satisfy
+   "every reviewer approved" by vacuous truth.
 5. Their pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
 6. Everything else — counted, never listed.
 
 Drafts never appear in 1–5. They are not waiting on anybody; count them in the tail.
 
 “Merge candidate” is a factual shortlist, not permission to merge. The user still decides whether
-to merge. Do not use phase-1 build state for this predicate; phase 2 must fetch the final facts.
+to merge. Do not use phase-1 build state for this predicate; phase 2 must fetch the final facts
+together, and a build that turned red after phase 1 must not be reported as green.
 
 ## Output
 

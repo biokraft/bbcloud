@@ -744,6 +744,33 @@ fn the_brief_skill_uses_only_the_allowed_emoji() {
     }
 }
 
+/// A merge candidate is a claim about someone else's work. Every input it is
+/// built from has to be named, and a build state is only trustworthy if it was
+/// fetched with the rest of the facts rather than carried over from an earlier
+/// phase that the branch has since moved past.
+#[test]
+fn the_brief_skill_defines_merge_candidate_from_fresh_facts() {
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("--unresolved --conflicts --build --json"),
+        "phase 2 must fetch build state together with the other merge-candidate facts"
+    );
+    for fact in [
+        "task_count",
+        "unresolved_threads",
+        "conflicts.count",
+        "build_state",
+    ] {
+        assert!(text.contains(fact), "merge candidate omits `{fact}`");
+    }
+    assert!(
+        text.contains("at least one reviewer"),
+        "an empty reviewer list must not satisfy the predicate by vacuous truth"
+    );
+}
+
 #[test]
 fn the_brief_skill_carries_the_grouped_output_contract() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
