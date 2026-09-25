@@ -433,6 +433,22 @@ fn skill_documents_build_status() {
 }
 
 #[test]
+fn main_skill_documents_selective_pr_context() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    for needle in [
+        "--metadata-only",
+        "--build",
+        "--conflicts",
+        "unresolved_threads",
+        "created_on",
+    ] {
+        assert!(text.contains(needle), "skill omits `{needle}`");
+    }
+}
+
+#[test]
 fn install_writes_every_skill() {
     let dir = tempfile::tempdir().unwrap();
     bb_in(dir.path())

@@ -103,7 +103,7 @@ own pull requests and a review they are holding up never gets enriched.
 For each:
 
 ```bash
-bb pr view <id> -R <repo> --unresolved --json
+bb pr view <id> -R <repo> --unresolved --conflicts --json
 ```
 
 Nothing else gets enriched. Do not fetch comments for every row phase 1 returned.
@@ -131,7 +131,8 @@ This ladder, ties broken oldest first:
    threshold — they are the bottleneck.
 2. Their pull request has `changes_requested`, or unresolved threads waiting on their answer.
 3. Their pull request's `build_state` is `failed` or `stopped`.
-4. Their pull request is approved with `build_state` `successful` — ready to merge.
+4. Their pull request is approved, `build_state` is `successful`, `conflicts.count` is `0`, and no
+   unresolved thread remains — merge candidate.
 5. Their pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
 6. Everything else — counted, never listed.
 
@@ -157,7 +158,7 @@ preamble, no closing offer of help.
 ⏳ WAITING ON OTHERS
   [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  Dana hasn't replied to your 2 threads · 3d
 
-✅ READY TO MERGE
+✅ MERGE CANDIDATE
   [acme/api PR 198](https://bitbucket.org/acme/api/pull-requests/198)  Approved by Dana, build green · 2d
 
 💤 1 quiet (1 draft)
@@ -186,7 +187,7 @@ with decoration is harder to scan than one with none, which defeats the point.
 |---|---|---|
 | 🔴 | this is on you | the `YOU'RE BLOCKING` heading |
 | ⏳ | waiting on someone else | the `WAITING ON OTHERS` heading |
-| ✅ | nothing left to do but merge | the `READY TO MERGE` heading |
+| ✅ | no known blocker; merging remains the user's decision | the `MERGE CANDIDATE` heading |
 | 💥 | a build is failing or stopped | on the entry line, before the reason |
 | 💤 | nothing needed here | the quiet tail |
 
@@ -200,7 +201,8 @@ repeats, and only on entries whose `build_state` is `failed` or `stopped`.
 - `🔴 YOU'RE BLOCKING` holds ranking rungs 1–3, and every entry carries one command line prefixed `→`.
 - `⏳ WAITING ON OTHERS` holds rung 5. It needs no command: name who owes the reply and how long it
   has been. Add a command only when there is something useful to run.
-- `✅ READY TO MERGE` holds rung 4. Merging is the user's decision and `bb` cannot do it, so give no
+- `✅ MERGE CANDIDATE` holds rung 4. It is a factual shortlist, not permission to merge. Merging is
+  the user's decision and `bb` cannot do it, so give no
   command — say it is approved and green.
 - The quiet tail is a count with a parenthesised breakdown, never a list.
 - Ages are short: `4h`, `3d`. Mark the oldest entry in a group with `— oldest here`.

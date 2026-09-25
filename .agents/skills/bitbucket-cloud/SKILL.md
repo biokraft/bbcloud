@@ -39,8 +39,10 @@ bb pr list --author @me --json             # PRs I opened; @me resolves the auth
 bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
 bb pr list --build --json                  # add BUILD column: worst-wins rollup per PR
 bb pr list --build-status failed --json    # only PRs whose build rolls up to FAILED
-bb pr view 42 --json                       # the pull request, plus all comments
+bb pr view 42 --json                       # pull request, plus all comments
+bb pr view 42 --metadata-only --json       # header only; do not fetch comments
 bb pr view 42 --unresolved --json          # only the threads that still need an answer
+bb pr view 42 --build --conflicts --json   # add build and conflict facts
 bb pr diff 42                              # raw diff, plain text
 bb pr files 42 --json                      # changed paths
 bb pr commits 42 --json                    # commits, short hashes
@@ -48,11 +50,18 @@ bb pr mine --json                          # my PRs across every repo: authored 
 bb pr mine --role reviewer --build --json  # only ones waiting on me, with build state
 ```
 
-`bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
-`timestamp`, `body`, `file`, `line`, `resolved`, `pending` and `parent`. Use the comment `id` to
-answer in the correct thread. `parent` is `null` on the first comment of a thread, and holds that
-comment's id on a reply. `resolved` tells you whether the thread is closed. `pending` tells you
-whether the comment is still a draft, visible only to its author.
+`bb pr view` returns `{ pull_request, general[], inline[] }`. The pull request object includes its
+`description`, `draft` flag, `created_on`, `updated_on`, `comment_count`, `task_count`, and
+`reviewers[]`. Each comment has `id`, `author`, `timestamp`, `created_on`, `body`, `file`, `line`,
+`resolved`, `pending` and `parent`. Use the comment `id` to answer in the correct thread. `parent` is
+`null` on the first comment of a thread, and holds that comment's id on a reply. `resolved` tells
+you whether the thread is closed. `pending` tells you whether the comment is still a draft, visible
+only to its author. Use `created_on`, not the human-formatted `timestamp`, for age calculations.
+
+With `--unresolved`, `unresolved_threads` counts the remaining inline roots. `--build` adds
+`build: {build_state, statuses[]}` and `--conflicts` adds `conflicts: {count, files[]}`. These
+sections are omitted unless requested. `--metadata-only` skips the comments request and cannot be
+combined with `--unresolved` or `--comments-only`.
 
 `bb pr list` returns `state` (raw API value, e.g. `"OPEN"`), `draft` (bool), and `reviewers`, an
 array of `{name, uuid, state}` where `state` is `approved`, `changes_requested` or `pending`.
@@ -310,7 +319,7 @@ Both filters match a substring, and ignore case.
 | Command | Result |
 |---|---|
 | `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
-| `bb pr view <id> [--unresolved] [--comments-only]` | `{pull_request,general[],inline[]}` |
+| `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |

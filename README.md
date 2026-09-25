@@ -226,6 +226,8 @@ cd any-bitbucket-repo && bb pr list
 bb pr list                                # open PRs, with state and per-reviewer decisions
 bb pr list --needs-my-review              # only PRs waiting on your review
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
+bb pr view 42 --metadata-only --json      # header and reviewer state without comments
+bb pr view 42 --build --conflicts --json  # add build and merge-conflict facts
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
@@ -275,10 +277,15 @@ the whole command.
 `bb`, it prints the right upgrade command for that package manager instead of overwriting a file they
 manage. For a standalone binary it verifies the download's checksum and replaces itself atomically.
 
-Two things worth knowing that `--help` won't tell you:
+Things worth knowing that `--help` won't tell you:
 
 **Everything speaks JSON.** Add `--json` to any command and pipe it to `jq` rather than parsing the
 tables, whose layout is not a contract. Scripts and agents should default to it.
+
+`bb pr view` includes the pull-request description, draft state, reviewers, exact timestamps,
+comment and task counts, and the original comment timestamps. Use `--metadata-only` when comments
+are unnecessary, `--build` to add statuses, and `--conflicts` to add reported merge conflicts.
+Optional sections are omitted unless requested; `--json` stdout remains one JSON value.
 
 ```bash
 bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved")) | "\(.id)\t\(.title)"'

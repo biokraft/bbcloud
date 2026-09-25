@@ -57,10 +57,18 @@ async fn mock_pr_and_comments(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "id": 7,
             "title": "fix the thing",
+            "description": "The complete pull request description.",
             "state": "OPEN",
+            "draft": true,
             "author": { "display_name": "Sean B" },
             "source": { "branch": { "name": "feature/a" } },
             "destination": { "branch": { "name": "main" } },
+            "created_on": "2026-07-30T09:00:00+00:00",
+            "updated_on": "2026-08-04T12:00:00+00:00",
+            "comment_count": 4,
+            "task_count": 2,
+            "reviewers": [{ "uuid": "{dana}", "display_name": "Dana" }],
+            "participants": [{ "role": "REVIEWER", "state": "approved", "user": { "uuid": "{dana}", "display_name": "Dana" } }],
             "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/7" } }
         })))
         .mount(server)
@@ -131,10 +139,27 @@ async fn view_json_splits_general_and_inline() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["pull_request"]["id"], 7);
+    assert_eq!(
+        value["pull_request"]["description"],
+        "The complete pull request description."
+    );
+    assert_eq!(value["pull_request"]["draft"], true);
+    assert_eq!(
+        value["pull_request"]["created_on"],
+        "2026-07-30T09:00:00+00:00"
+    );
+    assert_eq!(
+        value["pull_request"]["updated_on"],
+        "2026-08-04T12:00:00+00:00"
+    );
+    assert_eq!(value["pull_request"]["comment_count"], 4);
+    assert_eq!(value["pull_request"]["task_count"], 2);
+    assert_eq!(value["pull_request"]["reviewers"][0]["state"], "approved");
     let general = value["general"].as_array().unwrap();
     let inline = value["inline"].as_array().unwrap();
     assert_eq!(general.len(), 2, "general: {general:?}");
     assert_eq!(inline.len(), 2, "inline: {inline:?}");
+    assert_eq!(general[0]["created_on"], "2026-08-01T10:00:00+00:00");
     assert_eq!(inline[0]["file"], "src/lib.rs");
     assert_eq!(inline[0]["resolved"], true);
 }
@@ -156,6 +181,88 @@ async fn comments_are_ordered_oldest_first() {
         .map(|c| c["id"].as_u64().unwrap())
         .collect();
     assert_eq!(ids, vec![2, 3]);
+}
+
+#[tokio::test]
+async fn metadata_only_skips_comments_and_returns_empty_sections() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--metadata-only", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["pull_request"]["id"], 7);
+    assert!(value["general"].as_array().unwrap().is_empty());
+    assert!(value["inline"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn build_and_conflicts_are_included_only_when_requested() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "key": "PIPE", "name": "Pipeline", "state": "FAILED", "url": "https://ci/1" }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/conflicts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "path": "src/lib.rs", "scenario": "content", "message": "both changed" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--build", "--conflicts", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["build"]["build_state"], "failed");
+    assert_eq!(value["build"]["statuses"][0]["key"], "PIPE");
+    assert_eq!(value["conflicts"]["count"], 1);
+    assert_eq!(value["conflicts"]["files"][0]["path"], "src/lib.rs");
+}
+
+#[tokio::test]
+async fn unresolved_filters_replies_of_a_resolved_thread() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(
+        &server,
+        serde_json::json!({
+            "values": [
+                {
+                    "id": 800,
+                    "content": { "raw": "root point" },
+                    "user": { "display_name": "Reviewer" },
+                    "created_on": "2026-08-04T10:00:00+00:00",
+                    "inline": { "path": "src/lib.rs", "to": 1 },
+                    "resolution": {}
+                },
+                {
+                    "id": 801,
+                    "content": { "raw": "reply to a resolved point" },
+                    "user": { "display_name": "Author" },
+                    "created_on": "2026-08-04T11:00:00+00:00",
+                    "inline": { "path": "src/lib.rs", "to": 1 },
+                    "parent": { "id": 800 }
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--unresolved", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(value["inline"].as_array().unwrap().is_empty());
+    assert_eq!(value["unresolved_threads"], 0);
 }
 
 #[tokio::test]
