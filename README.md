@@ -186,12 +186,14 @@ scopes are enough:
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
 | `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes`, `pr retarget`, `pr edit` |
-| `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, and the workspace/repository scan `pr mine` does |
+| `read:repository:bitbucket` | `branch list`, `repo list`, the default-reviewer lookup `pr create` does, `pr view --conflicts` (whose redirect target is a repository resource, not a pull-request one), and the workspace/repository scan `pr mine` does |
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 | `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
 
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
-`read:repository:bitbucket`, so `pr create` needs both.
+`read:repository:bitbucket`, so `pr create` needs both. The same applies to `pr view --conflicts`:
+the pull-request endpoint redirects to a repository file-conflict resource, so a token with only
+`read:pullrequest:bitbucket` gets a 403 on that flag.
 
 The same shape applies to the repository commands: `read:repository:bitbucket` lets you *list*
 repositories but not create one, and `read:project:bitbucket` is a separate grant again — a token
