@@ -5,8 +5,10 @@ use crate::commands::pr_build;
 use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
+use crate::repo;
 use crate::users::{current_user, resolve_user};
 use serde::Serialize;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ReviewStateArg {
@@ -72,7 +74,7 @@ pub struct ListArgs {
 pub(crate) const REVIEWER_FIELDS: &str =
     "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft,%2Bvalues.comment_count";
 
-const ALL_STATES: &str = "OPEN,MERGED,DECLINED,SUPERSEDED";
+const ALL_STATES: [&str; 4] = ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"];
 
 #[derive(Debug, Serialize)]
 struct PrRow {
@@ -139,14 +141,22 @@ pub(crate) fn validate_state(state: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn state_query(state: &str) -> String {
-    if state.eq_ignore_ascii_case("all") {
-        ALL_STATES.to_string()
+pub(crate) fn state_params(state: &str) -> String {
+    let states: Vec<String> = if state.eq_ignore_ascii_case("all") {
+        ALL_STATES
+            .iter()
+            .map(|state| (*state).to_string())
+            .collect()
     } else if state.eq_ignore_ascii_case("draft") {
-        "OPEN".to_string()
+        vec!["OPEN".to_string()]
     } else {
-        state.to_uppercase()
-    }
+        vec![state.to_uppercase()]
+    };
+    states
+        .iter()
+        .map(|state| format!("state={}", urlencoding::encode(state)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn source_query(branch: &str) -> String {
@@ -156,8 +166,8 @@ fn source_query(branch: &str) -> String {
 
 fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> String {
     let mut path = format!(
-        "/pullrequests?state={}&pagelen={}&fields={REVIEWER_FIELDS}",
-        urlencoding::encode(&state_query(state)),
+        "/pullrequests?{}&pagelen={}&fields={REVIEWER_FIELDS}",
+        state_params(state),
         page_size,
     );
     if let Some(branch) = current_branch {
@@ -165,6 +175,21 @@ fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> Str
         path.push_str(&urlencoding::encode(&source_query(branch)));
     }
     path
+}
+
+async fn fetch_limited(ctx: &Ctx, path: &str, limit: usize) -> Result<Vec<PullRequest>> {
+    let mut target = Some(path.to_string());
+    let mut seen = HashSet::new();
+    let mut collected = Vec::new();
+    while let Some(url) = target {
+        if collected.len() >= limit || !seen.insert(url.clone()) {
+            break;
+        }
+        let page: Page<PullRequest> = ctx.client.get_json(&url).await?;
+        collected.extend(page.values);
+        target = page.next;
+    }
+    Ok(collected)
 }
 
 /// The uuid of whoever the token belongs to, fetched at most once per invocation
@@ -184,6 +209,13 @@ fn my_review_state(pr: &PullRequest, my_uuid: Option<&str>) -> Option<ReviewStat
 pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     validate_state(&args.state)?;
     let current_branch = if args.current {
+        let checkout_repo = repo::resolve_from_git()?;
+        if checkout_repo != ctx.slug {
+            return Err(BbError::Config(format!(
+                "--current uses the checkout repository `{checkout_repo}`, but the selected repository is `{}`",
+                ctx.slug
+            )));
+        }
         Some(git::current_branch()?)
     } else {
         None
@@ -216,24 +248,20 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
-    let local_filter = args.destination.is_some()
+    let requires_full_scan = args.destination.is_some()
         || args.reviewer.is_some()
         || args.author.is_some()
         || args.review_state.is_some()
         || args.needs_my_review
         || want_draft
         || args.build_status.is_some();
-    let page_size = args.limit.min(100);
-    let path = list_path(&args.state, current_branch.as_deref(), page_size);
+    let path = ctx.path(&list_path(&args.state, current_branch.as_deref(), 50));
 
     let spinner = output::spinner("fetching pull requests");
-    let prs: Vec<PullRequest> = if local_filter {
-        ctx.client.paginate(&ctx.path(&path)).await?
+    let prs: Vec<PullRequest> = if requires_full_scan {
+        ctx.client.paginate(&path).await?
     } else {
-        ctx.client
-            .get_json::<Page<PullRequest>>(&ctx.path(&path))
-            .await?
-            .values
+        fetch_limited(ctx, &path, args.limit).await?
     };
     spinner.finish_and_clear();
 
@@ -273,7 +301,6 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
                 Some(ReviewState::ChangesRequested) | Some(ReviewState::Pending)
             )
         })
-        .take(args.limit)
         .collect();
 
     let mut rows: Vec<PrRow> = kept.iter().map(|pr| to_row(pr)).collect();
@@ -298,6 +325,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         }
     }
 
+    rows.truncate(args.limit);
     render(ctx, &rows, want_build)
 }
 

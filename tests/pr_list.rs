@@ -89,12 +89,22 @@ async fn list_current_filters_by_the_current_branch() {
         .current_dir(project.path())
         .output()
         .unwrap();
+    GitCommand::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://bitbucket.org/acme/widgets",
+        ])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme/widgets/pullrequests"))
         .and(query_param("q", "source.branch.name=\"feature/current\""))
-        .and(query_param("pagelen", "100"))
+        .and(query_param("pagelen", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
                 {
@@ -121,6 +131,77 @@ async fn list_current_filters_by_the_current_branch() {
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value.as_array().unwrap().len(), 1);
     assert_eq!(value[0]["id"], 1);
+}
+
+#[tokio::test]
+async fn list_current_rejects_a_checkout_repository_mismatch() {
+    let project = tempfile::tempdir().unwrap();
+    GitCommand::new("git")
+        .args(["init"])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+    GitCommand::new("git")
+        .args(["symbolic-ref", "HEAD", "refs/heads/feature/current"])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+    GitCommand::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://bitbucket.org/other/project",
+        ])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+
+    let server = MockServer::start().await;
+    let out = bb(&server)
+        .current_dir(project.path())
+        .args(["pr", "list", "--current", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("checkout repository"));
+}
+
+#[tokio::test]
+async fn list_limit_is_a_true_output_cap_across_pages() {
+    let server = MockServer::start().await;
+    let next = format!(
+        "{}/repositories/acme/widgets/pullrequests?page=2",
+        server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("pagelen", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "id": 1, "source": { "branch": { "name": "feature/a" } } }],
+            "next": next
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [
+                { "id": 2, "source": { "branch": { "name": "feature/b" } } },
+                { "id": 3, "source": { "branch": { "name": "feature/c" } } }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--limit", "2", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 2);
+    assert_eq!(value[1]["id"], 2);
 }
 
 #[tokio::test]
@@ -266,7 +347,10 @@ async fn list_state_all_asks_the_api_for_every_state() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme/widgets/pullrequests"))
-        .and(query_param("state", "OPEN,MERGED,DECLINED,SUPERSEDED"))
+        .and(query_param("state", "OPEN"))
+        .and(query_param("state", "MERGED"))
+        .and(query_param("state", "DECLINED"))
+        .and(query_param("state", "SUPERSEDED"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(&server)
         .await;
@@ -771,6 +855,53 @@ async fn build_status_filter_keeps_only_matching_prs_and_implies_the_column() {
     assert_eq!(rows[0]["id"], 7);
     // implied column: the fields are present without --build
     assert_eq!(rows[0]["build_state"], "failed");
+}
+
+#[tokio::test]
+async fn build_status_filter_scans_past_the_output_limit() {
+    let server = MockServer::start().await;
+    let next = format!(
+        "{}/repositories/acme/widgets/pullrequests?page=2",
+        server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("pagelen", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [pr_with_reviewers()],
+            "next": next
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [two_prs()[1].clone()]
+        })))
+        .mount(&server)
+        .await;
+    mount_statuses(&server, 7, &["FAILED"]).await;
+    mount_statuses(&server, 9, &["SUCCESSFUL"]).await;
+
+    let out = bb(&server)
+        .args([
+            "pr",
+            "list",
+            "--build-status",
+            "successful",
+            "--limit",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["id"], 9);
 }
 
 #[tokio::test]
