@@ -1,6 +1,6 @@
 ---
 name: bitbucket-cloud
-description: Read and answer Bitbucket Cloud pull request reviews with the `bb` CLI. Use this skill when the repository is hosted on Bitbucket Cloud, or when the task is to list, read, review, comment on, or open a pull request there. Do not use it for GitHub or GitLab.
+description: Reads, reviews, comments on, and reports Bitbucket Cloud pull requests with the `bb` CLI. Use for pull-request discovery, review context, comments, build or conflict status, and repository data in a Bitbucket Cloud repository. Do not use for opening a pull request, producing a daily brief, GitHub, or GitLab.
 license: MIT
 ---
 
@@ -26,6 +26,14 @@ Do not use `gh`. Do not ask the user to open the web UI.
    is a notice, not an error: the command still succeeded, and stdout is unaffected. Tell the user
    once, quoting the command it names. Do not run the upgrade yourself, and do not repeat the
    notice on every later command in the same session.
+
+## Operating contract
+
+1. Establish the repository from the checkout or `-R`; never guess a workspace.
+2. Use `--json` for machine decisions and keep the command's exit code.
+3. Read before writing. For a mutation, use the smallest command that changes the requested field.
+4. After a write, verify the returned JSON or run one read-back command.
+5. Stop on exit 2, 3, or a scope error and report the required next action; do not substitute a browser or another provider.
 
 ## Read a pull request
 

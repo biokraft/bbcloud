@@ -1,6 +1,6 @@
 ---
 name: bbc-daily-brief
-description: Produce a ranked, actionable daily brief of the user's Bitbucket Cloud pull requests across every repository. Use ONLY when the user explicitly asks for a daily brief, a standup summary, or "what needs my attention" across repositories. Never invoke this skill proactively, and never as a step inside another task.
+description: Produces a ranked, actionable brief of the user's Bitbucket Cloud pull requests across repositories. Use ONLY when the user explicitly asks for a daily brief, standup summary, or what needs their attention across repositories. Never invoke this skill proactively. Do not use for a single pull request, opening a pull request, or as an intermediate step in another task.
 license: MIT
 ---
 
@@ -26,6 +26,13 @@ One ranked list of what needs the user's attention across every Bitbucket reposi
    threads", "Dana owes you a reply". Never write the brief in the first person — the reader is the
    person whose pull requests these are, not the agent. The json fields are still named `my_role`
    and `my_review_state`; that is the api's wording, not the brief's.
+
+## Operating contract
+
+1. Confirm the user explicitly requested a cross-repository brief.
+2. Run the cheap structural scan before any enrichment.
+3. Enrich at most the ranked candidate set; preserve `partial` and uncertainty.
+4. Produce the fixed output shape, or state why it cannot be produced. Never write to Bitbucket.
 
 ## Phase 1 — structural scan, cheap
 

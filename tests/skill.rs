@@ -1071,6 +1071,52 @@ fn every_skill_carries_a_short_summary() {
     }
 }
 
+#[test]
+fn every_skill_has_a_portable_agent_contract() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let text = skill.content;
+        assert!(
+            text.starts_with("---\n"),
+            "{} has no frontmatter",
+            skill.name
+        );
+        assert!(
+            text.contains(&format!("\nname: {}\n", skill.name)),
+            "{} has a mismatched name",
+            skill.name
+        );
+        assert!(
+            text.contains("\ndescription: "),
+            "{} has no description",
+            skill.name
+        );
+        assert!(
+            text.contains("\nlicense: "),
+            "{} has no license",
+            skill.name
+        );
+        let description = text
+            .lines()
+            .find(|line| line.starts_with("description: "))
+            .unwrap_or_default();
+        assert!(
+            description.contains("Do not use") || description.contains("Never invoke"),
+            "{} has no trigger boundary: {description}",
+            skill.name
+        );
+        assert!(
+            text.contains("## Operating contract"),
+            "{} has no agent procedure contract",
+            skill.name
+        );
+        assert!(
+            text.lines().count() <= 500,
+            "{} exceeds the Agent Skills body limit",
+            skill.name
+        );
+    }
+}
+
 /// The main skill stays the command reference — an agent that installed only
 /// this one must still be able to open a pull request — but the workflow lives
 /// in `bbc-open-pr`, and this skill points at it rather than repeating it.
