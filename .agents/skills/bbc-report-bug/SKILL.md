@@ -1,6 +1,6 @@
 ---
 name: bbc-report-bug
-description: File a bug report about the `bb` CLI itself against biokraft/bbcloud with the `gh` CLI — reproduce it, redact the user's private Bitbucket data, and get the user's approval before the issue is created. Use this skill when the user asks to report, file or open an issue about a `bb` bug. Do not use it to file issues in other repositories.
+description: Files a bug report about the `bb` CLI itself against biokraft/bbcloud with the `gh` CLI by reproducing it, redacting private Bitbucket data, and obtaining approval before creating the issue. Use only when the user asks to report, file, or open an issue about a `bb` bug. Do not use for a pull request, a daily brief, a user's application, or another repository.
 license: MIT
 ---
 
@@ -32,6 +32,13 @@ two facts apart.
    publishes a company's private repository names under the user's name.
 5. **One issue per bug.** Search first; comment on the existing issue instead of opening a
    second.
+
+## Operating contract
+
+- Establish a reproducible `bb`-specific defect before drafting.
+- Redact private workspace data before any file or issue text leaves the session.
+- Search for an existing issue before creating a duplicate.
+- Show the exact title and body, wait for explicit approval, and only then call `gh`.
 
 ## Step 1 — establish that it is a `bb` bug
 
