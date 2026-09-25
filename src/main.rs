@@ -177,6 +177,8 @@ enum RepoCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
+    /// List the people available for reviewer resolution
+    Members,
     /// List the repositories in a workspace
     #[command(alias = "l", alias = "ls")]
     List {
@@ -202,6 +204,9 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
+        /// Only show pull requests from the current branch
+        #[arg(long)]
+        current: bool,
         /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
@@ -223,6 +228,9 @@ enum PrCommand {
         /// Only pull requests whose build rolls up to this state
         #[arg(long, value_enum)]
         build_status: Option<commands::pr_list::BuildStateArg>,
+        /// Maximum number of pull requests to return
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -281,8 +289,11 @@ enum PrCommand {
         source: Option<String>,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "description_stdin")]
         description: Option<String>,
+        /// Read the pull request description from stdin
+        #[arg(long, conflicts_with = "interactive")]
+        description_stdin: bool,
         /// Do not attach the repository's default reviewers
         #[arg(long)]
         no_default_reviewers: bool,
@@ -310,6 +321,15 @@ enum PrCommand {
         /// Skip the pull request header and print only comments
         #[arg(long)]
         comments_only: bool,
+        /// Fetch the pull request header without fetching comments
+        #[arg(long, conflicts_with_all = ["comments_only", "unresolved"])]
+        metadata_only: bool,
+        /// Include build statuses in the response
+        #[arg(long)]
+        build: bool,
+        /// Include file conflicts in the response
+        #[arg(long)]
+        conflicts: bool,
     },
     /// Show, add or remove the reviewers tagged on a pull request
     #[command(args_conflicts_with_subcommands = true)]
@@ -323,7 +343,7 @@ enum PrCommand {
     Comment {
         id: u64,
         /// Comment text
-        #[arg(long, short = 'b')]
+        #[arg(long, short = 'b', conflicts_with = "body_stdin")]
         body: Option<String>,
         /// Read the comment text from stdin
         #[arg(long)]
@@ -545,6 +565,7 @@ async fn run(cli: Cli) -> Result<()> {
             match command {
                 PrCommand::List {
                     destination,
+                    current,
                     state,
                     reviewer,
                     author,
@@ -552,11 +573,13 @@ async fn run(cli: Cli) -> Result<()> {
                     needs_my_review,
                     build,
                     build_status,
+                    limit,
                 } => {
                     commands::pr_list::list(
                         &ctx,
                         commands::pr_list::ListArgs {
                             destination,
+                            current,
                             state,
                             reviewer,
                             author,
@@ -564,6 +587,7 @@ async fn run(cli: Cli) -> Result<()> {
                             needs_my_review,
                             build,
                             build_status,
+                            limit,
                         },
                     )
                     .await
@@ -601,6 +625,7 @@ async fn run(cli: Cli) -> Result<()> {
                     source,
                     title,
                     description,
+                    description_stdin,
                     no_default_reviewers,
                     reviewer,
                     interactive,
@@ -614,6 +639,7 @@ async fn run(cli: Cli) -> Result<()> {
                             source,
                             title,
                             description,
+                            description_stdin,
                             no_default_reviewers,
                             reviewer,
                             interactive,
@@ -642,7 +668,23 @@ async fn run(cli: Cli) -> Result<()> {
                     id,
                     unresolved,
                     comments_only,
-                } => commands::pr_comments::view(&ctx, id, unresolved, comments_only).await,
+                    metadata_only,
+                    build,
+                    conflicts,
+                } => {
+                    commands::pr_comments::view_with_options(
+                        &ctx,
+                        commands::pr_comments::ViewArgs {
+                            id,
+                            unresolved,
+                            comments_only,
+                            metadata_only,
+                            build,
+                            conflicts,
+                        },
+                    )
+                    .await
+                }
                 PrCommand::Comment {
                     id,
                     body,
@@ -698,6 +740,10 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Repo { command } => match command {
+            RepoCommand::Members => {
+                let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
+                commands::repo::members(&ctx).await
+            }
             RepoCommand::Create {
                 name,
                 project,
@@ -766,7 +812,17 @@ async fn run(cli: Cli) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let code = match err.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
+                _ => 1,
+            };
+            let _ = err.print();
+            std::process::exit(code);
+        }
+    };
     // `clap`'s `conflicts_with` cannot span a global, top-level arg and an id
     // that only exists on one nested subcommand's own `Command` node, so this
     // is enforced by hand instead, using clap's own error rendering — `pr
@@ -776,11 +832,12 @@ async fn main() {
         && matches!(&cli.command, Command::Pr { command } if matches!(command, PrCommand::Mine { .. }))
     {
         let mut cmd = Cli::command();
-        cmd.error(
+        let err = cmd.error(
             clap::error::ErrorKind::ArgumentConflict,
             "the argument '--repo' cannot be used with 'pr mine': it scans every repository, not one",
-        )
-        .exit();
+        );
+        let _ = err.print();
+        std::process::exit(1);
     }
     if let Err(err) = run(cli).await {
         eprintln!("error: {err}");

@@ -23,8 +23,8 @@ async fn mock_projects(server: &MockServer) {
         .and(path("/workspaces/acme/projects"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "key": "ENG", "name": "Engineering", "is_private": true },
-                { "key": "OPS", "name": "Operations", "is_private": false }
+                { "key": "ENG", "name": "Engineering", "uuid": "{eng}", "is_private": true },
+                { "key": "OPS", "name": "Operations", "uuid": "{ops}", "is_private": false }
             ]
         })))
         .mount(server)
@@ -46,6 +46,18 @@ async fn lists_projects_with_key_name_and_access() {
                 .and(contains("private")),
         )
         .stdout(contains("OPS").and(contains("public")));
+}
+
+#[tokio::test]
+async fn json_preserves_project_uuid() {
+    let server = MockServer::start().await;
+    mock_projects(&server).await;
+    let out = bb(&server)
+        .args(["project", "list", "--json"])
+        .output()
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows[0]["uuid"], "{eng}");
 }
 
 #[tokio::test]
