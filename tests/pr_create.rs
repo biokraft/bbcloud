@@ -455,6 +455,117 @@ async fn an_unresolvable_reviewer_opens_no_pull_request() {
         .stderr(contains("nobody-here"));
 }
 
+/// A readable pool can still be incomplete: another pool may be 403 and hide a
+/// second person with the same name. Tagging the visible one would notify the
+/// wrong human, so a write that resolves by name must refuse instead.
+#[tokio::test]
+async fn a_partial_pool_blocks_a_name_resolved_reviewer() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{dana}", "display_name": "Dana" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{dana}", "display_name": "Dana" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 24 })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "dana",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("{uuid}"));
+}
+
+/// An explicit uuid is unambiguous by construction, so it must still work when
+/// the pool is incomplete. The strict path refuses names, not the flag.
+#[tokio::test]
+async fn an_explicit_uuid_bypasses_an_incomplete_pool() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "reviewers": [{ "uuid": "{dana}" }]
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 25 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "{dana}",
+        ])
+        .assert()
+        .success();
+}
+
 /// The author cannot review their own pull request — bitbucket answers 400 — so
 /// naming yourself is dropped rather than turned into a failed write.
 #[tokio::test]

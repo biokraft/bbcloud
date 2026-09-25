@@ -63,7 +63,7 @@ async fn lists_deduplicated_candidates_with_their_sources() {
 }
 
 #[tokio::test]
-async fn partial_user_pools_are_reported_without_polluting_json() {
+async fn a_forbidden_user_pool_is_reported_as_partial() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/workspaces/acme/members"))
@@ -72,7 +72,7 @@ async fn partial_user_pools_are_reported_without_polluting_json() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme/widgets/permissions-config/users"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -96,6 +96,32 @@ async fn partial_user_pools_are_reported_without_polluting_json() {
         serde_json::json!(["workspace", "repository"])
     );
     assert_eq!(value["users"][0]["uuid"], "{one}");
+    // An effective default reviewer is not proof of access to this repository.
+    assert_eq!(value["users"][0]["eligibility"], "unknown");
+}
+
+/// A 404 from a repository-scoped endpoint means the repository is gone, not
+/// that one list is unreadable. It must keep its documented exit code.
+#[tokio::test]
+async fn a_missing_repository_is_not_reported_as_a_partial_pool() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["repo", "members", "--json"])
+        .assert()
+        .code(3);
 }
 
 #[tokio::test]

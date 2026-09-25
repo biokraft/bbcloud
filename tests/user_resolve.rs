@@ -324,6 +324,77 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
 }
 
+/// Every field is optional in the api, and the pools populate different
+/// subsets. A later, richer record must fill gaps rather than being dropped
+/// for duplicating an identity.
+#[tokio::test]
+async fn a_duplicate_identity_keeps_the_richer_record() {
+    let server = MockServer::start().await;
+    mount_members(
+        &server,
+        serde_json::json!([{ "user": { "uuid": "{m}", "account_id": "acct-1" } }]),
+    )
+    .await;
+    mount_permissions_config(
+        &server,
+        serde_json::json!([{
+            "user": { "uuid": "{m}", "display_name": "Dana Fischer", "nickname": "dana" }
+        }]),
+    )
+    .await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.uuid.as_deref(), Some("{m}"));
+    assert_eq!(user.account_id.as_deref(), Some("acct-1"));
+    assert_eq!(user.nickname.as_deref(), Some("dana"));
+}
+
+/// `account_id` is the fallback identity when a response omits `uuid`, so two
+/// records carrying only that field are still one person.
+#[tokio::test]
+async fn account_id_deduplicates_when_uuid_is_absent() {
+    let server = MockServer::start().await;
+    mount_members(
+        &server,
+        serde_json::json!([{ "user": { "account_id": "acct-1", "display_name": "Dana" } }]),
+    )
+    .await;
+    mount_permissions_config(
+        &server,
+        serde_json::json!([{ "user": { "account_id": "acct-1", "nickname": "dana" } }]),
+    )
+    .await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+
+    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+        .await
+        .unwrap();
+    assert_eq!(user.display_name.as_deref(), Some("Dana"));
+    assert_eq!(user.nickname.as_deref(), Some("dana"));
+}
+
+/// Without a stable identity the record cannot be tagged and cannot be told
+/// apart from a namesake, so it stays out of name resolution entirely.
+#[tokio::test]
+async fn a_record_with_no_stable_identity_is_not_resolvable() {
+    let server = MockServer::start().await;
+    mount_members(
+        &server,
+        serde_json::json!([{ "user": { "display_name": "Dana" } }, { "user": { "display_name": "Dana" } }]),
+    )
+    .await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
+    mount_default_reviewers(&server, serde_json::json!([])).await;
+
+    let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, BbError::Config(_)), "got {err:?}");
+}
+
 /// `permissions-config/users` generally needs repo admin, which a CI token or a
 /// less-privileged colleague's token may lack. That must degrade exactly like a
 /// members 403 does, not abort resolution before default-reviewers is even
