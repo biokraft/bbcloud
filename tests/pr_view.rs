@@ -194,8 +194,25 @@ async fn metadata_only_skips_comments_and_returns_empty_sections() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["pull_request"]["id"], 7);
+    assert_eq!(value["comments_loaded"], false);
     assert!(value["general"].as_array().unwrap().is_empty());
     assert!(value["inline"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn optional_sections_are_absent_unless_requested() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["comments_loaded"], true);
+    assert!(value.get("build").is_none());
+    assert!(value.get("conflicts").is_none());
+    assert!(value.get("unresolved_threads").is_none());
 }
 
 #[tokio::test]
@@ -248,8 +265,14 @@ async fn unresolved_filters_replies_of_a_resolved_thread() {
                     "content": { "raw": "reply to a resolved point" },
                     "user": { "display_name": "Author" },
                     "created_on": "2026-08-04T11:00:00+00:00",
-                    "inline": { "path": "src/lib.rs", "to": 1 },
                     "parent": { "id": 800 }
+                },
+                {
+                    "id": 802,
+                    "content": { "raw": "nested reply" },
+                    "user": { "display_name": "Author" },
+                    "created_on": "2026-08-04T12:00:00+00:00",
+                    "parent": { "id": 801 }
                 }
             ]
         }),
@@ -262,6 +285,7 @@ async fn unresolved_filters_replies_of_a_resolved_thread() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(value["inline"].as_array().unwrap().is_empty());
+    assert!(value["general"].as_array().unwrap().is_empty());
     assert_eq!(value["unresolved_threads"], 0);
 }
 

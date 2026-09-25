@@ -7,7 +7,7 @@ use crate::error::{BbError, Result};
 use crate::output::{self, Format};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct CommentView {
@@ -25,8 +25,8 @@ pub struct CommentView {
     pub parent: Option<u64>,
 }
 
-fn to_view(comment: &Comment) -> CommentView {
-    let inline = comment.inline.as_ref();
+fn to_view(comment: &Comment, root: &Comment) -> CommentView {
+    let inline = root.inline.as_ref().or(comment.inline.as_ref());
     CommentView {
         id: comment.id,
         author: comment.author().to_string(),
@@ -39,7 +39,7 @@ fn to_view(comment: &Comment) -> CommentView {
         body: comment.body(),
         file: inline.and_then(|i| i.path.clone()),
         line: inline.and_then(|i| i.to.or(i.from)),
-        resolved: comment.is_resolved(),
+        resolved: root.is_resolved(),
         pending: comment.pending,
         parent: comment.parent_id(),
     }
@@ -55,10 +55,23 @@ fn location(file: Option<&str>, line: Option<u64>) -> Option<String> {
     }
 }
 
-/// A comment's thread root. Replies inherit the root's location, so filtering a
-/// reply independently can leave an orphan whose parent was filtered out.
-fn thread_root(comment: &Comment) -> u64 {
-    comment.parent_id().unwrap_or(comment.id)
+/// Find the top-level comment for a thread. Bitbucket replies may omit their own
+/// inline location, and replies may be nested, so one parent hop is not enough.
+fn thread_root<'a>(comment: &'a Comment, by_id: &HashMap<u64, &'a Comment>) -> (u64, &'a Comment) {
+    let mut current = comment;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current.id) {
+            return (current.id, current);
+        }
+        let Some(parent_id) = current.parent_id() else {
+            return (current.id, current);
+        };
+        let Some(parent) = by_id.get(&parent_id) else {
+            return (current.id, current);
+        };
+        current = parent;
+    }
 }
 
 fn comment_time(comment: &Comment) -> Option<DateTime<Utc>> {
@@ -90,26 +103,32 @@ pub fn partition_with_summary(
             .then_with(|| a.id.cmp(&b.id))
     });
 
+    let by_id: HashMap<u64, &Comment> = comments
+        .iter()
+        .map(|comment| (comment.id, comment))
+        .collect();
     let resolved_roots: HashSet<u64> = comments
         .iter()
-        .filter(|comment| comment.parent_id().is_none() && comment.is_resolved())
-        .map(|comment| comment.id)
+        .filter_map(|comment| {
+            let (root_id, root) = thread_root(comment, &by_id);
+            root.is_resolved().then_some(root_id)
+        })
         .collect();
     let mut unresolved_roots = HashSet::new();
     let mut general = Vec::new();
     let mut inline = Vec::new();
     for comment in &comments {
-        if comment.is_inline() {
-            let root = thread_root(comment);
-            if unresolved && resolved_roots.contains(&root) {
+        let (root_id, root) = thread_root(comment, &by_id);
+        if root.is_inline() {
+            if unresolved && resolved_roots.contains(&root_id) {
                 continue;
             }
             if unresolved {
-                unresolved_roots.insert(root);
+                unresolved_roots.insert(root_id);
             }
-            inline.push(to_view(comment));
+            inline.push(to_view(comment, root));
         } else {
-            general.push(to_view(comment));
+            general.push(to_view(comment, root));
         }
     }
     (general, inline, unresolved_roots.len())
@@ -243,6 +262,7 @@ pub async fn view_with_options(ctx: &Ctx, args: ViewArgs) -> Result<()> {
         Format::Json => {
             let mut value = serde_json::json!({
                 "pull_request": pr.as_ref().map(pr_view),
+                "comments_loaded": !args.metadata_only,
                 "general": general,
                 "inline": inline,
             });

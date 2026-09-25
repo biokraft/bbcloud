@@ -58,7 +58,9 @@ bb pr mine --json                          # my PRs across every repo: authored 
 bb pr mine --role reviewer --build --json  # only ones waiting on me, with build state
 ```
 
-`bb pr view` returns `{ pull_request, general[], inline[] }`. The pull request object includes its
+`bb pr view` returns `{ pull_request, comments_loaded, general[], inline[] }`. `comments_loaded` is
+`false` for `--metadata-only`; empty arrays then mean comments were intentionally skipped. The
+pull request object includes its
 `description`, `draft` flag, `created_on`, `updated_on`, `comment_count`, `task_count`, and
 `reviewers[]`. Each comment has `id`, `author`, `timestamp`, `created_on`, `body`, `file`, `line`,
 `resolved`, `pending` and `parent`. Use the comment `id` to answer in the correct thread. `parent` is
@@ -327,7 +329,7 @@ Both filters match a substring, and ignore case.
 | Command | Result |
 |---|---|
 | `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
-| `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
+| `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,comments_loaded,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
