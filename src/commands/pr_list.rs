@@ -1,10 +1,14 @@
 use crate::api::models::{BuildState, BuildStatus, PullRequest, ReviewState, ReviewerState};
+use crate::api::Page;
 use crate::commands::pr::Ctx;
 use crate::commands::pr_build;
-use crate::error::Result;
+use crate::error::{BbError, Result};
+use crate::git;
 use crate::output::{self, Format};
-use crate::users::{current_user, resolve_user};
+use crate::repo;
+use crate::users::{current_user, load_user_pool, uuid_user, UserPool};
 use serde::Serialize;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ReviewStateArg {
@@ -48,6 +52,7 @@ impl BuildStateArg {
 #[derive(Debug)]
 pub struct ListArgs {
     pub destination: Option<String>,
+    pub current: bool,
     pub state: String,
     pub reviewer: Option<String>,
     pub author: Option<String>,
@@ -56,6 +61,7 @@ pub struct ListArgs {
     /// Show the build column. Costs one extra request per pull request.
     pub build: bool,
     pub build_status: Option<BuildStateArg>,
+    pub limit: usize,
 }
 
 /// Bitbucket's paginated pull-request endpoint returns a reduced object that omits
@@ -68,7 +74,7 @@ pub struct ListArgs {
 pub(crate) const REVIEWER_FIELDS: &str =
     "%2Bvalues.reviewers,%2Bvalues.participants,%2Bvalues.draft,%2Bvalues.comment_count";
 
-const ALL_STATES: &str = "OPEN,MERGED,DECLINED,SUPERSEDED";
+const ALL_STATES: [&str; 4] = ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"];
 
 #[derive(Debug, Serialize)]
 struct PrRow {
@@ -126,18 +132,84 @@ fn reviewer_cell(reviewers: &[ReviewerState]) -> String {
 /// Shared with `pr_mine`, which has no `draft` boolean to filter on afterwards
 /// (a cross-workspace pull request result carries the same fields either way) —
 /// `pr mine` rejects `--state draft` before this is ever called with it.
-pub(crate) fn state_query(state: &str) -> String {
-    if state.eq_ignore_ascii_case("all") {
-        ALL_STATES.to_string()
-    } else if state.eq_ignore_ascii_case("draft") {
-        "OPEN".to_string()
-    } else {
-        state.to_uppercase()
+pub(crate) fn validate_state(state: &str) -> Result<()> {
+    match state.to_ascii_lowercase().as_str() {
+        "open" | "merged" | "declined" | "superseded" | "draft" | "all" => Ok(()),
+        _ => Err(BbError::Config(format!(
+            "invalid pull request state `{state}` — expected OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL"
+        ))),
     }
+}
+
+pub(crate) fn state_params(state: &str) -> String {
+    let states: Vec<String> = if state.eq_ignore_ascii_case("all") {
+        ALL_STATES
+            .iter()
+            .map(|state| (*state).to_string())
+            .collect()
+    } else if state.eq_ignore_ascii_case("draft") {
+        vec!["OPEN".to_string()]
+    } else {
+        vec![state.to_uppercase()]
+    };
+    states
+        .iter()
+        .map(|state| format!("state={}", urlencoding::encode(state)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn source_query(branch: &str) -> String {
+    let escaped = branch.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("source.branch.name=\"{escaped}\"")
+}
+
+fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> String {
+    let mut path = format!(
+        "/pullrequests?{}&pagelen={}&fields={REVIEWER_FIELDS}",
+        state_params(state),
+        page_size,
+    );
+    if let Some(branch) = current_branch {
+        path.push_str("&q=");
+        path.push_str(&urlencoding::encode(&source_query(branch)));
+    }
+    path
+}
+
+async fn fetch_limited(ctx: &Ctx, path: &str, limit: usize) -> Result<Vec<PullRequest>> {
+    let mut target = Some(path.to_string());
+    let mut seen = HashSet::new();
+    let mut collected = Vec::new();
+    while let Some(url) = target {
+        if collected.len() >= limit || !seen.insert(url.clone()) {
+            break;
+        }
+        let page: Page<PullRequest> = ctx.client.get_json(&url).await?;
+        collected.extend(page.values);
+        target = page.next;
+    }
+    Ok(collected)
 }
 
 /// The uuid of whoever the token belongs to, fetched at most once per invocation
 /// and only when a filter actually needs it.
+fn needs_user_pool(query: Option<&str>) -> bool {
+    query.is_some_and(|value| value != "@me" && !(value.starts_with('{') && value.ends_with('}')))
+}
+
+fn resolve_uuid(pool: Option<&UserPool>, query: &str) -> Result<Option<String>> {
+    if let Some(user) = uuid_user(query) {
+        return Ok(user.uuid);
+    }
+    match pool {
+        Some(pool) => Ok(pool.resolve(query, &[])?.uuid),
+        None => Err(BbError::Config(
+            "user name could not be resolved without a user pool".into(),
+        )),
+    }
+}
+
 async fn my_uuid(ctx: &Ctx) -> Result<Option<String>> {
     Ok(current_user(&ctx.client).await?.uuid)
 }
@@ -151,10 +223,34 @@ fn my_review_state(pr: &PullRequest, my_uuid: Option<&str>) -> Option<ReviewStat
 }
 
 pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
+    validate_state(&args.state)?;
+    let current_branch = if args.current {
+        let checkout_repo = repo::resolve_from_git()?;
+        if checkout_repo != ctx.slug {
+            return Err(BbError::Config(format!(
+                "--current uses the checkout repository `{checkout_repo}`, but the selected repository is `{}`",
+                ctx.slug
+            )));
+        }
+        Some(git::current_branch()?)
+    } else {
+        None
+    };
+    if args.limit == 0 {
+        return render(ctx, &[], args.build || args.build_status.is_some());
+    }
+
     // Resolve everything the filters need before fetching, so a bad name fails
-    // fast instead of after a paginated download.
+    // fast instead of after a paginated download. Both name filters share one
+    // pool when the command needs both.
+    let pool: Option<UserPool> =
+        if needs_user_pool(args.reviewer.as_deref()) || needs_user_pool(args.author.as_deref()) {
+            Some(load_user_pool(&ctx.client, &ctx.slug).await?)
+        } else {
+            None
+        };
     let reviewer_uuid = match args.reviewer.as_deref() {
-        Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
+        Some(name) => resolve_uuid(pool.as_ref(), name)?,
         None => None,
     };
 
@@ -170,24 +266,34 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
 
     let author_uuid = match args.author.as_deref() {
         Some("@me") => me.clone(),
-        Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
+        Some(name) => resolve_uuid(pool.as_ref(), name)?,
         None => None,
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
+    let requires_full_scan = args.destination.is_some()
+        || args.reviewer.is_some()
+        || args.author.is_some()
+        || args.review_state.is_some()
+        || args.needs_my_review
+        || want_draft
+        || args.build_status.is_some();
+    let path = ctx.path(&list_path(&args.state, current_branch.as_deref(), 50));
 
     let spinner = output::spinner("fetching pull requests");
-    let prs: Vec<PullRequest> = ctx
-        .client
-        .paginate(&ctx.path(&format!(
-            "/pullrequests?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
-            urlencoding::encode(&state_query(&args.state))
-        )))
-        .await?;
+    let prs: Vec<PullRequest> = if requires_full_scan {
+        ctx.client.paginate(&path).await?
+    } else {
+        fetch_limited(ctx, &path, args.limit).await?
+    };
     spinner.finish_and_clear();
 
     let kept: Vec<&PullRequest> = prs
         .iter()
+        .filter(|pr| match current_branch.as_deref() {
+            Some(branch) => pr.source_branch() == branch,
+            None => true,
+        })
         .filter(|pr| match args.destination.as_deref() {
             Some(branch) => pr.destination_branch() == branch,
             None => true,
@@ -242,6 +348,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         }
     }
 
+    rows.truncate(args.limit);
     render(ctx, &rows, want_build)
 }
 

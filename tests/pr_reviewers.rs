@@ -53,16 +53,21 @@ async fn mount_members(server: &MockServer) {
                 { "user": { "uuid": "{r}", "display_name": "Ash Doe", "nickname": "ash" } }
             ]
         })))
+        .expect(1)
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .expect(1)
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme/widgets/permissions-config/users"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .expect(1)
         .mount(server)
         .await;
 }

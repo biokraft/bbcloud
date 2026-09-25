@@ -26,7 +26,14 @@ fn body() -> serde_json::Value {
                 "full_name": "acme/api-gateway",
                 "is_private": true,
                 "project": { "key": "ENG", "name": "Engineering" },
-                "updated_on": "2026-08-24T10:00:00+00:00"
+                "updated_on": "2026-08-24T10:00:00+00:00",
+                "links": {
+                    "html": { "href": "https://bitbucket.org/acme/api-gateway" },
+                    "clone": [
+                        { "name": "ssh", "href": "git@bitbucket.org:acme/api-gateway.git" },
+                        { "name": "https", "href": "https://bitbucket.org/acme/api-gateway.git" }
+                    ]
+                }
             },
             {
                 "slug": "public-docs",
@@ -93,6 +100,33 @@ async fn name_filter_is_applied_client_side_and_limit_truncates_after_it() {
     let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
     assert_eq!(rows[0]["name"], "api-gateway");
+}
+
+#[tokio::test]
+async fn json_preserves_repository_identity_and_clone_urls() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body()))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["repo", "list", "--json"])
+        .output()
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows[0]["repo"], "acme/api-gateway");
+    assert_eq!(rows[0]["url"], "https://bitbucket.org/acme/api-gateway");
+    assert_eq!(
+        rows[0]["clone_urls"]["ssh"],
+        "git@bitbucket.org:acme/api-gateway.git"
+    );
+    assert_eq!(rows[0]["project_name"], "Engineering");
+    assert_eq!(rows[0]["updated_on"], "2026-08-24T10:00:00+00:00");
+    assert!(rows[1]["url"].is_null());
+    assert!(rows[1]["clone_urls"]["ssh"].is_null());
+    assert!(rows[1]["clone_urls"]["https"].is_null());
 }
 
 #[tokio::test]

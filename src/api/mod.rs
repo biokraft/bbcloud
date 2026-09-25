@@ -67,9 +67,13 @@ impl Client {
             .user_agent(concat!("bb-cli/", env!("CARGO_PKG_VERSION")))
             .build()?;
 
+        let base_url = base_url.trim_end_matches('/').to_string();
+        reqwest::Url::parse(&base_url)
+            .map_err(|e| BbError::Config(format!("invalid Bitbucket API base URL: {e}")))?;
+
         Ok(Self {
             http,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
             auth_header: creds.basic_header(),
         })
     }
@@ -79,22 +83,35 @@ impl Client {
         Self::new(creds, base)
     }
 
-    fn url(&self, path_or_url: &str) -> String {
-        if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
-            path_or_url.to_string()
+    fn url(&self, path_or_url: &str) -> Result<String> {
+        let base = reqwest::Url::parse(&self.base_url)
+            .map_err(|e| BbError::Config(format!("invalid Bitbucket API base URL: {e}")))?;
+        let candidate = if path_or_url.starts_with("http://") || path_or_url.starts_with("https://")
+        {
+            reqwest::Url::parse(path_or_url)
+                .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
         } else {
-            format!("{}{}", self.base_url, path_or_url)
+            reqwest::Url::parse(&format!("{}{}", self.base_url, path_or_url))
+                .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
+        };
+
+        if candidate.origin() != base.origin() {
+            return Err(BbError::Config(
+                "refusing to send Bitbucket credentials to another origin".into(),
+            ));
         }
+        Ok(candidate.to_string())
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        self.http
-            .request(method, self.url(path))
+    fn request(&self, method: reqwest::Method, path: &str) -> Result<reqwest::RequestBuilder> {
+        Ok(self
+            .http
+            .request(method, self.url(path)?)
             .header(
                 reqwest::header::AUTHORIZATION,
                 self.auth_header.expose_secret(),
             )
-            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::ACCEPT, "application/json"))
     }
 
     /// Turns a non-success response into a `BbError`, preferring the API's own
@@ -150,12 +167,12 @@ impl Client {
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let response = Self::check(self.request(reqwest::Method::GET, path).send().await?).await?;
+        let response = Self::check(self.request(reqwest::Method::GET, path)?.send().await?).await?;
         Ok(response.json::<T>().await?)
     }
 
     pub async fn get_text(&self, path: &str) -> Result<String> {
-        let response = Self::check(self.request(reqwest::Method::GET, path).send().await?).await?;
+        let response = Self::check(self.request(reqwest::Method::GET, path)?.send().await?).await?;
         Ok(response.text().await?)
     }
 
@@ -165,7 +182,7 @@ impl Client {
         body: &B,
     ) -> Result<T> {
         let response = Self::check(
-            self.request(reqwest::Method::POST, path)
+            self.request(reqwest::Method::POST, path)?
                 .json(body)
                 .send()
                 .await?,
@@ -175,7 +192,7 @@ impl Client {
     }
 
     pub async fn post_empty(&self, path: &str) -> Result<()> {
-        Self::check(self.request(reqwest::Method::POST, path).send().await?).await?;
+        Self::check(self.request(reqwest::Method::POST, path)?.send().await?).await?;
         Ok(())
     }
 
@@ -185,7 +202,7 @@ impl Client {
         body: &B,
     ) -> Result<T> {
         let response = Self::check(
-            self.request(reqwest::Method::PUT, path)
+            self.request(reqwest::Method::PUT, path)?
                 .json(body)
                 .send()
                 .await?,
@@ -195,7 +212,7 @@ impl Client {
     }
 
     pub async fn delete(&self, path: &str) -> Result<()> {
-        Self::check(self.request(reqwest::Method::DELETE, path).send().await?).await?;
+        Self::check(self.request(reqwest::Method::DELETE, path)?.send().await?).await?;
         Ok(())
     }
 
@@ -213,7 +230,7 @@ impl Client {
             // refetch the same page up to MAX_PAGES times and silently return
             // duplicated values. Compare resolved urls so a relative path and
             // the absolute url it resolves to are recognized as the same page.
-            let resolved = self.url(&target);
+            let resolved = self.url(&target)?;
             if seen.contains(&resolved) {
                 break;
             }

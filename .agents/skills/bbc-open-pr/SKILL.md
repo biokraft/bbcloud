@@ -1,6 +1,7 @@
 ---
 name: bbc-open-pr
-description: Open a Bitbucket Cloud pull request with the `bb` CLI — suggest reviewers from the history of the files you changed, write a description a human can skim, and get the user's approval before either lands. Use this skill when the task is to open, raise or create a pull request on Bitbucket Cloud. Do not use it for GitHub or GitLab.
+description: Opens a Bitbucket Cloud pull request with the `bb` CLI by gathering file-ownership evidence, drafting a reviewer-first description, and obtaining approval before creating it or tagging reviewers. Use only when the user asks to open, raise, or create a Bitbucket Cloud pull request. Do not use for reviewing an existing pull request, a daily brief, GitHub, or GitLab.
+license: MIT
 ---
 
 # Open a Bitbucket Cloud pull request
@@ -12,6 +13,13 @@ reviewers you name, and attaches whatever static list the repository has configu
 reviewers when you name none.
 
 Work through the steps in order. Two of them stop and ask the user; neither is optional.
+
+## Operating contract
+
+- Establish the source and target before proposing a title or reviewers.
+- Gather evidence before drafting; never invent ownership, tests, or risks.
+- Stop at the description and reviewer gates. A create command is allowed only after both are approved.
+- Use UUIDs from `bb` when available and pass only the user's selected reviewers.
 
 For the full command reference — flags, JSON shapes, exit codes — see the `bitbucket-cloud`
 skill.
@@ -49,72 +57,59 @@ that.
 ## Step 2 — find the people who know these files
 
 The default reviewers are a static list. The people who wrote the code you changed are in the
-history. Get the changed files first, then their history:
+history. Ask `bb` for bounded, evidence-backed suggestions before proposing anyone.
+
+**This reads private data.** `reviewers suggest` returns private file paths, colleague names, dates,
+and account ids from commit history. Before running it, tell the user exactly that — the categories
+above — and get a yes. Without that answer, do not run it and do not guess. `--json` is still
+required.
 
 ```bash
-git diff --name-only "$(git merge-base HEAD origin/<target>)"..HEAD
-git log --follow --format='%an|%ae|%ad' --date=short -- <file>
+bb pr reviewers suggest <target> [source] --acknowledge-private-data --json
 ```
 
-Use the target branch from Step 1 in place of `<target>` above — not `main`. For a branch cut
-from a release or integration branch, diffing against `main` pulls in that branch's files too,
-and ranks people who never touched this change.
+Use the target branch from Step 1, not a hardcoded `main`. The command reads the changed-file
+diffstat, then reads two distinct populations: `target_commits`, who maintains the changed files on
+the target branch, and `source_commits`, who else worked on this branch and is not already merged.
+Present them as what they are — "maintains this file" and "worked on this branch" are different
+claims, and the report keeps them apart. It also reports skipped files, per-path errors, and
+`history_complete`; never hide those facts.
 
-`--follow` matters: a renamed file still reports the people who worked on it under its old
-name, and those are exactly the people you want.
+`eligibility` is separate from all of it, because owning a file is not access to the repository.
+`true` means the person is in this repository's permission configuration, `false` means the user
+pool was read in full and they are not in it, `unknown` means no complete pool was available.
+Never present an `unknown` or `false` row as a reviewer who can be tagged; present it as a name and
+let the user decide.
 
-The `%ae` email is for telling apart two commits from the same person written under different
-name spellings — it is never something to pass to `bb pr reviewers add`, which rejects an
-email outright.
-
-Rank candidates by **commits in the last twelve months**, not all-time count. Someone who
-wrote one line in 2019 is not the reviewer; whoever has been maintaining the file is. Then:
-
-- **Drop yourself.** Bitbucket rejects the pull request's author as a reviewer with a 400, so
-  suggesting yourself only produces a failed write.
-- **Drop candidates whose most recent commit to any changed file is older than about a year.**
-  That is archaeology, not review capacity.
-- Note, per candidate, which files earned them the suggestion and how many recent commits they
-  have. The user needs that to choose.
+The command excludes the pull-request author and current reviewers, and in prospective mode the
+authenticated user, since Bitbucket rejects a pull request's author as a reviewer. It does not
+resolve arbitrary Git names by email and never writes reviewer tags. Keep its `uuid` values when
+the user selects people.
 
 ## Step 3 — resolve those names against Bitbucket
 
-Git records an author as a name and an email. `bb pr reviewers add` resolves a
-case-insensitive substring of a Bitbucket display name or nickname, matched against workspace
-members, the repository's permission-config users, and its default reviewers — a pool no `bb`
-command lists. `bb pr create --reviewer` resolves names from the same pool, and resolves them
-before the create, so an unresolvable name fails with exit 1 having opened nothing.
-
-No command can tell you the full resolvable pool, so resolvability cannot be fully verified
-before the write. The best available read-only approximation is the names Bitbucket already
-shows on this repository's pull requests — anyone who has authored or reviewed recently is most
-plausible as a reviewer for a new one:
+Suggestions already carry exact UUIDs. If the user names someone else, use
+`bb repo members --json` to resolve that name against the same workspace, repository-permission,
+and effective-default-reviewer pools used by reviewer resolution:
 
 ```bash
-bb pr list --state ALL --json      # each row's author and reviewers[]
+bb repo members -R <workspace>/<repo> --json
 ```
 
-Build a name pool from every `author` and every entry in `reviewers[]` across that list. Match
-each candidate's git name against the pool the same way `bb pr reviewers add` does: a
-case-insensitive substring.
+Use each returned `name`, `nickname`, and `uuid` to match the Git candidates. `partial` tells you
+which pools could not be read; never present those results as complete. A candidate with no
+plausible match goes under **could not be mapped** with the Git name. If a name is ambiguous,
+keep the candidate unselected and let the user choose a UUID; do not guess.
 
-- A candidate that matches the pool is a reasonably safe suggestion.
-- A candidate that does not match the pool is not necessarily unresolvable — the pool is only an
-  approximation — but suggest them labeled explicitly as **unverified**, so the user knows the
-  create can still fail with exit 1 — at which point nothing has been opened, so you fix the
-  name and re-run the same command.
-- A candidate you cannot match at all — no plausible name in the pool, nothing close — goes
-  under the heading `could not be mapped`, with their git name. Never silently drop them: the
-  most likely reviewer is often behind a name-format mismatch, and the user can map them by hand
-  in one word.
+`eligibility` is `explicit` when the person is in this repository's own permission configuration
+and `unknown` when they come only from workspace membership or default-reviewer status. Only an
+`explicit` row is known to be taggable on this repository — present an `unknown` row as a candidate,
+never as a confirmed reviewer.
 
-If a name is ambiguous, pass the account's `{uuid}` in braces to skip name matching entirely.
-The only source for a uuid is `bb pr reviewers <pr-id> --json` on some pull request the person
-is already tagged on — so this only works for people who have reviewed before. When no uuid is
-available, ask the user for the person's exact Bitbucket display name instead of guessing.
-
-Every one of these checks happens before any write, and so does `--reviewer`'s own resolution:
-one bad name fails the create, and nothing has been created at that point either.
+Every check happens before any write, and so does `--reviewer`'s own resolution: one bad name
+fails before a pull request is created. When `partial` is non-empty, pass the selected reviewers
+as the `uuid` values from this report. `--reviewer` refuses to resolve a **name** against an
+incomplete pool, because the unreadable list may hide the person the user meant.
 
 ## Step 4 — draft the description, then get it approved
 
@@ -165,16 +160,16 @@ The TTL is deliberately short…
 - Use only markdown Bitbucket renders: headings, tables, fenced code, links, lists, emphasis.
 - No emoji. No status badges. Nothing that needs a legend.
 
-Pass the body with `--description`. For a long body, write it to a file and pass the file's
-contents; do not pass `-i`, which opens an editor and prompts.
+Pass the body with `--description-stdin` when it came from a file or pipe; do not pass `-i`, which
+opens an editor and prompts.
 
 ## Step 5 — the reviewer gate
 
 If the user named reviewers when they invoked this skill, use exactly those and ask nothing.
 
-Otherwise show your resolved suggestions — each with its recent-commit count and the files
-behind it — and ask which to add. Present it as a pick, not a yes/no on the whole list:
-the user often wants two of your five.
+Otherwise show your resolved suggestions — each with its recent-commit count, files, and date —
+and ask which to add. Prefer the returned UUIDs in the eventual `--reviewer` list. Present it as
+a pick, not a yes/no on the whole list: the user often wants two of your five.
 
 **Never tag anyone the user did not pick.** A review request is a claim on someone's
 attention. "No one" is a valid answer, and so is a name you did not suggest.
@@ -184,7 +179,7 @@ attention. "No one" is a valid answer, and so is a name you did not suggest.
 Both gates are behind you, so the pull request can be created complete, in one call:
 
 ```bash
-bb pr create <target> --title "<title>" --description "<body>" --reviewer dana,ash --json
+bb pr create <target> --title "<title>" --description-stdin --reviewer '{dana-uuid},{ash-uuid}' --json < <path-to-body-file>
 ```
 
 `--reviewer` is the whole reviewer set. The repository's default reviewers are not attached at
@@ -194,7 +189,7 @@ there is nothing to clean up afterwards. Report the URL from the JSON.
 When the user picked nobody, pass `--no-default-reviewers` and no `--reviewer`. Omitting both
 attaches whatever static default list the repository has, which is not a pick the user made.
 
-Every name resolves before the create, so one bad name opens nothing — fix the name and run the
+Every reviewer is resolved before the create, so one bad value opens nothing — fix it and run the
 same command again. Yourself is dropped rather than rejected.
 
 If the reviewer set has to change after the fact — the user changes their mind, or a default list

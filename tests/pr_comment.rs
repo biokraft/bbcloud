@@ -28,6 +28,16 @@ fn created(id: u64) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn body_and_body_stdin_cannot_be_combined() {
+    let server = MockServer::start().await;
+    bb(&server)
+        .args(["pr", "comment", "7", "--body", "from flag", "--body-stdin"])
+        .write_stdin("from stdin")
+        .assert()
+        .code(1);
+}
+
+#[tokio::test]
 async fn posts_a_general_comment() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

@@ -25,11 +25,13 @@ async fn mock_user_and_reviewers(server: &MockServer) {
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "uuid": "{me}", "display_name": "Me" },
-                { "uuid": "{other}", "display_name": "Other" }
+                { "user": { "uuid": "{me}", "display_name": "Me" } },
+                { "user": { "uuid": "{other}", "display_name": "Other" } }
             ]
         })))
         .mount(server)
@@ -104,6 +106,52 @@ async fn create_skips_reviewer_lookup_when_disabled() {
         ])
         .assert()
         .success();
+}
+
+#[tokio::test]
+async fn create_reads_a_long_description_from_stdin() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "description": "Line one\n\nLine two"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 14 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--description-stdin",
+            "--no-default-reviewers",
+        ])
+        .write_stdin("Line one\n\nLine two\n")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn create_rejects_description_and_description_stdin_together() {
+    let server = MockServer::start().await;
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--description",
+            "x",
+            "--description-stdin",
+        ])
+        .assert()
+        .code(1);
 }
 
 #[tokio::test]
@@ -278,12 +326,14 @@ async fn reviewer_flag_replaces_the_default_reviewers() {
         .await;
     // Reached by the name resolver's pool, never as a source of reviewers.
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "uuid": "{me}", "display_name": "Me" },
-                { "uuid": "{dana}", "display_name": "Dana Scully" },
-                { "uuid": "{unwanted}", "display_name": "Unwanted Person" }
+                { "user": { "uuid": "{me}", "display_name": "Me" } },
+                { "user": { "uuid": "{dana}", "display_name": "Dana Scully" } },
+                { "user": { "uuid": "{unwanted}", "display_name": "Unwanted Person" } }
             ]
         })))
         .mount(&server)
@@ -376,7 +426,9 @@ async fn an_unresolvable_reviewer_opens_no_pull_request() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(&server)
         .await;
@@ -401,6 +453,117 @@ async fn an_unresolvable_reviewer_opens_no_pull_request() {
         .assert()
         .failure()
         .stderr(contains("nobody-here"));
+}
+
+/// A readable pool can still be incomplete: another pool may be 403 and hide a
+/// second person with the same name. Tagging the visible one would notify the
+/// wrong human, so a write that resolves by name must refuse instead.
+#[tokio::test]
+async fn a_partial_pool_blocks_a_name_resolved_reviewer() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{dana}", "display_name": "Dana" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{dana}", "display_name": "Dana" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 24 })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "dana",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("{uuid}"));
+}
+
+/// An explicit uuid is unambiguous by construction, so it must still work when
+/// the pool is incomplete. The strict path refuses names, not the flag.
+#[tokio::test]
+async fn an_explicit_uuid_bypasses_an_incomplete_pool() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "uuid": "{me}", "display_name": "Me"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "reviewers": [{ "uuid": "{dana}" }]
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 25 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--reviewer",
+            "{dana}",
+        ])
+        .assert()
+        .success();
 }
 
 /// The author cannot review their own pull request — bitbucket answers 400 — so
