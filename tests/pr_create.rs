@@ -25,11 +25,13 @@ async fn mock_user_and_reviewers(server: &MockServer) {
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "uuid": "{me}", "display_name": "Me" },
-                { "uuid": "{other}", "display_name": "Other" }
+                { "user": { "uuid": "{me}", "display_name": "Me" } },
+                { "user": { "uuid": "{other}", "display_name": "Other" } }
             ]
         })))
         .mount(server)
@@ -104,6 +106,52 @@ async fn create_skips_reviewer_lookup_when_disabled() {
         ])
         .assert()
         .success();
+}
+
+#[tokio::test]
+async fn create_reads_a_long_description_from_stdin() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(body_partial_json(serde_json::json!({
+            "description": "Line one\n\nLine two"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": 14 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--description-stdin",
+            "--no-default-reviewers",
+        ])
+        .write_stdin("Line one\n\nLine two\n")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn create_rejects_description_and_description_stdin_together() {
+    let server = MockServer::start().await;
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--description",
+            "x",
+            "--description-stdin",
+        ])
+        .assert()
+        .code(1);
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 ---
 name: bbc-open-pr
-description: Open a Bitbucket Cloud pull request with the `bb` CLI — suggest reviewers from the history of the files you changed, write a description a human can skim, and get the user's approval before either lands. Use this skill when the task is to open, raise or create a pull request on Bitbucket Cloud. Do not use it for GitHub or GitLab.
+description: Opens a Bitbucket Cloud pull request with the `bb` CLI by gathering file-ownership evidence, drafting a reviewer-first description, and obtaining approval before creating it or tagging reviewers. Use only when the user asks to open, raise, or create a Bitbucket Cloud pull request. Do not use for reviewing an existing pull request, a daily brief, GitHub, or GitLab.
+license: MIT
 ---
 
 # Open a Bitbucket Cloud pull request
@@ -12,6 +13,13 @@ reviewers you name, and attaches whatever static list the repository has configu
 reviewers when you name none.
 
 Work through the steps in order. Two of them stop and ask the user; neither is optional.
+
+## Operating contract
+
+- Establish the source and target before proposing a title or reviewers.
+- Gather evidence before drafting; never invent ownership, tests, or risks.
+- Stop at the description and reviewer gates. A create command is allowed only after both are approved.
+- Use UUIDs from `bb` when available and pass only the user's selected reviewers.
 
 For the full command reference — flags, JSON shapes, exit codes — see the `bitbucket-cloud`
 skill.
@@ -165,8 +173,8 @@ The TTL is deliberately short…
 - Use only markdown Bitbucket renders: headings, tables, fenced code, links, lists, emphasis.
 - No emoji. No status badges. Nothing that needs a legend.
 
-Pass the body with `--description`. For a long body, write it to a file and pass the file's
-contents; do not pass `-i`, which opens an editor and prompts.
+Pass the body with `--description-stdin` when it came from a file or pipe; do not pass `-i`, which
+opens an editor and prompts.
 
 ## Step 5 — the reviewer gate
 
@@ -184,7 +192,7 @@ attention. "No one" is a valid answer, and so is a name you did not suggest.
 Both gates are behind you, so the pull request can be created complete, in one call:
 
 ```bash
-bb pr create <target> --title "<title>" --description "<body>" --reviewer dana,ash --json
+bb pr create <target> --title "<title>" --description-stdin --reviewer dana,ash --json < <path-to-body-file>
 ```
 
 `--reviewer` is the whole reviewer set. The repository's default reviewers are not attached at

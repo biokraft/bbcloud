@@ -1,6 +1,6 @@
 ---
 name: bitbucket-cloud
-description: Read and answer Bitbucket Cloud pull request reviews with the `bb` CLI. Use this skill when the repository is hosted on Bitbucket Cloud, or when the task is to list, read, review, comment on, or open a pull request there. Do not use it for GitHub or GitLab.
+description: Reads, reviews, comments on, and reports Bitbucket Cloud pull requests with the `bb` CLI. Use for pull-request discovery, review context, comments, build or conflict status, and repository data in a Bitbucket Cloud repository. Do not use for opening a pull request, producing a daily brief, GitHub, or GitLab.
 license: MIT
 ---
 
@@ -27,6 +27,14 @@ Do not use `gh`. Do not ask the user to open the web UI.
    once, quoting the command it names. Do not run the upgrade yourself, and do not repeat the
    notice on every later command in the same session.
 
+## Operating contract
+
+1. Establish the repository from the checkout or `-R`; never guess a workspace.
+2. Use `--json` for machine decisions and keep the command's exit code.
+3. Read before writing. For a mutation, use the smallest command that changes the requested field.
+4. After a write, verify the returned JSON or run one read-back command.
+5. Stop on exit 2, 3, or a scope error and report the required next action; do not substitute a browser or another provider.
+
 ## Read a pull request
 
 ```bash
@@ -39,8 +47,10 @@ bb pr list --author @me --json             # PRs I opened; @me resolves the auth
 bb pr list --review-state approved --json  # my own state: approved | changes-requested | pending
 bb pr list --build --json                  # add BUILD column: worst-wins rollup per PR
 bb pr list --build-status failed --json    # only PRs whose build rolls up to FAILED
-bb pr view 42 --json                       # the pull request, plus all comments
+bb pr view 42 --json                       # pull request, plus all comments
+bb pr view 42 --metadata-only --json       # header only; do not fetch comments
 bb pr view 42 --unresolved --json          # only the threads that still need an answer
+bb pr view 42 --build --conflicts --json   # add build and conflict facts
 bb pr diff 42                              # raw diff, plain text
 bb pr files 42 --json                      # changed paths
 bb pr commits 42 --json                    # commits, short hashes
@@ -48,11 +58,20 @@ bb pr mine --json                          # my PRs across every repo: authored 
 bb pr mine --role reviewer --build --json  # only ones waiting on me, with build state
 ```
 
-`bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
-`timestamp`, `body`, `file`, `line`, `resolved`, `pending` and `parent`. Use the comment `id` to
-answer in the correct thread. `parent` is `null` on the first comment of a thread, and holds that
-comment's id on a reply. `resolved` tells you whether the thread is closed. `pending` tells you
-whether the comment is still a draft, visible only to its author.
+`bb pr view` returns `{ pull_request, comments_loaded, general[], inline[] }`. `comments_loaded` is
+`false` for `--metadata-only`; empty arrays then mean comments were intentionally skipped. The
+pull request object includes its
+`description`, `draft` flag, `created_on`, `updated_on`, `comment_count`, `task_count`, and
+`reviewers[]`. Each comment has `id`, `author`, `timestamp`, `created_on`, `body`, `file`, `line`,
+`resolved`, `pending` and `parent`. Use the comment `id` to answer in the correct thread. `parent` is
+`null` on the first comment of a thread, and holds that comment's id on a reply. `resolved` tells
+you whether the thread is closed. `pending` tells you whether the comment is still a draft, visible
+only to its author. Use `created_on`, not the human-formatted `timestamp`, for age calculations.
+
+With `--unresolved`, `unresolved_threads` counts the remaining inline roots. `--build` adds
+`build: {build_state, statuses[]}` and `--conflicts` adds `conflicts: {count, files[]}`. These
+sections are omitted unless requested. `--metadata-only` skips the comments request and cannot be
+combined with `--unresolved` or `--comments-only`.
 
 `bb pr list` returns `state` (raw API value, e.g. `"OPEN"`), `draft` (bool), and `reviewers`, an
 array of `{name, uuid, state}` where `state` is `approved`, `changes_requested` or `pending`.
@@ -61,7 +80,7 @@ There is no `approvals` field.
 Find the pull request for the current branch:
 
 ```bash
-bb pr list --json | jq --arg b "$(git branch --show-current)" '.[] | select(.source == $b)'
+bb pr list --current --json
 ```
 
 ## Build status
@@ -271,7 +290,7 @@ thread is supported, but only on the user's request — see
 
 ```bash
 bb pr create main --title "Cache session lookups" --json
-bb pr create main feat/cache --title "..." --description "..." --close-source-branch --json
+bb pr create main feat/cache --title "..." --description-stdin --close-source-branch --json < body.md
 bb pr create main,develop --title "..." --json      # one pull request per target
 bb pr create main --title "..." --reviewer dana,ash --json   # exactly these two reviewers
 ```
@@ -309,8 +328,8 @@ Both filters match a substring, and ignore case.
 
 | Command | Result |
 |---|---|
-| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
-| `bb pr view <id> [--unresolved] [--comments-only]` | `{pull_request,general[],inline[]}` |
+| `bb pr list [target] [--current] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>] [--limit]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when requested |
+| `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,comments_loaded,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
 | `bb pr commits <id>` | `[{hash,summary}]` |
@@ -321,7 +340,7 @@ Both filters match a substring, and ignore case.
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
-| `bb pr create <target> [source] …` | `[{id,target,url}]` |
+| `bb pr create <target> [source] … [--description-stdin]` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
 | `bb pr edit <id> [--title] [--description \| --description-stdin]` | `{id,title,description,url,changed[]}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |

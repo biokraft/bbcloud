@@ -23,6 +23,11 @@ impl User {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct EffectiveReviewer {
+    pub user: Option<User>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BranchName {
     pub name: Option<String>,
 }
@@ -103,6 +108,13 @@ pub struct BuildStatus {
     pub url: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FileConflict {
+    pub path: Option<String>,
+    pub scenario: Option<String>,
+    pub message: Option<String>,
+}
+
 /// A pull request can carry one status per reporting tool, so the table needs a
 /// single word. `None` covers both "no checks reported" and "a state this
 /// version does not recognise" — an unknown future state must never fail a list.
@@ -177,12 +189,14 @@ pub struct PullRequest {
     /// usually an agent computing an age, and a pre-formatted "3 days ago" would
     /// throw away the precision it needs.
     pub updated_on: Option<String>,
+    pub created_on: Option<String>,
     /// Every comment on the pull request, inline and general, replies included —
     /// bitbucket's own counter. `None` when the api did not return the field,
     /// which is not the same as zero: a caller that treats absence as "no
     /// comments" would silently hide the very activity this exists to surface,
     /// so absence must be read as "unknown, look properly".
     pub comment_count: Option<u64>,
+    pub task_count: Option<u64>,
     /// The description as bitbucket still returns it at the top level. The
     /// OpenAPI schema documents `summary.raw` instead, so read through
     /// `description_text`, which prefers that.

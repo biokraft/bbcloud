@@ -433,6 +433,22 @@ fn skill_documents_build_status() {
 }
 
 #[test]
+fn main_skill_documents_selective_pr_context() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    for needle in [
+        "--metadata-only",
+        "--build",
+        "--conflicts",
+        "unresolved_threads",
+        "created_on",
+    ] {
+        assert!(text.contains(needle), "skill omits `{needle}`");
+    }
+}
+
+#[test]
 fn install_writes_every_skill() {
     let dir = tempfile::tempdir().unwrap();
     bb_in(dir.path())
@@ -728,6 +744,33 @@ fn the_brief_skill_uses_only_the_allowed_emoji() {
     }
 }
 
+/// A merge candidate is a claim about someone else's work. Every input it is
+/// built from has to be named, and a build state is only trustworthy if it was
+/// fetched with the rest of the facts rather than carried over from an earlier
+/// phase that the branch has since moved past.
+#[test]
+fn the_brief_skill_defines_merge_candidate_from_fresh_facts() {
+    let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("--unresolved --conflicts --build --json"),
+        "phase 2 must fetch build state together with the other merge-candidate facts"
+    );
+    for fact in [
+        "task_count",
+        "unresolved_threads",
+        "conflicts.count",
+        "build_state",
+    ] {
+        assert!(text.contains(fact), "merge candidate omits `{fact}`");
+    }
+    assert!(
+        text.contains("at least one reviewer"),
+        "an empty reviewer list must not satisfy the predicate by vacuous truth"
+    );
+}
+
 #[test]
 fn the_brief_skill_carries_the_grouped_output_contract() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
@@ -975,6 +1018,7 @@ fn the_open_pr_skill_carries_the_whole_workflow() {
     let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
     for needle in [
         "bb pr create",
+        "--description-stdin",
         "bb pr reviewers add",
         "git log",
         "--follow",
@@ -1049,6 +1093,52 @@ fn every_skill_carries_a_short_summary() {
         assert!(
             !summary.contains('\n'),
             "{}'s summary spans lines",
+            skill.name
+        );
+    }
+}
+
+#[test]
+fn every_skill_has_a_portable_agent_contract() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let text = skill.content;
+        assert!(
+            text.starts_with("---\n"),
+            "{} has no frontmatter",
+            skill.name
+        );
+        assert!(
+            text.contains(&format!("\nname: {}\n", skill.name)),
+            "{} has a mismatched name",
+            skill.name
+        );
+        assert!(
+            text.contains("\ndescription: "),
+            "{} has no description",
+            skill.name
+        );
+        assert!(
+            text.contains("\nlicense: "),
+            "{} has no license",
+            skill.name
+        );
+        let description = text
+            .lines()
+            .find(|line| line.starts_with("description: "))
+            .unwrap_or_default();
+        assert!(
+            description.contains("Do not use") || description.contains("Never invoke"),
+            "{} has no trigger boundary: {description}",
+            skill.name
+        );
+        assert!(
+            text.contains("## Operating contract"),
+            "{} has no agent procedure contract",
+            skill.name
+        );
+        assert!(
+            text.lines().count() <= 500,
+            "{} exceeds the Agent Skills body limit",
             skill.name
         );
     }
