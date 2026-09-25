@@ -3,7 +3,7 @@ use crate::api::models::{
     BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState,
 };
 use crate::api::Client;
-use crate::commands::pr_list::{state_query, validate_state, REVIEWER_FIELDS};
+use crate::commands::pr_list::{state_params, validate_state, REVIEWER_FIELDS};
 use crate::credentials;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
@@ -158,10 +158,10 @@ async fn authored(
 ) -> Result<Vec<(String, PullRequest)>> {
     let prs: Vec<PullRequest> = client
         .paginate(&format!(
-            "/workspaces/{}/pullrequests/{}?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
+            "/workspaces/{}/pullrequests/{}?{}&pagelen=50&fields={REVIEWER_FIELDS}",
             urlencoding::encode(workspace),
             urlencoding::encode(my_uuid),
-            urlencoding::encode(&state_query(state))
+            state_params(state)
         ))
         .await?;
     Ok(prs.into_iter().map(|pr| (repo_of(&pr), pr)).collect())
@@ -230,8 +230,8 @@ async fn reviewing_in(
         .paginate(&api::repo_path(
             &slug,
             &format!(
-                "/pullrequests?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
-                urlencoding::encode(&state_query(state))
+                "/pullrequests?{}&pagelen=50&fields={REVIEWER_FIELDS}",
+                state_params(state)
             ),
         ))
         .await?;

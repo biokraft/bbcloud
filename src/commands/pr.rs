@@ -318,9 +318,17 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
 }
 
 fn read_description_from_stdin() -> Result<String> {
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(BbError::Config(
+            "--description-stdin requires piped or redirected input".into(),
+        ));
+    }
     let mut body = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
-    Ok(body.trim_end_matches('\n').to_string())
+    Ok(body
+        .replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_string())
 }
 
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
