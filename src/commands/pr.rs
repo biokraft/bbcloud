@@ -297,7 +297,7 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
         let user = if let Some(user) = users::uuid_user(name) {
             user
         } else if let Some(pool) = pool.as_ref() {
-            pool.resolve(name, &[])?
+            pool.resolve_for_write(name, &[])?
         } else {
             return Err(BbError::Config(format!("could not resolve `{name}`")));
         };

@@ -1,7 +1,7 @@
 use crate::api::models::Repository;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::users::load_user_pool;
+use crate::users::{load_user_pool, Eligibility};
 use crate::workspace::{projects, WorkspaceCtx};
 use serde::Serialize;
 
@@ -112,6 +112,7 @@ struct MemberRow {
     nickname: Option<String>,
     uuid: Option<String>,
     sources: Vec<String>,
+    eligibility: Eligibility,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +131,7 @@ pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
             nickname: entry.user.nickname.clone(),
             uuid: entry.user.uuid.clone(),
             sources: entry.sources.clone(),
+            eligibility: entry.eligibility,
         })
         .collect();
 
@@ -148,7 +150,7 @@ pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
                 ));
             }
             output::print_table(
-                &["NAME", "NICKNAME", "UUID", "SOURCES"],
+                &["NAME", "NICKNAME", "UUID", "SOURCES", "REPOSITORY ACCESS"],
                 pool.entries
                     .iter()
                     .map(|entry| {
@@ -157,6 +159,10 @@ pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
                             entry.user.nickname.clone().unwrap_or_else(|| "-".into()),
                             entry.user.uuid.clone().unwrap_or_else(|| "-".into()),
                             entry.sources.join(", "),
+                            match entry.eligibility {
+                                Eligibility::Explicit => "explicit".to_string(),
+                                Eligibility::Unknown => "unknown".to_string(),
+                            },
                         ]
                     })
                     .collect(),

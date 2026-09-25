@@ -257,8 +257,12 @@ source code. Everything else — the scm, fork policy, main branch name, wiki an
 is left to Bitbucket and the workspace's own settings rather than overridden from here.
 
 `repo list --json` preserves the full repository slug, project identity, web URL, clone URLs, and
-raw update timestamp. `repo members --json` exposes the people available to reviewer resolution
-and names any user pools the token could not read in `partial`.
+raw update timestamp. `repo members --json` lists the people a reviewer name can resolve to and
+names any user pools the token could not read in `partial`. Each row carries `eligibility`:
+`explicit` when the user is in the repository's own permission configuration, `unknown` when the
+row comes only from workspace membership or default-reviewer status. Membership is not proof of
+access to the selected repository, so a name that resolves from a partial pool is refused by any
+command that would then write a reviewer — pass a `{uuid}` instead.
 
 Omit `--project` in a terminal and you get a picker. Outside a terminal it is an error naming the
 flag, never a prompt that will not be answered.

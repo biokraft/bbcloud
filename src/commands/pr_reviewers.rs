@@ -64,7 +64,7 @@ async fn resolve_all(ctx: &Ctx, names: &str, extra: &[User]) -> Result<Vec<User>
         let user = if let Some(user) = uuid_user(name) {
             user
         } else if let Some(pool) = pool.as_ref() {
-            pool.resolve(name, extra)?
+            pool.resolve_for_write(name, extra)?
         } else {
             return Err(BbError::Config(format!("could not resolve `{name}`")));
         };

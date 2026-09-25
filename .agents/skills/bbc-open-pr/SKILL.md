@@ -100,8 +100,15 @@ which pools could not be read; never present those results as complete. A candid
 plausible match goes under **could not be mapped** with the Git name. If a name is ambiguous,
 keep the candidate unselected and let the user choose a UUID; do not guess.
 
+`eligibility` is `explicit` when the person is in this repository's own permission configuration
+and `unknown` when they come only from workspace membership or default-reviewer status. Only an
+`explicit` row is known to be taggable on this repository — present an `unknown` row as a candidate,
+never as a confirmed reviewer.
+
 Every check happens before any write, and so does `--reviewer`'s own resolution: one bad name
-fails before a pull request is created.
+fails before a pull request is created. When `partial` is non-empty, pass the selected reviewers
+as the `uuid` values from this report. `--reviewer` refuses to resolve a **name** against an
+incomplete pool, because the unreadable list may hide the person the user meant.
 
 ## Step 4 — draft the description, then get it approved
 
@@ -171,7 +178,7 @@ attention. "No one" is a valid answer, and so is a name you did not suggest.
 Both gates are behind you, so the pull request can be created complete, in one call:
 
 ```bash
-bb pr create <target> --title "<title>" --description-stdin --reviewer dana,ash --json < <path-to-body-file>
+bb pr create <target> --title "<title>" --description-stdin --reviewer '{dana-uuid},{ash-uuid}' --json < <path-to-body-file>
 ```
 
 `--reviewer` is the whole reviewer set. The repository's default reviewers are not attached at
@@ -181,7 +188,7 @@ there is nothing to clean up afterwards. Report the URL from the JSON.
 When the user picked nobody, pass `--no-default-reviewers` and no `--reviewer`. Omitting both
 attaches whatever static default list the repository has, which is not a pick the user made.
 
-Every name resolves before the create, so one bad name opens nothing — fix the name and run the
+Every reviewer is resolved before the create, so one bad value opens nothing — fix it and run the
 same command again. Yourself is dropped rather than rejected.
 
 If the reviewer set has to change after the fact — the user changes their mind, or a default list

@@ -186,6 +186,44 @@ fn pr_view_context_is_live() {
     );
 }
 
+#[test]
+#[ignore]
+fn repo_members_endpoint_is_live() {
+    let Some(repo) = std::env::var("BB_LIVE_REPO")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        eprintln!("skipping: set BB_LIVE_REPO=<workspace>/<repo> to exercise repo members");
+        return;
+    };
+    if live_env().is_none() {
+        eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
+        return;
+    }
+    let output = bb()
+        .args(["repo", "members", "-R", &repo, "--json"])
+        .output()
+        .expect("run repo members live smoke test");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_not_retired(&stderr, output.status.code());
+    assert!(output.status.success(), "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!("stdout did not parse as JSON: {error}; stdout was {output:?}")
+    });
+    let users = value["users"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing users: {value}"));
+    assert!(value.get("partial").is_some(), "missing partial: {value}");
+    // A workspace member is not proof of access to this repository, and the
+    // report must say so rather than implying every row is taggable.
+    for user in users {
+        assert!(
+            matches!(user["eligibility"].as_str(), Some("explicit" | "unknown")),
+            "missing eligibility: {user}"
+        );
+    }
+}
+
 // The **create** endpoint is deliberately not exercised live: a passing test would leave a real
 // repository behind in a real workspace on every run. Only the read endpoints below are covered.
 
