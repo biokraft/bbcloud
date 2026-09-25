@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0](https://github.com/biokraft/bbcloud/compare/v0.22.0...v0.23.0) - 2026-09-25
+
+### Added
+
+- *(pr comment)* `bb pr comment --pending` saves a review comment as a draft that only you can
+  see, so you can work through a whole pull request and publish your feedback in one go
+  ([#70](https://github.com/biokraft/bbcloud/pull/70)).
+
+  The flag works with `--file`/`--line` and with `--reply-to`. Drafts stay private until you press
+  **Finish review** on the pull request in Bitbucket. bb cannot publish them itself, because
+  Bitbucket's public API has no endpoint for that. If Bitbucket publishes a comment despite the
+  flag, bb warns on stderr instead of reporting a draft that isn't one. `--json` prints
+  `{id,pull_request,url,pending}`, with `pending` read from Bitbucket's response. `bb pr view`
+  shows a `pending` field on every comment and marks drafts `[pending]` in human output.
+
+  The bundled agent skill documents the flag, so after `bb skill install` an agent can batch its
+  review comments. It also tells the agent that a draft's link opens only for its author, so the
+  agent does not share it.
+
+  For library users: `Comment`, `CommentView` and `CommentArgs` each gain a `pending` field. The
+  new public fields are why this release is 0.23.0 rather than a patch.
+
 ## [0.22.0](https://github.com/biokraft/bbcloud/compare/v0.21.0...v0.22.0) - 2026-09-23
 
 ### Added
