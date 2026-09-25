@@ -70,7 +70,7 @@ There is no `approvals` field.
 Find the pull request for the current branch:
 
 ```bash
-bb pr list --json | jq --arg b "$(git branch --show-current)" '.[] | select(.source == $b)'
+bb pr list --current --json
 ```
 
 ## Build status
@@ -280,7 +280,7 @@ thread is supported, but only on the user's request — see
 
 ```bash
 bb pr create main --title "Cache session lookups" --json
-bb pr create main feat/cache --title "..." --description "..." --close-source-branch --json
+bb pr create main feat/cache --title "..." --description-stdin --close-source-branch --json < body.md
 bb pr create main,develop --title "..." --json      # one pull request per target
 bb pr create main --title "..." --reviewer dana,ash --json   # exactly these two reviewers
 ```
@@ -318,7 +318,7 @@ Both filters match a substring, and ignore case.
 
 | Command | Result |
 |---|---|
-| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
+| `bb pr list [target] [--current] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>] [--limit]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when requested |
 | `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
@@ -330,7 +330,7 @@ Both filters match a substring, and ignore case.
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
-| `bb pr create <target> [source] …` | `[{id,target,url}]` |
+| `bb pr create <target> [source] … [--description-stdin]` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
 | `bb pr edit <id> [--title] [--description \| --description-stdin]` | `{id,title,description,url,changed[]}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |

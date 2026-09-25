@@ -1,7 +1,9 @@
 use crate::api::models::{BuildState, BuildStatus, PullRequest, ReviewState, ReviewerState};
+use crate::api::Page;
 use crate::commands::pr::Ctx;
 use crate::commands::pr_build;
-use crate::error::Result;
+use crate::error::{BbError, Result};
+use crate::git;
 use crate::output::{self, Format};
 use crate::users::{current_user, resolve_user};
 use serde::Serialize;
@@ -48,6 +50,7 @@ impl BuildStateArg {
 #[derive(Debug)]
 pub struct ListArgs {
     pub destination: Option<String>,
+    pub current: bool,
     pub state: String,
     pub reviewer: Option<String>,
     pub author: Option<String>,
@@ -56,6 +59,7 @@ pub struct ListArgs {
     /// Show the build column. Costs one extra request per pull request.
     pub build: bool,
     pub build_status: Option<BuildStateArg>,
+    pub limit: usize,
 }
 
 /// Bitbucket's paginated pull-request endpoint returns a reduced object that omits
@@ -126,6 +130,15 @@ fn reviewer_cell(reviewers: &[ReviewerState]) -> String {
 /// Shared with `pr_mine`, which has no `draft` boolean to filter on afterwards
 /// (a cross-workspace pull request result carries the same fields either way) —
 /// `pr mine` rejects `--state draft` before this is ever called with it.
+pub(crate) fn validate_state(state: &str) -> Result<()> {
+    match state.to_ascii_lowercase().as_str() {
+        "open" | "merged" | "declined" | "superseded" | "draft" | "all" => Ok(()),
+        _ => Err(BbError::Config(format!(
+            "invalid pull request state `{state}` — expected OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL"
+        ))),
+    }
+}
+
 pub(crate) fn state_query(state: &str) -> String {
     if state.eq_ignore_ascii_case("all") {
         ALL_STATES.to_string()
@@ -134,6 +147,24 @@ pub(crate) fn state_query(state: &str) -> String {
     } else {
         state.to_uppercase()
     }
+}
+
+fn source_query(branch: &str) -> String {
+    let escaped = branch.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("source.branch.name=\"{escaped}\"")
+}
+
+fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> String {
+    let mut path = format!(
+        "/pullrequests?state={}&pagelen={}&fields={REVIEWER_FIELDS}",
+        urlencoding::encode(&state_query(state)),
+        page_size,
+    );
+    if let Some(branch) = current_branch {
+        path.push_str("&q=");
+        path.push_str(&urlencoding::encode(&source_query(branch)));
+    }
+    path
 }
 
 /// The uuid of whoever the token belongs to, fetched at most once per invocation
@@ -151,6 +182,16 @@ fn my_review_state(pr: &PullRequest, my_uuid: Option<&str>) -> Option<ReviewStat
 }
 
 pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
+    validate_state(&args.state)?;
+    let current_branch = if args.current {
+        Some(git::current_branch()?)
+    } else {
+        None
+    };
+    if args.limit == 0 {
+        return render(ctx, &[], args.build || args.build_status.is_some());
+    }
+
     // Resolve everything the filters need before fetching, so a bad name fails
     // fast instead of after a paginated download.
     let reviewer_uuid = match args.reviewer.as_deref() {
@@ -175,19 +216,33 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
+    let local_filter = args.destination.is_some()
+        || args.reviewer.is_some()
+        || args.author.is_some()
+        || args.review_state.is_some()
+        || args.needs_my_review
+        || want_draft
+        || args.build_status.is_some();
+    let page_size = args.limit.min(100);
+    let path = list_path(&args.state, current_branch.as_deref(), page_size);
 
     let spinner = output::spinner("fetching pull requests");
-    let prs: Vec<PullRequest> = ctx
-        .client
-        .paginate(&ctx.path(&format!(
-            "/pullrequests?state={}&pagelen=50&fields={REVIEWER_FIELDS}",
-            urlencoding::encode(&state_query(&args.state))
-        )))
-        .await?;
+    let prs: Vec<PullRequest> = if local_filter {
+        ctx.client.paginate(&ctx.path(&path)).await?
+    } else {
+        ctx.client
+            .get_json::<Page<PullRequest>>(&ctx.path(&path))
+            .await?
+            .values
+    };
     spinner.finish_and_clear();
 
     let kept: Vec<&PullRequest> = prs
         .iter()
+        .filter(|pr| match current_branch.as_deref() {
+            Some(branch) => pr.source_branch() == branch,
+            None => true,
+        })
         .filter(|pr| match args.destination.as_deref() {
             Some(branch) => pr.destination_branch() == branch,
             None => true,
@@ -218,6 +273,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
                 Some(ReviewState::ChangesRequested) | Some(ReviewState::Pending)
             )
         })
+        .take(args.limit)
         .collect();
 
     let mut rows: Vec<PrRow> = kept.iter().map(|pr| to_row(pr)).collect();

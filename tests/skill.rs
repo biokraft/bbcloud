@@ -991,6 +991,7 @@ fn the_open_pr_skill_carries_the_whole_workflow() {
     let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
     for needle in [
         "bb pr create",
+        "--description-stdin",
         "bb pr reviewers add",
         "git log",
         "--follow",

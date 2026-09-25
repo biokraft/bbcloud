@@ -202,6 +202,9 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
+        /// Only show pull requests from the current branch
+        #[arg(long)]
+        current: bool,
         /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
@@ -223,6 +226,9 @@ enum PrCommand {
         /// Only pull requests whose build rolls up to this state
         #[arg(long, value_enum)]
         build_status: Option<commands::pr_list::BuildStateArg>,
+        /// Maximum number of pull requests to return
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -281,8 +287,11 @@ enum PrCommand {
         source: Option<String>,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "description_stdin")]
         description: Option<String>,
+        /// Read the pull request description from stdin
+        #[arg(long, conflicts_with = "interactive")]
+        description_stdin: bool,
         /// Do not attach the repository's default reviewers
         #[arg(long)]
         no_default_reviewers: bool,
@@ -332,7 +341,7 @@ enum PrCommand {
     Comment {
         id: u64,
         /// Comment text
-        #[arg(long, short = 'b')]
+        #[arg(long, short = 'b', conflicts_with = "body_stdin")]
         body: Option<String>,
         /// Read the comment text from stdin
         #[arg(long)]
@@ -554,6 +563,7 @@ async fn run(cli: Cli) -> Result<()> {
             match command {
                 PrCommand::List {
                     destination,
+                    current,
                     state,
                     reviewer,
                     author,
@@ -561,11 +571,13 @@ async fn run(cli: Cli) -> Result<()> {
                     needs_my_review,
                     build,
                     build_status,
+                    limit,
                 } => {
                     commands::pr_list::list(
                         &ctx,
                         commands::pr_list::ListArgs {
                             destination,
+                            current,
                             state,
                             reviewer,
                             author,
@@ -573,6 +585,7 @@ async fn run(cli: Cli) -> Result<()> {
                             needs_my_review,
                             build,
                             build_status,
+                            limit,
                         },
                     )
                     .await
@@ -610,6 +623,7 @@ async fn run(cli: Cli) -> Result<()> {
                     source,
                     title,
                     description,
+                    description_stdin,
                     no_default_reviewers,
                     reviewer,
                     interactive,
@@ -623,6 +637,7 @@ async fn run(cli: Cli) -> Result<()> {
                             source,
                             title,
                             description,
+                            description_stdin,
                             no_default_reviewers,
                             reviewer,
                             interactive,

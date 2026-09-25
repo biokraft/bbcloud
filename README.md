@@ -224,13 +224,16 @@ cd any-bitbucket-repo && bb pr list
 
 ```bash
 bb pr list                                # open PRs, with state and per-reviewer decisions
+bb pr list --current                     # only PRs from the current branch
 bb pr list --needs-my-review              # only PRs waiting on your review
+bb pr list --limit 20                     # cap the returned rows
 bb pr view 42 --unresolved                # the PR plus comment threads still needing action
 bb pr view 42 --metadata-only --json      # header and reviewer state without comments
 bb pr view 42 --build --conflicts --json  # add build and merge-conflict facts
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
+bb pr create main --description-stdin < body.md --no-default-reviewers
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
@@ -259,6 +262,7 @@ flag, never a prompt that will not be answered.
 approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
 `--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
 successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
+`--current` filters by the current symbolic branch, and `--limit` caps the returned rows.
 
 `bb pr mine` is the one command that is not repository-scoped. There is no Bitbucket api left that
 lists which workspaces you belong to, so the workspace(s) to scan are resolved in this order:

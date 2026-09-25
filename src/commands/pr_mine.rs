@@ -3,7 +3,7 @@ use crate::api::models::{
     BuildState, BuildStatus, PullRequest, Repository, ReviewState, ReviewerState,
 };
 use crate::api::Client;
-use crate::commands::pr_list::{state_query, REVIEWER_FIELDS};
+use crate::commands::pr_list::{state_query, validate_state, REVIEWER_FIELDS};
 use crate::credentials;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
@@ -247,6 +247,7 @@ async fn reviewing_in(
 }
 
 pub async fn run(format: Format, args: MineArgs) -> Result<()> {
+    validate_state(&args.state)?;
     // `draft` is a boolean on an individual pull request, not a state the api
     // will filter on, and there is no per-row `draft` flag here to filter on
     // afterwards the way `pr list --state draft` does — a cross-workspace row

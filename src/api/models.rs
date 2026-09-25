@@ -23,6 +23,11 @@ impl User {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct EffectiveReviewer {
+    pub user: Option<User>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BranchName {
     pub name: Option<String>,
 }

@@ -165,8 +165,8 @@ The TTL is deliberately short…
 - Use only markdown Bitbucket renders: headings, tables, fenced code, links, lists, emphasis.
 - No emoji. No status badges. Nothing that needs a legend.
 
-Pass the body with `--description`. For a long body, write it to a file and pass the file's
-contents; do not pass `-i`, which opens an editor and prompts.
+Pass the body with `--description-stdin` when it came from a file or pipe; do not pass `-i`, which
+opens an editor and prompts.
 
 ## Step 5 — the reviewer gate
 
@@ -184,7 +184,7 @@ attention. "No one" is a valid answer, and so is a name you did not suggest.
 Both gates are behind you, so the pull request can be created complete, in one call:
 
 ```bash
-bb pr create <target> --title "<title>" --description "<body>" --reviewer dana,ash --json
+bb pr create <target> --title "<title>" --description-stdin --reviewer dana,ash --json < <path-to-body-file>
 ```
 
 `--reviewer` is the whole reviewer set. The repository's default reviewers are not attached at

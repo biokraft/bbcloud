@@ -1,4 +1,6 @@
-use crate::api::models::{Commit, DiffStatEntry, PullRequest, ReviewerRef, User};
+use crate::api::models::{
+    Commit, DiffStatEntry, EffectiveReviewer, PullRequest, ReviewerRef, User,
+};
 use crate::api::{repo_path, Client};
 use crate::credentials;
 use crate::error::{BbError, Result};
@@ -242,6 +244,7 @@ pub struct CreateArgs {
     pub source: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub description_stdin: bool,
     pub no_default_reviewers: bool,
     pub reviewer: Option<String>,
     pub interactive: bool,
@@ -252,11 +255,17 @@ pub struct CreateArgs {
 async fn default_reviewers(ctx: &Ctx) -> Result<Vec<ReviewerRef>> {
     let me: User = ctx.client.get_json("/user").await?;
     let my_uuid = me.uuid.unwrap_or_default();
-    let reviewers: Vec<User> = ctx.client.paginate(&ctx.path("/default-reviewers")).await?;
+    let reviewers: Vec<EffectiveReviewer> = ctx
+        .client
+        .paginate(&ctx.path("/effective-default-reviewers?pagelen=100"))
+        .await?;
+    let mut seen = std::collections::HashSet::new();
     Ok(reviewers
         .into_iter()
-        .filter_map(|r| r.uuid)
+        .filter_map(|reviewer| reviewer.user)
+        .filter_map(|user| user.uuid)
         .filter(|uuid| *uuid != my_uuid)
+        .filter(|uuid| seen.insert(uuid.clone()))
         .map(|uuid| ReviewerRef { uuid })
         .collect())
 }
@@ -295,7 +304,23 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
     Ok(uuids.into_iter().map(|uuid| ReviewerRef { uuid }).collect())
 }
 
+fn read_description_from_stdin() -> Result<String> {
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    Ok(body.trim_end_matches('\n').to_string())
+}
+
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
+    if args.description_stdin && args.description.is_some() {
+        return Err(BbError::Config(
+            "--description and --description-stdin cannot be used together".into(),
+        ));
+    }
+    if args.description_stdin && args.interactive {
+        return Err(BbError::Config(
+            "--description-stdin cannot be combined with --interactive".into(),
+        ));
+    }
     let source = match args.source {
         Some(branch) => branch,
         None => git::current_branch()?,
@@ -319,7 +344,11 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
     }
 
     let mut title = args.title;
-    let mut description = args.description;
+    let mut description = if args.description_stdin {
+        Some(read_description_from_stdin()?)
+    } else {
+        args.description
+    };
     if args.interactive {
         if title.is_none() {
             let entered = inquire::Text::new("title:")

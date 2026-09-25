@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)] // test code is exempt from the unwrap/expect ban
 
 use assert_cmd::Command;
+use std::process::Command as GitCommand;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -75,6 +76,84 @@ async fn list_requests_the_reviewer_fields() {
 /// A bare `bb pr list`, with no `--state` flag at all, must default to asking
 /// bitbucket for OPEN only — otherwise merged/declined noise leaks into the
 /// default view.
+#[tokio::test]
+async fn list_current_filters_by_the_current_branch() {
+    let project = tempfile::tempdir().unwrap();
+    GitCommand::new("git")
+        .args(["init"])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+    GitCommand::new("git")
+        .args(["symbolic-ref", "HEAD", "refs/heads/feature/current"])
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("q", "source.branch.name=\"feature/current\""))
+        .and(query_param("pagelen", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [
+                {
+                    "id": 1,
+                    "title": "current",
+                    "source": { "branch": { "name": "feature/current" } }
+                },
+                {
+                    "id": 2,
+                    "title": "other",
+                    "source": { "branch": { "name": "feature/other" } }
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .current_dir(project.path())
+        .args(["pr", "list", "--current", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 1);
+    assert_eq!(value[0]["id"], 1);
+}
+
+#[tokio::test]
+async fn list_limit_caps_rows_without_local_filters() {
+    let server = MockServer::start().await;
+    mount_list(
+        &server,
+        serde_json::json!([
+            { "id": 1, "source": { "branch": { "name": "feature/a" } } },
+            { "id": 2, "source": { "branch": { "name": "feature/b" } } }
+        ]),
+    )
+    .await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--limit", "1", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn list_rejects_an_unknown_state_before_http() {
+    let server = MockServer::start().await;
+    let out = bb(&server)
+        .args(["pr", "list", "--state", "opne", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("invalid pull request state"));
+}
+
 #[tokio::test]
 async fn list_with_no_state_flag_requests_open() {
     let server = MockServer::start().await;
