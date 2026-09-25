@@ -57,19 +57,34 @@ that.
 ## Step 2 — find the people who know these files
 
 The default reviewers are a static list. The people who wrote the code you changed are in the
-history. Ask `bb` for bounded, evidence-backed suggestions before proposing anyone:
+history. Ask `bb` for bounded, evidence-backed suggestions before proposing anyone.
+
+**This reads private data.** `reviewers suggest` returns private file paths, colleague names, dates,
+and account ids from commit history. Before running it, tell the user exactly that — the categories
+above — and get a yes. Without that answer, do not run it and do not guess. `--json` is still
+required.
 
 ```bash
-bb pr reviewers suggest <target> [source] --json
+bb pr reviewers suggest <target> [source] --acknowledge-private-data --json
 ```
 
 Use the target branch from Step 1, not a hardcoded `main`. The command reads the changed-file
-diffstat, checks recent path history, and returns commit counts, matching files, and dates. It
-also reports skipped files, per-path errors, and `history_complete`; never hide those facts.
+diffstat, then reads two distinct populations: `target_commits`, who maintains the changed files on
+the target branch, and `source_commits`, who else worked on this branch and is not already merged.
+Present them as what they are — "maintains this file" and "worked on this branch" are different
+claims, and the report keeps them apart. It also reports skipped files, per-path errors, and
+`history_complete`; never hide those facts.
 
-The command excludes the pull-request author and current reviewers. It does not resolve arbitrary
-Git names by email and never writes reviewer tags. Keep its `uuid` values when the user selects
-people.
+`eligibility` is separate from all of it, because owning a file is not access to the repository.
+`true` means the person is in this repository's permission configuration, `false` means the user
+pool was read in full and they are not in it, `unknown` means no complete pool was available.
+Never present an `unknown` or `false` row as a reviewer who can be tagged; present it as a name and
+let the user decide.
+
+The command excludes the pull-request author and current reviewers, and in prospective mode the
+authenticated user, since Bitbucket rejects a pull request's author as a reviewer. It does not
+resolve arbitrary Git names by email and never writes reviewer tags. Keep its `uuid` values when
+the user selects people.
 
 ## Step 3 — resolve those names against Bitbucket
 

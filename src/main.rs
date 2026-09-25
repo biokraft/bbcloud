@@ -436,6 +436,10 @@ enum ReviewersCommand {
         /// Maximum number of changed files to scan
         #[arg(long, default_value_t = 25)]
         file_limit: usize,
+        /// Confirm the file paths, colleague names, dates and account ids in
+        /// commit history may be read and shown to the user
+        #[arg(long)]
+        acknowledge_private_data: bool,
     },
 }
 
@@ -685,6 +689,7 @@ async fn run(cli: Cli) -> Result<()> {
                         since,
                         limit,
                         file_limit,
+                        acknowledge_private_data,
                     })) => {
                         commands::reviewer_suggestions::run(
                             &ctx,
@@ -695,6 +700,7 @@ async fn run(cli: Cli) -> Result<()> {
                                 since,
                                 limit,
                                 file_limit,
+                                acknowledge_private_data,
                             },
                         )
                         .await

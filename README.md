@@ -232,8 +232,8 @@ bb pr view 42 --metadata-only --json      # header and reviewer state without co
 bb pr view 42 --build --conflicts --json  # add build and merge-conflict facts
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
-bb pr reviewers suggest --pr 42 --json # evidence-backed suggestions; read-only
-bb pr reviewers suggest main --json    # prospective suggestions for a target
+bb pr reviewers suggest --pr 42 --acknowledge-private-data --json # evidence-backed suggestions; read-only
+bb pr reviewers suggest main --acknowledge-private-data --json    # prospective suggestions for a target
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr create main --description-stdin < body.md --no-default-reviewers
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
@@ -302,9 +302,26 @@ comment and task counts, and the original comment timestamps. Use `--metadata-on
 are unnecessary, `--build` to add statuses, and `--conflicts` to add reported merge conflicts.
 Optional sections are omitted unless requested; `--json` stdout remains one JSON value.
 
-`bb pr reviewers suggest` is read-only. It ranks recent file owners by commit count and recency,
-excludes the pull-request author and current reviewers, and reports the files and dates behind
-every suggestion. It never tags anyone; the user still chooses the final set.
+`bb pr reviewers suggest` is read-only, and reads two distinct populations rather than one blended
+count. **Target history** is who maintains the files the change touches; **source history** is who
+worked on this branch and is not already merged, and is only subtracted from the target when both
+live in the same repository — a fork's branch does not contain the target's commits, so subtracting
+there would read a population that does not exist. The report names the source and target
+repositories and the exact commit each was read at, so the evidence is reproducible and a branch
+pushed to mid-command cannot change what the report claims. A renamed file is read under both its
+old and new path.
+
+`--acknowledge-private-data` is required, because this reads private file paths, colleague names,
+dates, and account ids out of commit history and into whatever is on the other end of the model.
+Say what those categories are before running it.
+
+Each suggestion carries `eligibility`: `true` when the person is in this repository's own permission
+configuration, `false` when the user pool was read in full and they are not in it, and `unknown`
+otherwise. Ownership of a file is not access to the repository, and the report never implies it is.
+The author and current reviewers are excluded, and so is the authenticated user in prospective mode —
+Bitbucket rejects a pull request's author as a reviewer. A rate limit, a server error, or a network
+failure fails the command rather than returning an empty list, because an empty report that exits `0`
+is indistinguishable from a retired endpoint. It never tags anyone; the user still chooses the set.
 
 ```bash
 bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved")) | "\(.id)\t\(.title)"'

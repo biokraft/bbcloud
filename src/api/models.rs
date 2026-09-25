@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct User {
     pub uuid: Option<String>,
     pub account_id: Option<String>,
@@ -39,9 +39,18 @@ pub struct RepositoryIdentity {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CommitRef {
+    pub hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Endpoint {
     pub branch: Option<BranchName>,
     pub repository: Option<RepositoryIdentity>,
+    /// The tip this endpoint was pinned to when the pull request was read.
+    /// Evidence gathered against a moving branch name is not reproducible, and
+    /// a branch can advance mid-command; this is what pins it.
+    pub commit: Option<CommitRef>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -545,12 +554,26 @@ pub struct PathEntry {
 }
 
 impl DiffStatEntry {
+    /// The path as it exists after the change. This is the one most consumers
+    /// want; for a rename, see `old_file_path`.
     pub fn path(&self) -> &str {
         self.new_file
             .as_ref()
             .and_then(|p| p.path.as_deref())
             .or_else(|| self.old_file.as_ref().and_then(|p| p.path.as_deref()))
             .unwrap_or("-")
+    }
+
+    /// The path the file had before the change. A rename moves a file, and the
+    /// person who maintained the old path is exactly who knows the moved code.
+    pub fn new_file_path(&self) -> Option<&str> {
+        self.new_file.as_ref().and_then(|p| p.path.as_deref())
+    }
+
+    /// The pre-change path, when it differs from the new one.
+    pub fn old_file_path(&self) -> Option<&str> {
+        let old = self.old_file.as_ref().and_then(|p| p.path.as_deref())?;
+        (old != self.path()).then_some(old)
     }
 }
 
