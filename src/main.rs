@@ -337,6 +337,9 @@ enum PrCommand {
         /// Reply to an existing comment id
         #[arg(long)]
         reply_to: Option<u64>,
+        /// Save as a pending comment only you can see until you finish your review in Bitbucket
+        #[arg(long)]
+        pending: bool,
         /// Open the comment in a browser
         #[arg(long, short = 'w')]
         web: bool,
@@ -647,6 +650,7 @@ async fn run(cli: Cli) -> Result<()> {
                     file,
                     line,
                     reply_to,
+                    pending,
                     web,
                 } => {
                     commands::pr_comments::comment(
@@ -658,6 +662,7 @@ async fn run(cli: Cli) -> Result<()> {
                             file,
                             line,
                             reply_to,
+                            pending,
                             web,
                         },
                     )

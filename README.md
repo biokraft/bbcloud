@@ -233,6 +233,7 @@ bb pr create main --reviewer dana,ash     # tag exactly these two, no default re
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
+bb pr comment 42 --pending -b "nit"       # draft until you press Finish review
 bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb pr request-changes 42 --yes            # confirms first unless --yes is given
 bb pr mine --role reviewer --build        # your PRs across every repo you can see

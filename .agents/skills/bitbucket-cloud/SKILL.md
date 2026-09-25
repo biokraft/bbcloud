@@ -49,9 +49,10 @@ bb pr mine --role reviewer --build --json  # only ones waiting on me, with build
 ```
 
 `bb pr view` returns `{ pull_request, general[], inline[] }`. Each comment has `id`, `author`,
-`timestamp`, `body`, `file`, `line`, `resolved` and `parent`. Use the comment `id` to answer in the
-correct thread. `parent` is `null` on the first comment of a thread, and holds that comment's id on
-a reply. `resolved` tells you whether the thread is closed.
+`timestamp`, `body`, `file`, `line`, `resolved`, `pending` and `parent`. Use the comment `id` to
+answer in the correct thread. `parent` is `null` on the first comment of a thread, and holds that
+comment's id on a reply. `resolved` tells you whether the thread is closed. `pending` tells you
+whether the comment is still a draft, visible only to its author.
 
 `bb pr list` returns `state` (raw API value, e.g. `"OPEN"`), `draft` (bool), and `reviewers`, an
 array of `{name, uuid, state}` where `state` is `approved`, `changes_requested` or `pending`.
@@ -131,6 +132,15 @@ printf 'Refactored as suggested.\n\nThe parser is now its own module.\n' \
 
 `--line` needs `--file`. `--reply-to` accepts neither, because a reply inherits the location of its
 parent.
+
+To batch review comments, post each with `--pending`. Only the user sees them until they press
+"Finish review" on the pull request in Bitbucket. `bb` cannot publish them. The returned `url`
+works only for the user while the comment is pending, so do not share it. If `bb` warns that a
+comment was published immediately, tell the user.
+
+```bash
+bb pr comment 42 -f src/auth.rs -l 88 --body "This drops the error." --pending --json
+```
 
 ## Report threads, do not close them
 
@@ -306,7 +316,7 @@ Both filters match a substring, and ignore case.
 | `bb pr commits <id>` | `[{hash,summary}]` |
 | `bb pr build <id>` | `{build_state,statuses[{key,name,state,url}]}` |
 | `bb pr mine [--role author\|reviewer\|all] [--state] [--workspace] [--repo-limit] [--build]` | `{pull_requests[{repo,id,title,url,state,draft,author,my_role,my_review_state,reviewers[],updated_on,comment_count}],partial[]}` |
-| `bb pr comment <id> …` | `{id,pull_request,url}` |
+| `bb pr comment <id> …` | `{id,pull_request,url,pending}` |
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |

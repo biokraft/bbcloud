@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)] // test code is exempt from the unwrap/expect ban
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -306,6 +307,129 @@ async fn resolving_an_unknown_comment_exits_three() {
         .args(["pr", "resolve", "7", "404", "--yes"])
         .assert()
         .code(3);
+}
+
+#[tokio::test]
+async fn posts_a_pending_comment() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+        .and(body_json(serde_json::json!({
+            "content": { "raw": "nit: rename" },
+            "pending": true
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": 905,
+            "content": { "raw": "nit: rename" },
+            "user": { "display_name": "Me" },
+            "created_on": "2026-08-04T10:00:00+00:00",
+            "pending": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "comment", "7", "--body", "nit: rename", "--pending"])
+        .assert()
+        .success()
+        .stdout(contains("pending comment 905"))
+        .stderr(contains("published").not());
+}
+
+#[tokio::test]
+async fn pending_flag_combines_with_inline_location() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+        .and(body_json(serde_json::json!({
+            "content": { "raw": "nit: rename" },
+            "inline": { "path": "src/main.rs", "to": 42 },
+            "pending": true
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(created(906)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "comment",
+            "7",
+            "--body",
+            "nit: rename",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--pending",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn pending_flag_combines_with_reply_to() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+        .and(body_json(serde_json::json!({
+            "content": { "raw": "agreed" },
+            "parent": { "id": 600 },
+            "pending": true
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(created(908)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "comment",
+            "7",
+            "--body",
+            "agreed",
+            "--reply-to",
+            "600",
+            "--pending",
+        ])
+        .assert()
+        .success();
+}
+
+/// Bitbucket does not always honour `pending: true` — when it doesn't, bb warns
+/// on stderr instead of claiming success silently, and `--json` stdout stays pure.
+#[tokio::test]
+async fn warns_when_bitbucket_publishes_a_pending_comment_immediately() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(created(907)))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args([
+            "pr",
+            "comment",
+            "7",
+            "--body",
+            "looks good",
+            "--pending",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("did not keep it pending"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["pending"], false);
 }
 
 #[tokio::test]
