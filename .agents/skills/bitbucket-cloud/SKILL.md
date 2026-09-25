@@ -258,6 +258,8 @@ the new text.
 
 ```bash
 bb pr reviewers 42 --json                     # list, same as `list`
+bb pr reviewers suggest --pr 42 --json       # recent file-owner evidence; read-only
+bb pr reviewers suggest main --json           # prospective suggestions for a target
 bb pr reviewers add 42 dana,ash --json  # tag reviewers, comma-separated
 bb pr reviewers remove 42 ash --json       # untag a reviewer
 bb repo members --json                      # names, uuids, and resolver-pool sources
@@ -268,6 +270,10 @@ repository's user list plus its effective default reviewers. An exact match wins
 substring match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when
 ambiguous. Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
 `bb repo members --json` exposes the same resolver pool and reports any partial sources.
+`bb pr reviewers suggest` is read-only. It returns bounded file-history evidence, excludes the
+pull-request author and current reviewers, and never calls an add or create endpoint. Show the
+`commit_count`, `files`, and `last_commit_on` evidence to the user before asking which people to
+select.
 
 Every name is resolved before any write, so one bad name in `add 42 a,b` writes nothing. Adding
 someone already tagged makes no write and exits 0. Removing someone not tagged is an error, exit
@@ -331,6 +337,7 @@ Both filters match a substring, and ignore case.
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
+| `bb pr reviewers suggest --pr <id>` / `suggest <target> [source]` | `{pull_request\|prospective,since,files_scanned,files_skipped,history_complete,errors[],suggestions[]}` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] … [--description-stdin]` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |

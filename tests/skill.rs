@@ -443,6 +443,7 @@ fn main_skill_documents_selective_pr_context() {
         "--conflicts",
         "unresolved_threads",
         "created_on",
+        "bb pr reviewers suggest",
     ] {
         assert!(text.contains(needle), "skill omits `{needle}`");
     }
@@ -993,8 +994,7 @@ fn the_open_pr_skill_carries_the_whole_workflow() {
         "bb pr create",
         "--description-stdin",
         "bb pr reviewers add",
-        "git log",
-        "--follow",
+        "bb pr reviewers suggest",
         "## Why",
         "## What changed",
     ] {

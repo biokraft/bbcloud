@@ -32,9 +32,16 @@ pub struct BranchName {
     pub name: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepositoryIdentity {
+    pub full_name: Option<String>,
+    pub uuid: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Endpoint {
     pub branch: Option<BranchName>,
+    pub repository: Option<RepositoryIdentity>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -519,6 +526,8 @@ pub struct CommitSummary {
 pub struct Commit {
     pub hash: Option<String>,
     pub summary: Option<CommitSummary>,
+    pub author: Option<CommitAuthor>,
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

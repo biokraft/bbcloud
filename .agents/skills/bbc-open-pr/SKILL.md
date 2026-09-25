@@ -49,39 +49,25 @@ that.
 ## Step 2 — find the people who know these files
 
 The default reviewers are a static list. The people who wrote the code you changed are in the
-history. Get the changed files first, then their history:
+history. Ask `bb` for bounded, evidence-backed suggestions before proposing anyone:
 
 ```bash
-git diff --name-only "$(git merge-base HEAD origin/<target>)"..HEAD
-git log --follow --format='%an|%ae|%ad' --date=short -- <file>
+bb pr reviewers suggest <target> [source] --json
 ```
 
-Use the target branch from Step 1 in place of `<target>` above — not `main`. For a branch cut
-from a release or integration branch, diffing against `main` pulls in that branch's files too,
-and ranks people who never touched this change.
+Use the target branch from Step 1, not a hardcoded `main`. The command reads the changed-file
+diffstat, checks recent path history, and returns commit counts, matching files, and dates. It
+also reports skipped files, per-path errors, and `history_complete`; never hide those facts.
 
-`--follow` matters: a renamed file still reports the people who worked on it under its old
-name, and those are exactly the people you want.
-
-The `%ae` email is for telling apart two commits from the same person written under different
-name spellings — it is never something to pass to `bb pr reviewers add`, which rejects an
-email outright.
-
-Rank candidates by **commits in the last twelve months**, not all-time count. Someone who
-wrote one line in 2019 is not the reviewer; whoever has been maintaining the file is. Then:
-
-- **Drop yourself.** Bitbucket rejects the pull request's author as a reviewer with a 400, so
-  suggesting yourself only produces a failed write.
-- **Drop candidates whose most recent commit to any changed file is older than about a year.**
-  That is archaeology, not review capacity.
-- Note, per candidate, which files earned them the suggestion and how many recent commits they
-  have. The user needs that to choose.
+The command excludes the pull-request author and current reviewers. It does not resolve arbitrary
+Git names by email and never writes reviewer tags. Keep its `uuid` values when the user selects
+people.
 
 ## Step 3 — resolve those names against Bitbucket
 
-Git records an author as a name and an email. `bb repo members --json` exposes the same
-workspace, repository-permission, and effective-default-reviewer pools used by reviewer
-resolution. Use it instead of reconstructing a pool from historical pull requests:
+Suggestions already carry exact UUIDs. If the user names someone else, use
+`bb repo members --json` to resolve that name against the same workspace, repository-permission,
+and effective-default-reviewer pools used by reviewer resolution:
 
 ```bash
 bb repo members -R <workspace>/<repo> --json
@@ -151,9 +137,9 @@ opens an editor and prompts.
 
 If the user named reviewers when they invoked this skill, use exactly those and ask nothing.
 
-Otherwise show your resolved suggestions — each with its recent-commit count and the files
-behind it — and ask which to add. Present it as a pick, not a yes/no on the whole list:
-the user often wants two of your five.
+Otherwise show your resolved suggestions — each with its recent-commit count, files, and date —
+and ask which to add. Prefer the returned UUIDs in the eventual `--reviewer` list. Present it as
+a pick, not a yes/no on the whole list: the user often wants two of your five.
 
 **Never tag anyone the user did not pick.** A review request is a claim on someone's
 attention. "No one" is a valid answer, and so is a name you did not suggest.

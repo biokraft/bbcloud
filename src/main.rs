@@ -331,7 +331,7 @@ enum PrCommand {
         #[arg(long)]
         conflicts: bool,
     },
-    /// Show, add or remove the reviewers tagged on a pull request
+    /// List, suggest, add or remove reviewers
     #[command(args_conflicts_with_subcommands = true)]
     Reviewers {
         /// Pull request id (omit when using add/remove)
@@ -417,6 +417,25 @@ enum ReviewersCommand {
         id: u64,
         /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
         names: String,
+    },
+    /// Suggest reviewers from recent file ownership; never writes reviewers
+    Suggest {
+        /// Existing pull request id
+        #[arg(long, conflicts_with_all = ["target", "source"])]
+        pr: Option<u64>,
+        /// Target branch for a prospective pull request
+        target: Option<String>,
+        /// Source branch for a prospective pull request
+        source: Option<String>,
+        /// History window, for example 30d, 12w, 6mo or 1y
+        #[arg(long, default_value = "12mo")]
+        since: String,
+        /// Maximum number of suggestions
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Maximum number of changed files to scan
+        #[arg(long, default_value_t = 25)]
+        file_limit: usize,
     },
 }
 
@@ -659,9 +678,36 @@ async fn run(cli: Cli) -> Result<()> {
                     (_, Some(ReviewersCommand::Remove { id, names })) => {
                         commands::pr_reviewers::remove(&ctx, id, &names).await
                     }
+                    (None, Some(ReviewersCommand::Suggest {
+                        pr,
+                        target,
+                        source,
+                        since,
+                        limit,
+                        file_limit,
+                    })) => {
+                        commands::reviewer_suggestions::run(
+                            &ctx,
+                            commands::reviewer_suggestions::SuggestArgs {
+                                pr,
+                                target,
+                                source,
+                                since,
+                                limit,
+                                file_limit,
+                            },
+                        )
+                        .await
+                    }
+                    (Some(_), Some(ReviewersCommand::Suggest { .. })) => Err(
+                        bb_cli::error::BbError::Config(
+                            "pass a pull request id to `reviewers suggest` with --pr, not before the subcommand"
+                                .into(),
+                        ),
+                    ),
                     (Some(id), None) => commands::pr_reviewers::list(&ctx, id).await,
                     (None, None) => Err(bb_cli::error::BbError::Config(
-                        "pass a pull request id, or `add`/`remove`".into(),
+                        "pass a pull request id, or use `add`/`remove`/`suggest`".into(),
                     )),
                 },
                 PrCommand::View {

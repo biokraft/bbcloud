@@ -232,6 +232,8 @@ bb pr view 42 --metadata-only --json      # header and reviewer state without co
 bb pr view 42 --build --conflicts --json  # add build and merge-conflict facts
 bb pr build 42                            # one PR's checks: key, name, state, url
 bb pr reviewers add 42 dana            # tag a reviewer; comma-separate for several
+bb pr reviewers suggest --pr 42 --json # evidence-backed suggestions; read-only
+bb pr reviewers suggest main --json    # prospective suggestions for a target
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr create main --description-stdin < body.md --no-default-reviewers
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
@@ -295,6 +297,10 @@ tables, whose layout is not a contract. Scripts and agents should default to it.
 comment and task counts, and the original comment timestamps. Use `--metadata-only` when comments
 are unnecessary, `--build` to add statuses, and `--conflicts` to add reported merge conflicts.
 Optional sections are omitted unless requested; `--json` stdout remains one JSON value.
+
+`bb pr reviewers suggest` is read-only. It ranks recent file owners by commit count and recency,
+excludes the pull-request author and current reviewers, and reports the files and dates behind
+every suggestion. It never tags anyone; the user still chooses the final set.
 
 ```bash
 bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved")) | "\(.id)\t\(.title)"'
