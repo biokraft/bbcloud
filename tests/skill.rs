@@ -1043,6 +1043,7 @@ fn the_open_pr_skill_keeps_both_human_gates() {
 #[test]
 fn the_open_pr_skill_resolves_names_before_suggesting() {
     let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
+    assert!(text.contains("bb repo members"));
     assert!(text.contains("bb pr reviewers"));
     assert!(
         text.to_lowercase().contains("could not be mapped"),

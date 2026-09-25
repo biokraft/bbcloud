@@ -284,10 +284,23 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
         return Err(BbError::Config("no reviewer name given".into()));
     }
 
-    // Names first, so a typo fails before anything else is asked of the api.
+    let pool = if requested
+        .iter()
+        .any(|name| users::uuid_user(name).is_none())
+    {
+        Some(users::load_user_pool(&ctx.client, &ctx.slug).await?)
+    } else {
+        None
+    };
     let mut uuids: Vec<String> = Vec::new();
     for name in requested {
-        let user = users::resolve_user(&ctx.client, &ctx.slug, name, &[]).await?;
+        let user = if let Some(user) = users::uuid_user(name) {
+            user
+        } else if let Some(pool) = pool.as_ref() {
+            pool.resolve(name, &[])?
+        } else {
+            return Err(BbError::Config(format!("could not resolve `{name}`")));
+        };
         let uuid = user
             .uuid
             .clone()

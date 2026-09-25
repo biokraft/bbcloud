@@ -177,6 +177,8 @@ enum RepoCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
+    /// List the people available for reviewer resolution
+    Members,
     /// List the repositories in a workspace
     #[command(alias = "l", alias = "ls")]
     List {
@@ -738,6 +740,10 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Repo { command } => match command {
+            RepoCommand::Members => {
+                let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
+                commands::repo::members(&ctx).await
+            }
             RepoCommand::Create {
                 name,
                 project,

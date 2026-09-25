@@ -326,12 +326,14 @@ async fn reviewer_flag_replaces_the_default_reviewers() {
         .await;
     // Reached by the name resolver's pool, never as a source of reviewers.
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "values": [
-                { "uuid": "{me}", "display_name": "Me" },
-                { "uuid": "{dana}", "display_name": "Dana Scully" },
-                { "uuid": "{unwanted}", "display_name": "Unwanted Person" }
+                { "user": { "uuid": "{me}", "display_name": "Me" } },
+                { "user": { "uuid": "{dana}", "display_name": "Dana Scully" } },
+                { "user": { "uuid": "{unwanted}", "display_name": "Unwanted Person" } }
             ]
         })))
         .mount(&server)
@@ -424,7 +426,9 @@ async fn an_unresolvable_reviewer_opens_no_pull_request() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(&server)
         .await;

@@ -79,42 +79,21 @@ wrote one line in 2019 is not the reviewer; whoever has been maintaining the fil
 
 ## Step 3 — resolve those names against Bitbucket
 
-Git records an author as a name and an email. `bb pr reviewers add` resolves a
-case-insensitive substring of a Bitbucket display name or nickname, matched against workspace
-members, the repository's permission-config users, and its default reviewers — a pool no `bb`
-command lists. `bb pr create --reviewer` resolves names from the same pool, and resolves them
-before the create, so an unresolvable name fails with exit 1 having opened nothing.
-
-No command can tell you the full resolvable pool, so resolvability cannot be fully verified
-before the write. The best available read-only approximation is the names Bitbucket already
-shows on this repository's pull requests — anyone who has authored or reviewed recently is most
-plausible as a reviewer for a new one:
+Git records an author as a name and an email. `bb repo members --json` exposes the same
+workspace, repository-permission, and effective-default-reviewer pools used by reviewer
+resolution. Use it instead of reconstructing a pool from historical pull requests:
 
 ```bash
-bb pr list --state ALL --json      # each row's author and reviewers[]
+bb repo members -R <workspace>/<repo> --json
 ```
 
-Build a name pool from every `author` and every entry in `reviewers[]` across that list. Match
-each candidate's git name against the pool the same way `bb pr reviewers add` does: a
-case-insensitive substring.
+Use each returned `name`, `nickname`, and `uuid` to match the Git candidates. `partial` tells you
+which pools could not be read; never present those results as complete. A candidate with no
+plausible match goes under **could not be mapped** with the Git name. If a name is ambiguous,
+keep the candidate unselected and let the user choose a UUID; do not guess.
 
-- A candidate that matches the pool is a reasonably safe suggestion.
-- A candidate that does not match the pool is not necessarily unresolvable — the pool is only an
-  approximation — but suggest them labeled explicitly as **unverified**, so the user knows the
-  create can still fail with exit 1 — at which point nothing has been opened, so you fix the
-  name and re-run the same command.
-- A candidate you cannot match at all — no plausible name in the pool, nothing close — goes
-  under the heading `could not be mapped`, with their git name. Never silently drop them: the
-  most likely reviewer is often behind a name-format mismatch, and the user can map them by hand
-  in one word.
-
-If a name is ambiguous, pass the account's `{uuid}` in braces to skip name matching entirely.
-The only source for a uuid is `bb pr reviewers <pr-id> --json` on some pull request the person
-is already tagged on — so this only works for people who have reviewed before. When no uuid is
-available, ask the user for the person's exact Bitbucket display name instead of guessing.
-
-Every one of these checks happens before any write, and so does `--reviewer`'s own resolution:
-one bad name fails the create, and nothing has been created at that point either.
+Every check happens before any write, and so does `--reviewer`'s own resolution: one bad name
+fails before a pull request is created.
 
 ## Step 4 — draft the description, then get it approved
 

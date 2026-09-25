@@ -5,7 +5,7 @@ use crate::commands::pr_build;
 use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
-use crate::users::{current_user, resolve_user};
+use crate::users::{current_user, load_user_pool, uuid_user, UserPool};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -169,6 +169,22 @@ fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> Str
 
 /// The uuid of whoever the token belongs to, fetched at most once per invocation
 /// and only when a filter actually needs it.
+fn needs_user_pool(query: Option<&str>) -> bool {
+    query.is_some_and(|value| value != "@me" && !(value.starts_with('{') && value.ends_with('}')))
+}
+
+fn resolve_uuid(pool: Option<&UserPool>, query: &str) -> Result<Option<String>> {
+    if let Some(user) = uuid_user(query) {
+        return Ok(user.uuid);
+    }
+    match pool {
+        Some(pool) => Ok(pool.resolve(query, &[])?.uuid),
+        None => Err(BbError::Config(
+            "user name could not be resolved without a user pool".into(),
+        )),
+    }
+}
+
 async fn my_uuid(ctx: &Ctx) -> Result<Option<String>> {
     Ok(current_user(&ctx.client).await?.uuid)
 }
@@ -193,9 +209,16 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     }
 
     // Resolve everything the filters need before fetching, so a bad name fails
-    // fast instead of after a paginated download.
+    // fast instead of after a paginated download. Both name filters share one
+    // pool when the command needs both.
+    let pool: Option<UserPool> =
+        if needs_user_pool(args.reviewer.as_deref()) || needs_user_pool(args.author.as_deref()) {
+            Some(load_user_pool(&ctx.client, &ctx.slug).await?)
+        } else {
+            None
+        };
     let reviewer_uuid = match args.reviewer.as_deref() {
-        Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
+        Some(name) => resolve_uuid(pool.as_ref(), name)?,
         None => None,
     };
 
@@ -211,7 +234,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
 
     let author_uuid = match args.author.as_deref() {
         Some("@me") => me.clone(),
-        Some(name) => resolve_user(&ctx.client, &ctx.slug, name, &[]).await?.uuid,
+        Some(name) => resolve_uuid(pool.as_ref(), name)?,
         None => None,
     };
 

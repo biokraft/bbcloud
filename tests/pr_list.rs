@@ -306,7 +306,9 @@ async fn mount_members(server: &MockServer) {
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
         .mount(server)
         .await;

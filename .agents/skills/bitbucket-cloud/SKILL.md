@@ -260,12 +260,14 @@ the new text.
 bb pr reviewers 42 --json                     # list, same as `list`
 bb pr reviewers add 42 dana,ash --json  # tag reviewers, comma-separated
 bb pr reviewers remove 42 ash --json       # untag a reviewer
+bb repo members --json                      # names, uuids, and resolver-pool sources
 ```
 
 Names match case-insensitively as a substring of display name or nickname, against the
-repository's user list plus its default reviewers. An exact match wins over a longer substring
-match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when ambiguous.
-Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
+repository's user list plus its effective default reviewers. An exact match wins over a longer
+substring match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when
+ambiguous. Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
+`bb repo members --json` exposes the same resolver pool and reports any partial sources.
 
 Every name is resolved before any write, so one bad name in `add 42 a,b` writes nothing. Adding
 someone already tagged makes no write and exits 0. Removing someone not tagged is an error, exit
@@ -337,13 +339,14 @@ Both filters match a substring, and ignore case.
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
 | `bb project list` | the projects in a workspace |
-| `bb repo list [--project KEY]` | the repositories in a workspace or project |
+| `bb repo list [--project KEY]` | repositories with identity, URLs, and timestamps |
+| `bb repo members` | `{users,partial}` for the reviewer resolver pools |
 | `bb repo create <name> --project KEY` | create a repository, private by default |
 | `bb auth status` | `{email,token,account}`, token redacted |
 | `bb browse --print [--pr <id>\|--branches]` | `{url}` |
 
-`timestamp` and `updated` hold a relative time, for example `3 days ago`. For an exact time, read
-the commit or the diff.
+Human-facing `timestamp` and `updated` fields may hold a relative time, for example `3 days ago`.
+Use raw `created_on` and `updated_on` fields for exact machine-readable times.
 
 ## When a command fails
 

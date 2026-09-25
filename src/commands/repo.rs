@@ -1,15 +1,44 @@
 use crate::api::models::Repository;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
+use crate::users::load_user_pool;
 use crate::workspace::{projects, WorkspaceCtx};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
+struct CloneUrls {
+    ssh: Option<String>,
+    https: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct RepoRow {
     name: String,
+    repo: Option<String>,
     project: String,
+    project_name: Option<String>,
     access: String,
     updated: String,
+    updated_on: Option<String>,
+    url: Option<String>,
+    clone_urls: CloneUrls,
+}
+
+fn clone_urls(repo: &Repository) -> CloneUrls {
+    let links = repo.links.as_ref().and_then(|links| links.clone.as_ref());
+    let find = |name: &str| {
+        links
+            .and_then(|clones| {
+                clones
+                    .iter()
+                    .find(|link| link.name.as_deref() == Some(name))
+            })
+            .and_then(|link| link.href.clone())
+    };
+    CloneUrls {
+        ssh: find("ssh"),
+        https: find("https"),
+    }
 }
 
 pub async fn list(
@@ -43,13 +72,18 @@ pub async fn list(
         .take(limit)
         .map(|r| RepoRow {
             name: r.display_name().to_string(),
+            repo: r.full_name.clone(),
             project: r.project_key().to_string(),
+            project_name: r.project.as_ref().and_then(|project| project.name.clone()),
             access: r.access().to_string(),
             updated: r
                 .updated_on
                 .as_deref()
                 .map(output::relative_time)
                 .unwrap_or_else(|| "-".into()),
+            updated_on: r.updated_on.clone(),
+            url: r.html_url().map(str::to_string),
+            clone_urls: clone_urls(r),
         })
         .collect();
 
@@ -68,6 +102,66 @@ pub async fn list(
                 })
                 .collect(),
         ),
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct MemberRow {
+    name: String,
+    nickname: Option<String>,
+    uuid: Option<String>,
+    sources: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct MembersReport {
+    users: Vec<MemberRow>,
+    partial: Vec<String>,
+}
+
+pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
+    let pool = load_user_pool(&ctx.client, &ctx.slug).await?;
+    let users = pool
+        .entries
+        .iter()
+        .map(|entry| MemberRow {
+            name: entry.user.name().to_string(),
+            nickname: entry.user.nickname.clone(),
+            uuid: entry.user.uuid.clone(),
+            sources: entry.sources.clone(),
+        })
+        .collect();
+
+    match ctx.format {
+        Format::Json => {
+            output::print_json(&MembersReport {
+                users,
+                partial: pool.incomplete,
+            })?;
+        }
+        Format::Human => {
+            if !pool.incomplete.is_empty() {
+                output::warn(&format!(
+                    "could not read some user pools: {}",
+                    pool.incomplete.join(", ")
+                ));
+            }
+            output::print_table(
+                &["NAME", "NICKNAME", "UUID", "SOURCES"],
+                pool.entries
+                    .iter()
+                    .map(|entry| {
+                        vec![
+                            entry.user.name().to_string(),
+                            entry.user.nickname.clone().unwrap_or_else(|| "-".into()),
+                            entry.user.uuid.clone().unwrap_or_else(|| "-".into()),
+                            entry.sources.join(", "),
+                        ]
+                    })
+                    .collect(),
+            );
+        }
     }
     Ok(())
 }

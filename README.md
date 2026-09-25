@@ -245,6 +245,7 @@ bb pr mine --role reviewer --build        # your PRs across every repo you can s
 bb branch list --user alice
 bb project list                                  # projects in the workspace
 bb repo list --project ENG                       # repositories in one project
+bb repo members --json                            # reviewer-resolver users and partial sources
 bb repo create api-gateway --project ENG         # private by default
 bb repo create docs --project ENG --public       # explicit opt-in to public
 bb update                                 # check for a newer release and update
@@ -254,6 +255,10 @@ bb update                                 # check for a newer release and update
 safe: the effective default depends on workspace configuration, so an omitted value can publish
 source code. Everything else — the scm, fork policy, main branch name, wiki and issue tracker —
 is left to Bitbucket and the workspace's own settings rather than overridden from here.
+
+`repo list --json` preserves the full repository slug, project identity, web URL, clone URLs, and
+raw update timestamp. `repo members --json` exposes the people available to reviewer resolution
+and names any user pools the token could not read in `partial`.
 
 Omit `--project` in a terminal and you get a picker. Outside a terminal it is an error naming the
 flag, never a prompt that will not be answered.
