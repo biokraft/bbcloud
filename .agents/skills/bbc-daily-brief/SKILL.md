@@ -92,6 +92,7 @@ alone:
 - every row the user authored whose `build_state` is `failed` or `stopped`
 - every row the user authored whose `my_review_state` is `changes_requested`
 - every non-draft row the user authored whose `comment_count` is above `0` or `null`
+- every non-draft row the user authored whose phase-1 `build_state` is `successful` and whose reviewers are all approved
 - every row the user authored past the nudge threshold below
 
 The `comment_count` rule is the one that catches a reviewer who commented without acting on the
@@ -110,7 +111,7 @@ own pull requests and a review they are holding up never gets enriched.
 For each:
 
 ```bash
-bb pr view <id> -R <repo> --unresolved --conflicts --json
+bb pr view <id> -R <repo> --unresolved --conflicts --build --json
 ```
 
 Nothing else gets enriched. Do not fetch comments for every row phase 1 returned.
@@ -138,12 +139,15 @@ This ladder, ties broken oldest first:
    threshold — they are the bottleneck.
 2. Their pull request has `changes_requested`, or unresolved threads waiting on their answer.
 3. Their pull request's `build_state` is `failed` or `stopped`.
-4. Their pull request is approved, `build_state` is `successful`, `conflicts.count` is `0`, and no
-   unresolved thread remains — merge candidate.
+4. Their pull request has every current reviewer approved, phase-2 `build_state` is `successful`,
+   `conflicts.count` is `0`, `unresolved_threads` is `0`, and `task_count` is `0` — merge candidate.
 5. Their pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
 6. Everything else — counted, never listed.
 
 Drafts never appear in 1–5. They are not waiting on anybody; count them in the tail.
+
+“Merge candidate” is a factual shortlist, not permission to merge. The user still decides whether
+to merge. Do not use phase-1 build state for this predicate; phase 2 must fetch the final facts.
 
 ## Output
 
