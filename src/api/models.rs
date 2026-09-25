@@ -424,6 +424,9 @@ pub struct Comment {
     pub deleted: bool,
     /// Present (even as `{}`) when the inline thread has been resolved.
     pub resolution: Option<serde_json::Value>,
+    /// True while the comment is a draft only its author can see.
+    #[serde(default)]
+    pub pending: bool,
 }
 
 impl Comment {

@@ -285,6 +285,39 @@ async fn view_reports_the_thread_root_of_a_reply() {
         .stdout(contains("reply to 600"));
 }
 
+/// `pending` rides along in JSON, and human output marks a pending comment.
+#[tokio::test]
+async fn view_exposes_pending_comments() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(
+        &server,
+        serde_json::json!({
+            "values": [{
+                "id": 700,
+                "content": { "raw": "draft thought" },
+                "user": { "display_name": "Reviewer" },
+                "created_on": "2026-08-04T10:00:00+00:00",
+                "pending": true
+            }]
+        }),
+    )
+    .await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let general = value["general"].as_array().unwrap();
+    assert_eq!(general[0]["pending"], true);
+
+    bb(&server)
+        .args(["pr", "view", "7"])
+        .assert()
+        .success()
+        .stdout(contains("[pending]"));
+}
+
 // NOTE: the brief's fourth test — an inline comment with neither path nor
 // line, expecting the dash fallback at pr_comments.rs:135 — is not included.
 // `Comment::is_inline()` (src/api/models.rs:110-114) only classifies a

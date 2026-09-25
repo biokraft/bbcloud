@@ -13,6 +13,7 @@ pub struct CommentView {
     pub file: Option<String>,
     pub line: Option<u64>,
     pub resolved: bool,
+    pub pending: bool,
     pub parent: Option<u64>,
 }
 
@@ -30,6 +31,7 @@ fn to_view(comment: &Comment) -> CommentView {
         file: inline.and_then(|i| i.path.clone()),
         line: inline.and_then(|i| i.to.or(i.from)),
         resolved: comment.is_resolved(),
+        pending: comment.pending,
         parent: comment.parent_id(),
     }
 }
@@ -125,7 +127,8 @@ pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> 
                 output::info("none");
             }
             for c in &general {
-                println!("  {} ({}):", c.author, c.timestamp);
+                let marker = if c.pending { " [pending]" } else { "" };
+                println!("  {} ({}){marker}:", c.author, c.timestamp);
                 for line in c.body.lines() {
                     println!("    {line}");
                 }
@@ -143,7 +146,11 @@ pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> 
             for c in &inline {
                 let location =
                     location(c.file.as_deref(), c.line).unwrap_or_else(|| "-".to_string());
-                let marker = if c.resolved { " [resolved]" } else { "" };
+                let marker = format!(
+                    "{}{}",
+                    if c.resolved { " [resolved]" } else { "" },
+                    if c.pending { " [pending]" } else { "" }
+                );
                 match c.parent {
                     Some(parent) => println!(
                         "  {location}{marker}  (comment {} · reply to {parent})",
@@ -171,6 +178,7 @@ pub struct CommentArgs {
     pub file: Option<String>,
     pub line: Option<u64>,
     pub reply_to: Option<u64>,
+    pub pending: bool,
     pub web: bool,
 }
 
@@ -200,6 +208,10 @@ pub fn build_payload(args: &CommentArgs, body: &str) -> Result<serde_json::Value
 
     if let Some(parent) = args.reply_to {
         payload["parent"] = serde_json::json!({ "id": parent });
+    }
+
+    if args.pending {
+        payload["pending"] = serde_json::Value::Bool(true);
     }
 
     Ok(payload)
@@ -255,14 +267,29 @@ pub async fn comment(ctx: &Ctx, args: CommentArgs) -> Result<()> {
         let _ = open::that_detached(&url);
     }
 
+    if args.pending && !created.pending {
+        output::warn(&format!(
+            "Bitbucket published comment {} immediately — it did not keep it pending",
+            created.id
+        ));
+    }
+
     match ctx.format {
         Format::Json => output::print_json(&serde_json::json!({
             "id": created.id,
             "pull_request": args.id,
             "url": url,
+            "pending": created.pending,
         }))?,
         Format::Human => {
-            output::success(&format!("comment {} added to #{}", created.id, args.id));
+            if created.pending {
+                output::success(&format!(
+                    "pending comment {} added to #{} — only you can see it until you finish your review in Bitbucket",
+                    created.id, args.id
+                ));
+            } else {
+                output::success(&format!("comment {} added to #{}", created.id, args.id));
+            }
             output::info(&url);
         }
     }
@@ -420,6 +447,17 @@ mod build_payload_tests {
         assert_eq!(payload["content"]["raw"], "hi");
         assert!(payload.get("inline").is_none());
         assert!(payload.get("parent").is_none());
+        assert!(payload.get("pending").is_none());
+    }
+
+    #[test]
+    fn pending_flag_adds_pending_true() {
+        let a = CommentArgs {
+            pending: true,
+            ..args()
+        };
+        let payload = build_payload(&a, "hi").unwrap();
+        assert_eq!(payload["pending"], true);
     }
 
     #[test]
