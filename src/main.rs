@@ -310,6 +310,15 @@ enum PrCommand {
         /// Skip the pull request header and print only comments
         #[arg(long)]
         comments_only: bool,
+        /// Fetch the pull request header without fetching comments
+        #[arg(long, conflicts_with_all = ["comments_only", "unresolved"])]
+        metadata_only: bool,
+        /// Include build statuses in the response
+        #[arg(long)]
+        build: bool,
+        /// Include file conflicts in the response
+        #[arg(long)]
+        conflicts: bool,
     },
     /// Show, add or remove the reviewers tagged on a pull request
     #[command(args_conflicts_with_subcommands = true)]
@@ -642,7 +651,23 @@ async fn run(cli: Cli) -> Result<()> {
                     id,
                     unresolved,
                     comments_only,
-                } => commands::pr_comments::view(&ctx, id, unresolved, comments_only).await,
+                    metadata_only,
+                    build,
+                    conflicts,
+                } => {
+                    commands::pr_comments::view_with_options(
+                        &ctx,
+                        commands::pr_comments::ViewArgs {
+                            id,
+                            unresolved,
+                            comments_only,
+                            metadata_only,
+                            build,
+                            conflicts,
+                        },
+                    )
+                    .await
+                }
                 PrCommand::Comment {
                     id,
                     body,
@@ -766,7 +791,17 @@ async fn run(cli: Cli) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let code = match err.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
+                _ => 1,
+            };
+            let _ = err.print();
+            std::process::exit(code);
+        }
+    };
     // `clap`'s `conflicts_with` cannot span a global, top-level arg and an id
     // that only exists on one nested subcommand's own `Command` node, so this
     // is enforced by hand instead, using clap's own error rendering — `pr
@@ -776,11 +811,12 @@ async fn main() {
         && matches!(&cli.command, Command::Pr { command } if matches!(command, PrCommand::Mine { .. }))
     {
         let mut cmd = Cli::command();
-        cmd.error(
+        let err = cmd.error(
             clap::error::ErrorKind::ArgumentConflict,
             "the argument '--repo' cannot be used with 'pr mine': it scans every repository, not one",
-        )
-        .exit();
+        );
+        let _ = err.print();
+        std::process::exit(1);
     }
     if let Err(err) = run(cli).await {
         eprintln!("error: {err}");
