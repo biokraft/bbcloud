@@ -273,7 +273,16 @@ flag, never a prompt that will not be answered.
 approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
 `--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
 successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
-`--current` filters by the current symbolic branch, and `--limit` caps the returned rows.
+`--state all` asks for every state as repeated query parameters, which is the form the API documents.
+
+`--current` filters by the current symbolic branch, and refuses to run when `-R`/`BB_REPO` selects a
+repository other than the checkout's — pairing a local branch name with an unrelated repository
+returns confidently wrong rows, or none.
+
+`--limit` is an output cap, not a page cap. Filtering — including `--build-status` — is applied
+first, and the command keeps paging until it has that many matching rows, so a match on page three is
+still found with `--limit 1`. The page size stays at 50 because that is the largest value Bitbucket's
+pull-request endpoint is documented to accept.
 
 `bb pr mine` is the one command that is not repository-scoped. There is no Bitbucket api left that
 lists which workspaces you belong to, so the workspace(s) to scan are resolved in this order:
