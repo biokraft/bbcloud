@@ -1,7 +1,8 @@
 use crate::api::models::Repository;
+use crate::commands::pr::Ctx;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::users::{load_user_pool, Eligibility};
+use crate::users::{RepositoryAccess, UserPool};
 use crate::workspace::{projects, WorkspaceCtx};
 use serde::Serialize;
 
@@ -107,26 +108,31 @@ pub async fn list(
 }
 
 #[derive(Debug, Serialize)]
-struct MemberRow {
+struct ReviewerRow {
     name: String,
     nickname: Option<String>,
     uuid: Option<String>,
     sources: Vec<String>,
-    eligibility: Eligibility,
+    eligibility: RepositoryAccess,
 }
 
 #[derive(Debug, Serialize)]
-struct MembersReport {
-    users: Vec<MemberRow>,
+struct ReviewersReport {
+    users: Vec<ReviewerRow>,
     partial: Vec<String>,
 }
 
-pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
-    let pool = load_user_pool(&ctx.client, &ctx.slug).await?;
+/// Everyone a reviewer name can resolve to for this repository.
+///
+/// Deliberately not called "members": two of the three pools behind it —
+/// workspace membership and default-reviewer status — say nothing about access
+/// to *this* repository, so a name that cannot be tagged may still appear here.
+pub async fn reviewers(ctx: &Ctx) -> Result<()> {
+    let pool = UserPool::load(&ctx.client, &ctx.slug).await?;
     let users = pool
         .entries
         .iter()
-        .map(|entry| MemberRow {
+        .map(|entry| ReviewerRow {
             name: entry.user.name().to_string(),
             nickname: entry.user.nickname.clone(),
             uuid: entry.user.uuid.clone(),
@@ -137,7 +143,7 @@ pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
 
     match ctx.format {
         Format::Json => {
-            output::print_json(&MembersReport {
+            output::print_json(&ReviewersReport {
                 users,
                 partial: pool.incomplete,
             })?;
@@ -160,8 +166,8 @@ pub async fn members(ctx: &crate::commands::pr::Ctx) -> Result<()> {
                             entry.user.uuid.clone().unwrap_or_else(|| "-".into()),
                             entry.sources.join(", "),
                             match entry.eligibility {
-                                Eligibility::Explicit => "explicit".to_string(),
-                                Eligibility::Unknown => "unknown".to_string(),
+                                RepositoryAccess::Explicit => "explicit".to_string(),
+                                RepositoryAccess::Unknown => "unknown".to_string(),
                             },
                         ]
                     })
