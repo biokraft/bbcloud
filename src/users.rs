@@ -288,5 +288,10 @@ pub async fn resolve_user(
     if let Some(user) = uuid_user(query) {
         return Ok(user);
     }
+    // Checked here as well as in the pool, so a blank query fails before three
+    // paginated endpoints have been walked to find out there is nothing to find.
+    if query.trim().is_empty() {
+        return Err(BbError::Config("empty user name".into()));
+    }
     UserPool::load(client, slug).await?.resolve(query, extra)
 }
