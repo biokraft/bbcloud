@@ -82,6 +82,27 @@ fn pr_help_lists_read_and_write_commands() {
 }
 
 #[test]
+fn usage_errors_exit_one_instead_of_authentication_code() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
+        .args(["pr", "list", "--not-a-flag"])
+        .assert()
+        .code(1)
+        .stdout(predicates::str::is_empty());
+}
+
+#[test]
+fn pull_request_repository_conflict_exits_one() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
+        .args(["pr", "mine", "--repo", "acme/widgets"])
+        .assert()
+        .code(1);
+}
+
+#[test]
 fn no_php_sources_remain() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for stale in [

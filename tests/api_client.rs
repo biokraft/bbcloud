@@ -141,6 +141,37 @@ async fn paginate_follows_next_links() {
 }
 
 #[tokio::test]
+async fn paginate_rejects_a_cross_origin_next_before_sending_credentials() {
+    let elsewhere = MockServer::start().await;
+    let server = MockServer::start().await;
+    let next = format!("{}/steal", elsewhere.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/things"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "id": 1 }],
+            "next": next
+        })))
+        .mount(&server)
+        .await;
+
+    let err = client_for(&server.uri())
+        .paginate::<Item>("/things")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, BbError::Config(_)), "got {err:?}");
+    assert!(
+        elsewhere
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the second origin must not receive the API request"
+    );
+}
+
+#[tokio::test]
 async fn paginate_stops_when_next_repeats_the_same_url() {
     let server = MockServer::start().await;
     let self_link = format!("{}/loop", server.uri());

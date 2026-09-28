@@ -1,6 +1,7 @@
 ---
 name: bbc-open-pr
-description: Open a Bitbucket Cloud pull request with the `bb` CLI — suggest reviewers from the history of the files you changed, write a description a human can skim, and get the user's approval before either lands. Use this skill when the task is to open, raise or create a pull request on Bitbucket Cloud. Do not use it for GitHub or GitLab.
+description: Opens a Bitbucket Cloud pull request with the `bb` CLI by gathering file-ownership evidence, drafting a reviewer-first description, and obtaining approval before creating it or tagging reviewers. Use only when the user asks to open, raise, or create a Bitbucket Cloud pull request. Do not use for reviewing an existing pull request, a daily brief, GitHub, or GitLab.
+license: MIT
 ---
 
 # Open a Bitbucket Cloud pull request
@@ -12,6 +13,13 @@ reviewers you name, and attaches whatever static list the repository has configu
 reviewers when you name none.
 
 Work through the steps in order. Two of them stop and ask the user; neither is optional.
+
+## Operating contract
+
+- Establish the source and target before proposing a title or reviewers.
+- Gather evidence before drafting; never invent ownership, tests, or risks.
+- Stop at the description and reviewer gates. A create command is allowed only after both are approved.
+- Use UUIDs from `bb` when available and pass only the user's selected reviewers.
 
 For the full command reference — flags, JSON shapes, exit codes — see the `bitbucket-cloud`
 skill.

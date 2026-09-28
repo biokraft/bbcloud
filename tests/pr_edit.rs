@@ -319,7 +319,7 @@ async fn description_and_description_stdin_conflict() {
         ])
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[tokio::test]

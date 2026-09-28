@@ -446,7 +446,9 @@ mod tests {
             participants: Vec::new(),
             draft: false,
             updated_on: None,
+            created_on: None,
             comment_count: None,
+            task_count: None,
             description: None,
             summary: None,
         };
