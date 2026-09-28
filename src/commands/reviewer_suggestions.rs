@@ -248,17 +248,21 @@ fn commit_key(commit: &Commit, path: &str) -> String {
     })
 }
 
+/// Records one commit's evidence for one author.
+///
+/// The uuid is passed separately because the caller has already established
+/// that there is one: taking it from `user` again would leave a second path
+/// through this function for an author with no uuid, which is the case the
+/// caller exists to filter out.
 fn add_candidate(
     candidates: &mut HashMap<String, Candidate>,
+    uuid: &str,
     user: &User,
     commit: &Commit,
     path: &str,
     scope: Scope,
     commit_date: DateTime<Utc>,
 ) {
-    let Some(uuid) = user.uuid.as_deref() else {
-        return;
-    };
     let candidate = candidates
         .entry(uuid.to_string())
         .or_insert_with(|| Candidate {
@@ -431,7 +435,7 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
                     if date < cutoff {
                         continue;
                     }
-                    add_candidate(&mut candidates, author, &commit, &path, scope, date);
+                    add_candidate(&mut candidates, uuid, author, &commit, &path, scope, date);
                 }
             }
             Err(error) if is_path_specific(&error) => {

@@ -340,17 +340,26 @@ fn description_from(body: &str, interactive: bool) -> Result<String> {
         .to_string())
 }
 
-fn read_description_from_stdin() -> Result<String> {
+/// Reads the body, given a verdict on where it is coming from.
+///
+/// The reader and the verdict are both parameters so that a live terminal is a
+/// case this can be asked about, rather than one only a real tty can produce.
+fn description_from_reader(reader: &mut impl std::io::Read, interactive: bool) -> Result<String> {
     // A terminal is refused before anything is read: reading first would block
     // forever waiting for an EOF that only a redirect will ever send.
-    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+    if interactive {
         return Err(BbError::Config(
             "--description-stdin requires piped or redirected input".into(),
         ));
     }
     let mut body = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    reader.read_to_string(&mut body)?;
     description_from(&body, false)
+}
+
+fn read_description_from_stdin() -> Result<String> {
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    description_from_reader(&mut std::io::stdin(), interactive)
 }
 
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
@@ -626,6 +635,36 @@ mod description_tests {
     fn a_live_terminal_is_refused_rather_than_left_to_block() {
         let err = description_from("body", true).unwrap_err();
         assert!(err.to_string().contains("piped or redirected"), "{err}");
+    }
+
+    /// The refusal has to happen *before* the read, or a terminal blocks
+    /// forever. A reader that records being touched proves the ordering.
+    #[test]
+    fn a_terminal_is_refused_before_anything_is_read() {
+        use std::cell::Cell;
+        struct Records<'a>(&'a Cell<bool>);
+        impl std::io::Read for Records<'_> {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                self.0.set(true);
+                Ok(0)
+            }
+        }
+        let touched = Cell::new(false);
+        let err = description_from_reader(&mut Records(&touched), true).unwrap_err();
+        assert!(err.to_string().contains("piped or redirected"), "{err}");
+        assert!(
+            !touched.get(),
+            "stdin was read before the terminal was refused"
+        );
+    }
+
+    #[test]
+    fn a_pipe_is_read_and_normalized() {
+        let mut input = "hello\r\nworld\r\n".as_bytes();
+        assert_eq!(
+            description_from_reader(&mut input, false).unwrap(),
+            "hello\nworld"
+        );
     }
 
     #[test]
