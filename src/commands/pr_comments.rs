@@ -1,14 +1,22 @@
-use crate::api::models::{Comment, PullRequest};
+use crate::api::models::{
+    BuildState, BuildStatus, Comment, FileConflict, PullRequest, ReviewerState,
+};
 use crate::commands::pr::{self, Ctx};
+use crate::commands::pr_build;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct CommentView {
     pub id: u64,
     pub author: String,
+    /// Human-friendly rendering for tables and terminals.
     pub timestamp: String,
+    /// Bitbucket's original RFC3339 value for machine consumers.
+    pub created_on: Option<String>,
     pub body: String,
     pub file: Option<String>,
     pub line: Option<u64>,
@@ -17,8 +25,8 @@ pub struct CommentView {
     pub parent: Option<u64>,
 }
 
-fn to_view(comment: &Comment) -> CommentView {
-    let inline = comment.inline.as_ref();
+fn to_view(comment: &Comment, root: &Comment) -> CommentView {
+    let inline = root.inline.as_ref().or(comment.inline.as_ref());
     CommentView {
         id: comment.id,
         author: comment.author().to_string(),
@@ -27,10 +35,11 @@ fn to_view(comment: &Comment) -> CommentView {
             .as_deref()
             .map(output::relative_time)
             .unwrap_or_else(|| "-".into()),
+        created_on: comment.created_on.clone(),
         body: comment.body(),
         file: inline.and_then(|i| i.path.clone()),
         line: inline.and_then(|i| i.to.or(i.from)),
-        resolved: comment.is_resolved(),
+        resolved: root.is_resolved(),
         pending: comment.pending,
         parent: comment.parent_id(),
     }
@@ -46,64 +55,228 @@ fn location(file: Option<&str>, line: Option<u64>) -> Option<String> {
     }
 }
 
+/// Find the top-level comment for a thread. Bitbucket replies may omit their own
+/// inline location, and replies may be nested, so one parent hop is not enough.
+fn thread_root<'a>(comment: &'a Comment, by_id: &HashMap<u64, &'a Comment>) -> (u64, &'a Comment) {
+    let mut current = comment;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current.id) {
+            return (current.id, current);
+        }
+        let Some(parent_id) = current.parent_id() else {
+            return (current.id, current);
+        };
+        let Some(parent) = by_id.get(&parent_id) else {
+            return (current.id, current);
+        };
+        current = parent;
+    }
+}
+
+fn comment_time(comment: &Comment) -> Option<DateTime<Utc>> {
+    comment
+        .created_on
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
 /// Splits comments into general and inline buckets, oldest first. The
 /// `unresolved` filter applies only to inline threads — general comments are
 /// not resolvable in the Bitbucket API and are always kept.
-pub fn partition(
-    mut comments: Vec<Comment>,
-    unresolved: bool,
-) -> (Vec<CommentView>, Vec<CommentView>) {
-    comments.sort_by(|a, b| a.created_on.cmp(&b.created_on));
-
-    let mut general = Vec::new();
-    let mut inline = Vec::new();
-    for comment in &comments {
-        if comment.is_inline() {
-            if unresolved && comment.is_resolved() {
-                continue;
-            }
-            inline.push(to_view(comment));
-        } else {
-            general.push(to_view(comment));
-        }
-    }
+pub fn partition(comments: Vec<Comment>, unresolved: bool) -> (Vec<CommentView>, Vec<CommentView>) {
+    let (general, inline, _) = partition_with_summary(comments, unresolved);
     (general, inline)
 }
 
+/// The same split as [`partition`], plus the number of unresolved inline roots.
+/// Keeping the old two-tuple API avoids needlessly breaking library users while
+/// the command can expose the useful count to agents.
+pub fn partition_with_summary(
+    mut comments: Vec<Comment>,
+    unresolved: bool,
+) -> (Vec<CommentView>, Vec<CommentView>, usize) {
+    comments.sort_by(|a, b| {
+        comment_time(a)
+            .cmp(&comment_time(b))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let by_id: HashMap<u64, &Comment> = comments
+        .iter()
+        .map(|comment| (comment.id, comment))
+        .collect();
+    let resolved_roots: HashSet<u64> = comments
+        .iter()
+        .filter_map(|comment| {
+            let (root_id, root) = thread_root(comment, &by_id);
+            root.is_resolved().then_some(root_id)
+        })
+        .collect();
+    let mut unresolved_roots = HashSet::new();
+    let mut general = Vec::new();
+    let mut inline = Vec::new();
+    for comment in &comments {
+        let (root_id, root) = thread_root(comment, &by_id);
+        if root.is_inline() {
+            if unresolved && resolved_roots.contains(&root_id) {
+                continue;
+            }
+            if unresolved {
+                unresolved_roots.insert(root_id);
+            }
+            inline.push(to_view(comment, root));
+        } else {
+            general.push(to_view(comment, root));
+        }
+    }
+    (general, inline, unresolved_roots.len())
+}
+
+#[derive(Debug, Default)]
+pub struct ViewArgs {
+    pub id: u64,
+    pub unresolved: bool,
+    pub comments_only: bool,
+    pub metadata_only: bool,
+    pub build: bool,
+    pub conflicts: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PullRequestView {
+    id: u64,
+    title: Option<String>,
+    description: String,
+    state: Option<String>,
+    draft: bool,
+    author: String,
+    source: String,
+    destination: String,
+    url: String,
+    created_on: Option<String>,
+    updated_on: Option<String>,
+    comment_count: Option<u64>,
+    task_count: Option<u64>,
+    reviewers: Vec<ReviewerState>,
+}
+
+#[derive(Debug, Serialize)]
+struct BuildView {
+    build_state: BuildState,
+    statuses: Vec<BuildStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictView {
+    count: usize,
+    files: Vec<FileConflict>,
+}
+
+fn pr_view(pr: &PullRequest) -> PullRequestView {
+    PullRequestView {
+        id: pr.id,
+        title: pr.title.clone(),
+        description: pr.description_text().to_string(),
+        state: pr.state.clone(),
+        draft: pr.draft,
+        author: pr.author_name().to_string(),
+        source: pr.source_branch().to_string(),
+        destination: pr.destination_branch().to_string(),
+        url: pr.html_url().to_string(),
+        created_on: pr.created_on.clone(),
+        updated_on: pr.updated_on.clone(),
+        comment_count: pr.comment_count,
+        task_count: pr.task_count,
+        reviewers: pr.reviewer_states(),
+    }
+}
+
+/// Compatibility wrapper for library users of the original four-argument view
+/// helper. The CLI uses [`view_with_options`] for the selective sections.
 pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> Result<()> {
-    let pr: Option<PullRequest> = if comments_only {
+    view_with_options(
+        ctx,
+        ViewArgs {
+            id,
+            unresolved,
+            comments_only,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub async fn view_with_options(ctx: &Ctx, args: ViewArgs) -> Result<()> {
+    if args.metadata_only && (args.comments_only || args.unresolved) {
+        return Err(BbError::Config(
+            "--metadata-only cannot be combined with --comments-only or --unresolved".into(),
+        ));
+    }
+
+    let pr: Option<PullRequest> = if args.comments_only {
         None
     } else {
         Some(
             ctx.client
-                .get_json(&ctx.path(&format!("/pullrequests/{id}")))
+                .get_json(&ctx.path(&format!("/pullrequests/{}", args.id)))
                 .await?,
         )
     };
 
-    let spinner = output::spinner("fetching comments");
-    let comments: Vec<Comment> = ctx
-        .client
-        .paginate(&ctx.path(&format!("/pullrequests/{id}/comments?pagelen=100")))
-        .await?;
+    let spinner = output::spinner("fetching pull request context");
+    let comments: Vec<Comment> = if args.metadata_only {
+        Vec::new()
+    } else {
+        ctx.client
+            .paginate(&ctx.path(&format!("/pullrequests/{}/comments?pagelen=100", args.id)))
+            .await?
+    };
+    let (general, inline, unresolved_threads) = partition_with_summary(comments, args.unresolved);
+
+    let build = if args.build {
+        let statuses = pr_build::statuses(&ctx.client, &ctx.slug, args.id).await?;
+        Some(BuildView {
+            build_state: BuildState::rollup(&statuses),
+            statuses,
+        })
+    } else {
+        None
+    };
+    let conflicts = if args.conflicts {
+        let files: Vec<FileConflict> = ctx
+            .client
+            .paginate(&ctx.path(&format!("/pullrequests/{}/conflicts?pagelen=100", args.id)))
+            .await?;
+        Some(ConflictView {
+            count: files.len(),
+            files,
+        })
+    } else {
+        None
+    };
     spinner.finish_and_clear();
 
-    let (general, inline) = partition(comments, unresolved);
-
     match ctx.format {
-        Format::Json => output::print_json(&serde_json::json!({
-            "pull_request": pr.as_ref().map(|pr| serde_json::json!({
-                "id": pr.id,
-                "title": pr.title,
-                "state": pr.state,
-                "author": pr.author_name(),
-                "source": pr.source_branch(),
-                "destination": pr.destination_branch(),
-                "url": pr.html_url(),
-            })),
-            "general": general,
-            "inline": inline,
-        }))?,
+        Format::Json => {
+            let mut value = serde_json::json!({
+                "pull_request": pr.as_ref().map(pr_view),
+                "comments_loaded": !args.metadata_only,
+                "general": general,
+                "inline": inline,
+            });
+            if args.unresolved {
+                value["unresolved_threads"] = serde_json::json!(unresolved_threads);
+            }
+            if let Some(build) = build {
+                value["build"] = serde_json::to_value(build)?;
+            }
+            if let Some(conflicts) = conflicts {
+                value["conflicts"] = serde_json::to_value(conflicts)?;
+            }
+            output::print_json(&value)?;
+        }
         Format::Human => {
             if let Some(pr) = &pr {
                 output::heading(&format!(
@@ -115,54 +288,126 @@ pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> 
                     "{} → {} · {} · by {}",
                     pr.source_branch(),
                     pr.destination_branch(),
-                    pr.state.clone().unwrap_or_else(|| "-".into()),
+                    pr.display_state(),
                     pr.author_name()
                 ));
                 output::info(pr.html_url());
-                println!();
-            }
-
-            output::heading("general comments");
-            if general.is_empty() {
-                output::info("none");
-            }
-            for c in &general {
-                let marker = if c.pending { " [pending]" } else { "" };
-                println!("  {} ({}){marker}:", c.author, c.timestamp);
-                for line in c.body.lines() {
-                    println!("    {line}");
+                if !pr.description_text().is_empty() {
+                    output::info(&format!("description: {}", pr.description_text()));
+                }
+                if !pr.reviewer_states().is_empty() {
+                    output::print_table(
+                        &["REVIEWER", "STATE"],
+                        pr.reviewer_states()
+                            .into_iter()
+                            .map(|reviewer| {
+                                vec![reviewer.name, reviewer.state.as_str().to_string()]
+                            })
+                            .collect(),
+                    );
                 }
                 println!();
             }
 
-            output::heading(if unresolved {
-                "inline comments (unresolved)"
-            } else {
-                "inline comments"
-            });
-            if inline.is_empty() {
-                output::info("none");
+            if !args.metadata_only {
+                if args.unresolved {
+                    output::info(&format!("unresolved threads: {unresolved_threads}"));
+                }
+                output::heading("general comments");
+                if general.is_empty() {
+                    output::info("none");
+                }
+                for c in &general {
+                    let marker = if c.pending { " [pending]" } else { "" };
+                    println!("  {} ({}){marker}:", c.author, c.timestamp);
+                    for line in c.body.lines() {
+                        println!("    {line}");
+                    }
+                    println!();
+                }
+
+                output::heading(if args.unresolved {
+                    "inline comments (unresolved)"
+                } else {
+                    "inline comments"
+                });
+                if inline.is_empty() {
+                    output::info("none");
+                }
+                for c in &inline {
+                    let location =
+                        location(c.file.as_deref(), c.line).unwrap_or_else(|| "-".to_string());
+                    let marker = format!(
+                        "{}{}",
+                        if c.resolved { " [resolved]" } else { "" },
+                        if c.pending { " [pending]" } else { "" }
+                    );
+                    match c.parent {
+                        Some(parent) => println!(
+                            "  {location}{marker}  (comment {} · reply to {parent})",
+                            c.id
+                        ),
+                        None => println!("  {location}{marker}  (comment {})", c.id),
+                    }
+                    println!("  {} ({}):", c.author, c.timestamp);
+                    for line in c.body.lines() {
+                        println!("    {line}");
+                    }
+                    println!();
+                }
             }
-            for c in &inline {
-                let location =
-                    location(c.file.as_deref(), c.line).unwrap_or_else(|| "-".to_string());
-                let marker = format!(
-                    "{}{}",
-                    if c.resolved { " [resolved]" } else { "" },
-                    if c.pending { " [pending]" } else { "" }
-                );
-                match c.parent {
-                    Some(parent) => println!(
-                        "  {location}{marker}  (comment {} · reply to {parent})",
-                        c.id
-                    ),
-                    None => println!("  {location}{marker}  (comment {})", c.id),
+
+            if let Some(build) = build {
+                output::heading("build");
+                output::info(&format!(
+                    "state: {}",
+                    output::colored_cell(
+                        build.build_state.label(),
+                        output::tone_for(build.build_state)
+                    )
+                ));
+                if build.statuses.is_empty() {
+                    output::info("no build statuses");
+                } else {
+                    output::print_table(
+                        &["KEY", "NAME", "STATE", "URL"],
+                        build
+                            .statuses
+                            .iter()
+                            .map(|status| {
+                                let state = BuildState::from_api(status.state.as_deref());
+                                vec![
+                                    status.key.clone().unwrap_or_else(|| "-".into()),
+                                    status.name.clone().unwrap_or_else(|| "-".into()),
+                                    output::colored_cell(state.label(), output::tone_for(state)),
+                                    status.url.clone().unwrap_or_else(|| "-".into()),
+                                ]
+                            })
+                            .collect(),
+                    );
                 }
-                println!("  {} ({}):", c.author, c.timestamp);
-                for line in c.body.lines() {
-                    println!("    {line}");
+            }
+
+            if let Some(conflicts) = conflicts {
+                output::heading("conflicts");
+                if conflicts.files.is_empty() {
+                    output::info("none");
+                } else {
+                    output::print_table(
+                        &["PATH", "SCENARIO", "MESSAGE"],
+                        conflicts
+                            .files
+                            .iter()
+                            .map(|conflict| {
+                                vec![
+                                    conflict.path.clone().unwrap_or_else(|| "-".into()),
+                                    conflict.scenario.clone().unwrap_or_else(|| "-".into()),
+                                    conflict.message.clone().unwrap_or_else(|| "-".into()),
+                                ]
+                            })
+                            .collect(),
+                    );
                 }
-                println!();
             }
         }
     }
@@ -808,5 +1053,174 @@ mod partition_tests {
         }));
         let (_, inline) = partition(vec![c], true);
         assert!(inline.is_empty());
+    }
+}
+
+/// The API surface a library caller reaches has no clap in front of it, so the
+/// guards and the compatibility wrapper are pinned directly.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod view_api_tests {
+    use super::*;
+    use crate::api::Client;
+    use crate::credentials::Credentials;
+    use crate::repo::RepoSlug;
+    use crate::secret::SecretString;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ctx(server: &MockServer) -> Ctx {
+        Ctx {
+            client: Client::new(
+                Credentials {
+                    email: "dev@example.com".into(),
+                    token: SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: RepoSlug::parse("acme/widgets").unwrap(),
+            format: crate::output::Format::Json,
+        }
+    }
+
+    async fn mount(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "title": "t", "author": { "display_name": "Me" },
+                "source": { "branch": { "name": "feature/x" } },
+                "destination": { "branch": { "name": "main" } },
+                "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/7" } }
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{ "id": 1, "content": { "raw": "hi" }, "user": { "display_name": "Alice" } }]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// The four-argument wrapper is what existing library callers use; it must
+    /// still render the same thing the option-taking path does.
+    #[tokio::test]
+    async fn the_compatibility_wrapper_still_renders() {
+        let server = MockServer::start().await;
+        mount(&server).await;
+        view(&ctx(&server), 7, false, false).await.unwrap();
+    }
+
+    /// `--metadata-only` answers a different question than the flags it clashes
+    /// with, so combining them is an error rather than a silent precedence rule.
+    #[tokio::test]
+    async fn metadata_only_refuses_the_flags_it_cannot_honour() {
+        let server = MockServer::start().await;
+        for extra in [
+            ViewArgs {
+                comments_only: true,
+                ..Default::default()
+            },
+            ViewArgs {
+                unresolved: true,
+                ..Default::default()
+            },
+        ] {
+            let err = view_with_options(
+                &ctx(&server),
+                ViewArgs {
+                    id: 7,
+                    metadata_only: true,
+                    ..extra
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("--metadata-only"), "{err}");
+        }
+    }
+}
+
+/// The thread walk is the part of `pr view` that decides which comments a
+/// reviewer still has to answer for, so its edges are pinned here rather than
+/// only through the shapes the api is supposed to send.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod thread_tests {
+    use super::*;
+    use crate::api::models::{CommentParent, Inline};
+
+    fn comment(id: u64, parent: Option<u64>, resolved: bool) -> Comment {
+        Comment {
+            id,
+            content: None,
+            user: None,
+            created_on: None,
+            inline: Some(Inline {
+                path: Some("src/lib.rs".into()),
+                from: None,
+                to: Some(1),
+            }),
+            parent: parent.map(|id| CommentParent { id }),
+            deleted: false,
+            resolution: resolved.then(|| serde_json::json!({})),
+            pending: false,
+        }
+    }
+
+    fn roots(comments: Vec<Comment>) -> HashMap<u64, u64> {
+        let by_id: HashMap<u64, &Comment> = comments.iter().map(|c| (c.id, c)).collect();
+        comments
+            .iter()
+            .map(|c| {
+                let (root_id, _) = thread_root(c, &by_id);
+                (c.id, root_id)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_nested_reply_reaches_the_top_of_its_thread() {
+        let roots = roots(vec![
+            comment(1, None, false),
+            comment(2, Some(1), false),
+            comment(3, Some(2), false),
+            comment(4, Some(3), false),
+        ]);
+        assert_eq!(roots[&1], 1);
+        assert_eq!(roots[&2], 1);
+        assert_eq!(roots[&3], 1);
+        assert_eq!(roots[&4], 1);
+    }
+
+    /// A cycle would otherwise loop forever on data the api should never send.
+    /// Returning a self-root keeps the walk finite and the comment visible.
+    #[test]
+    fn a_parent_cycle_terminates_instead_of_hanging() {
+        let comments = [comment(1, Some(2), false), comment(2, Some(1), false)];
+        let by_id: HashMap<u64, &Comment> = comments.iter().map(|c| (c.id, c)).collect();
+        let (root_id, _) = thread_root(&comments[0], &by_id);
+        assert!(root_id == 1 || root_id == 2, "cycle root was {root_id}");
+    }
+
+    /// A reply whose parent is not in the page cannot be traced further. It is
+    /// treated as its own root rather than dropped, so the comment is still
+    /// reported and still counted.
+    #[test]
+    fn a_reply_to_an_absent_parent_is_still_reported() {
+        let comments = vec![comment(1, None, false), comment(2, Some(99), false)];
+        let roots = roots(comments);
+        assert_eq!(roots[&2], 2);
+
+        let (general, inline, unresolved) = partition_with_summary(
+            vec![comment(1, None, false), comment(2, Some(99), false)],
+            true,
+        );
+        assert!(general.is_empty());
+        assert_eq!(inline.len(), 2);
+        // The orphaned reply counts as its own open thread, not a silent gap.
+        assert_eq!(unresolved, 2);
     }
 }
