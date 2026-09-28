@@ -472,3 +472,92 @@ async fn stops_a_redirect_loop_at_the_hop_cap() {
     let hops = server.received_requests().await.unwrap_or_default().len();
     assert_eq!(hops, 6, "expected exactly 5 followed redirects");
 }
+
+/// `BB_API_BASE` is parsed and validated once, at construction. A base that is
+/// not a url would otherwise fail much later, on the first request, with an
+/// error about a request rather than about the setting.
+#[test]
+fn a_base_url_that_is_not_a_url_is_refused_at_construction() {
+    for base in ["not a url", "", "://missing-scheme", "http://"] {
+        let err = bb_cli::api::Client::new(
+            bb_cli::credentials::Credentials {
+                email: "dev@example.com".into(),
+                token: bb_cli::secret::SecretString::from("t0ken-value"),
+            },
+            base.to_string(),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("`{base}` should not have been accepted as a base url"));
+        assert!(
+            err.to_string().contains("invalid Bitbucket API base URL"),
+            "unexpected error for `{base}`: {err}"
+        );
+    }
+}
+
+/// A trailing slash is trimmed rather than doubled, so the first request against
+/// a base given that way still lands on the right path.
+#[tokio::test]
+async fn a_trailing_slash_on_the_base_url_does_not_double_up() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
+    let client = bb_cli::api::Client::new(
+        bb_cli::credentials::Credentials {
+            email: "dev@example.com".into(),
+            token: bb_cli::secret::SecretString::from("t0ken-value"),
+        },
+        format!("{}/", server.uri()),
+    )
+    .unwrap();
+    client.get_json::<serde_json::Value>("/ping").await.unwrap();
+}
+
+/// The cap is on values returned, not on pages walked, and it must not be
+/// confused with the page cap: a caller filtering above this layer still needs
+/// every page, which is why `paginate_limited` stops on count while `paginate`
+/// does not.
+#[tokio::test]
+async fn paginate_limited_stops_once_it_has_enough_values() {
+    let server = MockServer::start().await;
+    // Four pages, one per path, each linking to the next.
+    for page in 1..=4u32 {
+        Mock::given(method("GET"))
+            .and(path(format!("/things/{page}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{ "id": page }],
+                "next": format!("{}/things/{}", server.uri(), page + 1)
+            })))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/things/5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "id": 5 }], "next": null
+        })))
+        .mount(&server)
+        .await;
+
+    let client = client_for(&server.uri());
+    assert_eq!(
+        client
+            .paginate_limited::<Item>("/things/1", 2)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "a limit of two should stop after the first page"
+    );
+
+    let all: Vec<Item> = client.paginate("/things/1").await.unwrap();
+    assert_eq!(
+        all.len(),
+        5,
+        "paginate must walk every page, ignoring a value cap"
+    );
+}

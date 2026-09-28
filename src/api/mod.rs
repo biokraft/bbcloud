@@ -6,6 +6,7 @@ use crate::repo::RepoSlug;
 use crate::secret::ExposeSecret;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.bitbucket.org/2.0";
@@ -54,7 +55,10 @@ fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
 
 pub struct Client {
     http: reqwest::Client,
-    base_url: String,
+    /// Parsed once at construction. Re-parsing a string on every request would
+    /// re-validate a value already known good, and the fallback below would be
+    /// a branch that can never fire.
+    base_url: reqwest::Url,
     auth_header: crate::secret::SecretString,
 }
 
@@ -67,8 +71,7 @@ impl Client {
             .user_agent(concat!("bb-cli/", env!("CARGO_PKG_VERSION")))
             .build()?;
 
-        let base_url = base_url.trim_end_matches('/').to_string();
-        reqwest::Url::parse(&base_url)
+        let base_url = reqwest::Url::parse(base_url.trim_end_matches('/'))
             .map_err(|e| BbError::Config(format!("invalid Bitbucket API base URL: {e}")))?;
 
         Ok(Self {
@@ -83,19 +86,22 @@ impl Client {
         Self::new(creds, base)
     }
 
+    /// Resolves a path or absolute url against the base and refuses anything on
+    /// another origin. The `Authorization` header is attached to every request
+    /// this client makes, so a url from a `next` link pointing off-origin is
+    /// the one shape that could hand the token to a third party.
     fn url(&self, path_or_url: &str) -> Result<String> {
-        let base = reqwest::Url::parse(&self.base_url)
-            .map_err(|e| BbError::Config(format!("invalid Bitbucket API base URL: {e}")))?;
         let candidate = if path_or_url.starts_with("http://") || path_or_url.starts_with("https://")
         {
             reqwest::Url::parse(path_or_url)
                 .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
         } else {
-            reqwest::Url::parse(&format!("{}{}", self.base_url, path_or_url))
+            self.base_url
+                .join(path_or_url)
                 .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
         };
 
-        if candidate.origin() != base.origin() {
+        if candidate.origin() != self.base_url.origin() {
             return Err(BbError::Config(
                 "refusing to send Bitbucket credentials to another origin".into(),
             ));
@@ -217,24 +223,37 @@ impl Client {
     }
 
     pub async fn paginate<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>> {
+        self.paginate_limited(path, usize::MAX).await
+    }
+
+    /// Paginates, stopping once `limit` values have been collected.
+    ///
+    /// `limit` bounds how many values come back, never how many pages are
+    /// walked. A caller that filters above this layer — `pr list --limit 1
+    /// --build-status failed` — still needs every page, because a match may sit
+    /// on page three; the cap that belongs on the wire is `MAX_PAGES`, which
+    /// stops a `next` chain that never ends.
+    pub async fn paginate_limited<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<Vec<T>> {
         let mut collected = Vec::new();
         let mut next = Some(path.to_string());
         let mut pages = 0;
-        let mut seen: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
         while let Some(target) = next {
-            if pages >= MAX_PAGES {
+            if pages >= MAX_PAGES || collected.len() >= limit {
                 break;
             }
             // A `next` link that repeats an already-fetched url would otherwise
             // refetch the same page up to MAX_PAGES times and silently return
             // duplicated values. Compare resolved urls so a relative path and
             // the absolute url it resolves to are recognized as the same page.
-            let resolved = self.url(&target)?;
-            if seen.contains(&resolved) {
+            if !seen.insert(self.url(&target)?) {
                 break;
             }
-            seen.push(resolved);
 
             let page: Page<T> = self.get_json(&target).await?;
             collected.extend(page.values);
