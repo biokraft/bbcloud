@@ -452,49 +452,73 @@ async fn both_lookups_refused_with_no_match_still_errors_normally() {
 
 /// A 401 is not an authorization gap to degrade around: the token is wrong, and
 /// every later pool would be read with the same wrong token. Whichever pool
-/// answers first, the command stops with the authentication exit code.
+/// answers first, the command stops with the authentication error.
+///
+/// Every other pool is mounted and answering, so a 401 can only come from the
+/// one under test — otherwise this would pass on an unmounted endpoint's 404.
 #[tokio::test]
 async fn a_401_on_any_pool_stops_immediately() {
+    const POOLS: [&str; 3] = [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+    ];
+    for failing in POOLS {
+        let server = MockServer::start().await;
+        for pool in POOLS {
+            let response = if pool == failing {
+                ResponseTemplate::new(401)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] }))
+            };
+            Mock::given(method("GET"))
+                .and(path(pool))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
+
+        let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BbError::Auth), "{failing}: got {err:?}");
+    }
+}
+
+/// A server-side failure is neither an answer nor an authorization gap, so it
+/// must surface rather than being folded into a partial pool.
+#[tokio::test]
+async fn a_server_error_on_a_pool_surfaces_instead_of_degrading() {
     for failing in [
         "/workspaces/acme/members",
         "/repositories/acme/widgets/permissions-config/users",
         "/repositories/acme/widgets/effective-default-reviewers",
     ] {
         let server = MockServer::start().await;
-        let mut pools = vec![
-            (
-                "/workspaces/acme/members",
-                "/repositories/acme/widgets/permissions-config/users",
-            ),
-            (
-                "/repositories/acme/widgets/permissions-config/users",
-                "/repositories/acme/widgets/effective-default-reviewers",
-            ),
-        ];
-        let (first, second) = pools.remove(0);
-        let (first, second) = if failing == first {
-            (first, second)
-        } else {
-            (second, first)
-        };
-
-        Mock::given(method("GET"))
-            .and(path(first))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(second))
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
+        for pool in [
+            "/workspaces/acme/members",
+            "/repositories/acme/widgets/permissions-config/users",
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ] {
+            let response = if pool == failing {
+                ResponseTemplate::new(500)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] }))
+            };
+            Mock::given(method("GET"))
+                .and(path(pool))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
 
         let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
             .await
             .unwrap_err();
-        assert!(matches!(err, BbError::Auth), "{failing}: got {err:?}");
+        match err {
+            BbError::Api { status, .. } => assert_eq!(status, 500, "{failing}"),
+            other => panic!("{failing}: expected the api error to surface, got {other:?}"),
+        }
     }
 }
 
