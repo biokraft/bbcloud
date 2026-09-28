@@ -755,26 +755,23 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
     // caller outside a checkout is told what is actually wrong instead of being
     // handed a repository-resolution error, and a repository passed alongside it
     // is refused rather than silently ignored.
-    if matches!(command, PrCommand::Mine { .. }) {
-        if repo.is_some() {
-            return Err(BbError::Config("pr mine does not take a repository".into()));
-        }
-        if let PrCommand::Mine {
-            role,
-            state,
-            workspace,
-            repo_limit,
-            build,
-        } = command
-        {
+    if let PrCommand::Mine {
+        role,
+        state,
+        workspace,
+        repo_limit,
+        build,
+    } = &command
+    {
+        if repo.is_none() {
             return commands::pr_mine::run(
                 format,
                 commands::pr_mine::MineArgs {
-                    role,
-                    state,
-                    workspace,
-                    repo_limit,
-                    build,
+                    role: *role,
+                    state: state.clone(),
+                    workspace: workspace.clone(),
+                    repo_limit: *repo_limit,
+                    build: *build,
                 },
             )
             .await;
@@ -920,11 +917,9 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
             commands::pr_comments::unresolve(&ctx, id, comment).await
         }
         // `pr mine` returned above, before any repo-scoped context was
-        // built, and `--repo` alongside it is refused before `run` is
-        // entered. This arm is the last word on both: a repository
-        // context here would be meaningless, and saying so beats
-        // silently ignoring a flag the user passed.
-        #[allow(unreachable_patterns)]
+        // built. Reached when a repository *was* given alongside it, where a
+        // repository-scoped context is meaningless and the flag the user
+        // passed should be named rather than silently ignored.
         PrCommand::Mine { .. } => Err(BbError::Config("pr mine does not take a repository".into())),
     }
 }
@@ -949,6 +944,13 @@ mod pr_mine_dispatch_tests {
 
     #[tokio::test]
     async fn a_repository_alongside_pr_mine_is_refused() {
+        // The refusal happens after a repository-scoped context is built, which
+        // reads credentials from the environment. Set them here so the test
+        // neither depends on the developer's own nor touches a real keyring.
+        std::env::set_var("BB_EMAIL", "dev@example.com");
+        std::env::set_var("BB_TOKEN", "t0ken-value");
+        std::env::set_var("BB_KEYRING_DISABLE", "1");
+
         let err = dispatch_pr(Some("acme/widgets"), Format::Json, mine())
             .await
             .unwrap_err();
@@ -968,9 +970,22 @@ mod reviewer_dispatch_tests {
     use super::*;
 
     fn ctx() -> commands::pr::Ctx {
-        // No request is made on any path exercised here, so the base url is
-        // never dialled.
-        commands::pr::Ctx::new(Some("acme/widgets"), bb_cli::output::Format::Json).unwrap()
+        // Built field by field rather than through `Ctx::new`, which reads the
+        // environment for credentials. No path exercised here makes a request,
+        // so the base url is never dialled — and a test must not depend on the
+        // developer's own credentials or on a keyring being present.
+        commands::pr::Ctx {
+            client: bb_cli::api::Client::new(
+                bb_cli::credentials::Credentials {
+                    email: "dev@example.com".into(),
+                    token: bb_cli::secret::SecretString::from("t0ken-value"),
+                },
+                "http://127.0.0.1:1".to_string(),
+            )
+            .unwrap(),
+            slug: bb_cli::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: bb_cli::output::Format::Json,
+        }
     }
 
     #[tokio::test]
@@ -993,6 +1008,48 @@ mod reviewer_dispatch_tests {
         let message = err.to_string();
         assert!(message.contains("--pr"), "{message}");
         assert!(message.contains("not before the subcommand"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn the_list_subcommand_reaches_the_request_it_names() {
+        // `bb pr reviewers list 7` is the only spelling that carries an id
+        // *inside* the subcommand; the bare `bb pr reviewers 7` goes through
+        // the no-subcommand arm instead, so this path needs its own exercise.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7,
+                "title": "fix the thing",
+                "state": "OPEN",
+                "reviewers": [{ "uuid": "{a}", "display_name": "Ana" }],
+                "participants": [
+                    { "role": "REVIEWER", "state": "approved",
+                      "user": { "uuid": "{a}", "display_name": "Ana" } }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let ctx = commands::pr::Ctx {
+            client: bb_cli::api::Client::new(
+                bb_cli::credentials::Credentials {
+                    email: "dev@example.com".into(),
+                    token: bb_cli::secret::SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: bb_cli::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: bb_cli::output::Format::Json,
+        };
+        dispatch_reviewers(&ctx, None, Some(ReviewersCommand::List { id: 7 }))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
