@@ -241,30 +241,26 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         return render(ctx, &[], args.build || args.build_status.is_some());
     }
 
-    // Resolve everything the filters need before fetching, so a bad name fails
-    // fast instead of after a paginated download. Both name filters share one
-    // pool when the command needs both.
-    let pool: Option<UserPool> =
-        if needs_user_pool(args.reviewer.as_deref()) || needs_user_pool(args.author.as_deref()) {
-            Some(load_user_pool(&ctx.client, &ctx.slug).await?)
-        } else {
-            None
-        };
-
-    // A `{uuid}` is exact and needs no pool. Any other value is a name, and a
-    // name filter is exactly what loaded the pool — so the two never overlap
-    // and the absent-filter case is the only way out of here with nothing.
-    let resolve_filter = |query: Option<&str>| -> Result<Option<String>> {
-        let Some(query) = query else { return Ok(None) };
-        if let Some(uuid) = uuid_user(query).and_then(|user| user.uuid) {
-            return Ok(Some(uuid));
-        }
-        match (pool.as_ref(), query) {
-            (Some(pool), _) => Ok(Some(resolve_uuid(pool, query)?)),
-            (None, _) => Ok(None),
-        }
+    // A `{uuid}` is exact and needs no pool; anything else is a name, and a
+    // name is the only thing that makes a pool worth loading. Splitting on that
+    // gives two total branches instead of one that carries a "this should not
+    // happen" arm: with a pool every filter resolves, and without one no filter
+    // can be a name.
+    let exact = |query: Option<&str>| -> Option<String> {
+        query.and_then(uuid_user).and_then(|user| user.uuid)
     };
-    let reviewer_uuid = resolve_filter(args.reviewer.as_deref())?;
+    let wants_pool =
+        needs_user_pool(args.reviewer.as_deref()) || needs_user_pool(args.author.as_deref());
+    let (reviewer_uuid, pool) = if wants_pool {
+        let pool = load_user_pool(&ctx.client, &ctx.slug).await?;
+        let reviewer_uuid = match args.reviewer.as_deref() {
+            Some(query) => Some(resolve_uuid(&pool, query)?),
+            None => None,
+        };
+        (reviewer_uuid, Some(pool))
+    } else {
+        (exact(args.reviewer.as_deref()), None)
+    };
 
     // `GET /user` must happen at most once per invocation, so every flag that
     // needs "who am I" (`--author @me`, `--needs-my-review`, `--review-state`)
@@ -279,7 +275,11 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     let author_uuid = if author_is_me {
         me.clone()
     } else {
-        resolve_filter(args.author.as_deref())?
+        match (pool.as_ref(), args.author.as_deref()) {
+            (_, None) => None,
+            (Some(pool), Some(query)) => Some(resolve_uuid(pool, query)?),
+            (None, Some(query)) => exact(Some(query)),
+        }
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
