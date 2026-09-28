@@ -321,7 +321,28 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
     Ok(uuids.into_iter().map(|uuid| ReviewerRef { uuid }).collect())
 }
 
+/// Normalizes a description read from stdin.
+///
+/// Whether the input is a pipe or a live terminal is decided by the caller and
+/// passed in, so the rule is a pure function and can be tested without a tty —
+/// a terminal here would block forever waiting for an EOF nobody will type.
+fn description_from(body: &str, interactive: bool) -> Result<String> {
+    if interactive {
+        return Err(BbError::Config(
+            "--description-stdin requires piped or redirected input".into(),
+        ));
+    }
+    // A description authored on Windows arrives with CRLF, and the trailing \r
+    // would otherwise be sent to bitbucket as part of the last line.
+    Ok(body
+        .replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_string())
+}
+
 fn read_description_from_stdin() -> Result<String> {
+    // A terminal is refused before anything is read: reading first would block
+    // forever waiting for an EOF that only a redirect will ever send.
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(BbError::Config(
             "--description-stdin requires piped or redirected input".into(),
@@ -329,10 +350,7 @@ fn read_description_from_stdin() -> Result<String> {
     }
     let mut body = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
-    Ok(body
-        .replace("\r\n", "\n")
-        .trim_end_matches('\n')
-        .to_string())
+    description_from(&body, false)
 }
 
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
@@ -592,5 +610,36 @@ mod create_guard_tests {
                 .is_empty(),
             "a rejected combination must not have opened a pull request"
         );
+    }
+}
+
+/// The pipe-or-redirect rule, as a pure function. The decision is the caller's
+/// to make because only it can see the terminal; the consequence of that
+/// decision is what is worth pinning down.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod description_tests {
+    use super::*;
+
+    #[test]
+    fn a_live_terminal_is_refused_rather_than_left_to_block() {
+        let err = description_from("body", true).unwrap_err();
+        assert!(err.to_string().contains("piped or redirected"), "{err}");
+    }
+
+    #[test]
+    fn windows_line_endings_do_not_reach_bitbucket() {
+        // A body authored on Windows arrives with CRLF; the trailing \r would
+        // otherwise become part of the last line of the description.
+        assert_eq!(
+            description_from("one\r\ntwo\r\n", false).unwrap(),
+            "one\ntwo"
+        );
+    }
+
+    #[test]
+    fn internal_newlines_and_a_missing_trailing_newline_are_kept() {
+        assert_eq!(description_from("a\n\nb", false).unwrap(), "a\n\nb");
+        assert_eq!(description_from("", false).unwrap(), "");
     }
 }
