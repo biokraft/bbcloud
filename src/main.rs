@@ -177,8 +177,8 @@ enum RepoCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
-    /// List the people available for reviewer resolution
-    Members,
+    /// List the people a reviewer name can resolve to in this repository
+    Reviewers,
     /// List the repositories in a workspace
     #[command(alias = "l", alias = "ls")]
     List {
@@ -583,9 +583,9 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Repo { command } => match command {
-            RepoCommand::Members => {
+            RepoCommand::Reviewers => {
                 let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
-                commands::repo::members(&ctx).await
+                commands::repo::reviewers(&ctx).await
             }
             RepoCommand::Create {
                 name,
@@ -763,19 +763,24 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
         build,
     } = &command
     {
-        if repo.is_none() {
-            return commands::pr_mine::run(
-                format,
-                commands::pr_mine::MineArgs {
-                    role: *role,
-                    state: state.clone(),
-                    workspace: workspace.clone(),
-                    repo_limit: *repo_limit,
-                    build: *build,
-                },
-            )
-            .await;
+        // Refused here rather than after `Ctx::new`, so the diagnostic is the
+        // same whatever the checkout looks like: an unresolvable `-R` would
+        // otherwise surface as a repository error for a flag that is simply
+        // meaningless on this command.
+        if repo.is_some() {
+            return Err(BbError::Config("pr mine does not take a repository".into()));
         }
+        return commands::pr_mine::run(
+            format,
+            commands::pr_mine::MineArgs {
+                role: *role,
+                state: state.clone(),
+                workspace: workspace.clone(),
+                repo_limit: *repo_limit,
+                build: *build,
+            },
+        )
+        .await;
     }
     let ctx = commands::pr::Ctx::new(repo, format)?;
     match command {
@@ -872,7 +877,7 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
             build,
             conflicts,
         } => {
-            commands::pr_comments::view_with_options(
+            commands::pr_comments::view(
                 &ctx,
                 commands::pr_comments::ViewArgs {
                     id,
@@ -916,10 +921,9 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
         PrCommand::Unresolve { id, comment } => {
             commands::pr_comments::unresolve(&ctx, id, comment).await
         }
-        // `pr mine` returned above, before any repo-scoped context was
-        // built. Reached when a repository *was* given alongside it, where a
-        // repository-scoped context is meaningless and the flag the user
-        // passed should be named rather than silently ignored.
+        // Unreachable: `pr mine` is settled above, before this match, whether or
+        // not a repository came with it. The arm exists only so the match is
+        // exhaustive, and it says the same thing the guard above already said.
         PrCommand::Mine { .. } => Err(BbError::Config("pr mine does not take a repository".into())),
     }
 }
@@ -944,14 +948,25 @@ mod pr_mine_dispatch_tests {
 
     #[tokio::test]
     async fn a_repository_alongside_pr_mine_is_refused() {
-        // The refusal happens after a repository-scoped context is built, which
-        // reads credentials from the environment. Set them here so the test
-        // neither depends on the developer's own nor touches a real keyring.
-        std::env::set_var("BB_EMAIL", "dev@example.com");
-        std::env::set_var("BB_TOKEN", "t0ken-value");
-        std::env::set_var("BB_KEYRING_DISABLE", "1");
-
+        // No environment is set here on purpose. The refusal happens before any
+        // repository-scoped context exists, so the test neither depends on the
+        // developer's own credentials nor mutates process-global state that
+        // other tests in this binary would inherit.
         let err = dispatch_pr(Some("acme/widgets"), Format::Json, mine())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not take a repository"),
+            "{err}"
+        );
+    }
+
+    /// The flag is refused whatever the repository is, including one that could
+    /// never resolve. Building a context first would turn a clear message into
+    /// a repository-resolution error that says nothing about the real mistake.
+    #[tokio::test]
+    async fn an_unresolvable_repository_does_not_mask_the_refusal() {
+        let err = dispatch_pr(Some("not a slug at all"), Format::Json, mine())
             .await
             .unwrap_err();
         assert!(

@@ -22,6 +22,25 @@ fn live_env() -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
+/// A required live variable, or a hard failure.
+///
+/// Once `BB_LIVE_TEST=1` says "yes, run against the real api", a missing
+/// prerequisite is a mistake in the invocation, not a reason to report success.
+/// A skip here would leave the net that exists to catch a retired endpoint
+/// quietly disarmed — the `bb pr mine` v0.13.0 failure, in a quieter form.
+fn require(name: &str) -> String {
+    let value = std::env::var(name)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "{name} is required once BB_LIVE_TEST=1 — see AGENTS.md, `Live smoke test`. \
+                 A missing value must fail, not skip."
+            )
+        });
+    value
+}
+
 fn bb() -> Command {
     let mut cmd = Command::cargo_bin("bb").unwrap();
     cmd.env("BB_NO_UPDATE_CHECK", "1");
@@ -142,20 +161,8 @@ fn pr_view_context_is_live() {
         eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
         return;
     }
-    let Some(repo) = std::env::var("BB_LIVE_REPO")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        eprintln!("skipping: set BB_LIVE_REPO=<workspace>/<repo> to exercise pr view context");
-        return;
-    };
-    let Some(pr) = std::env::var("BB_LIVE_PR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        eprintln!("skipping: set BB_LIVE_PR=<id> to exercise pr view context");
-        return;
-    };
+    let repo = require("BB_LIVE_REPO");
+    let pr = require("BB_LIVE_PR");
     let output = bb()
         .args([
             "pr",
@@ -188,22 +195,16 @@ fn pr_view_context_is_live() {
 
 #[test]
 #[ignore]
-fn repo_members_endpoint_is_live() {
-    let Some(repo) = std::env::var("BB_LIVE_REPO")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        eprintln!("skipping: set BB_LIVE_REPO=<workspace>/<repo> to exercise repo members");
-        return;
-    };
+fn repo_reviewers_endpoint_is_live() {
     if live_env().is_none() {
         eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
         return;
     }
+    let repo = require("BB_LIVE_REPO");
     let output = bb()
-        .args(["repo", "members", "-R", &repo, "--json"])
+        .args(["repo", "reviewers", "-R", &repo, "--json"])
         .output()
-        .expect("run repo members live smoke test");
+        .expect("run repo reviewers live smoke test");
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert_not_retired(&stderr, output.status.code());
     assert!(output.status.success(), "stderr: {stderr}");
@@ -231,20 +232,8 @@ fn reviewer_suggestions_are_live() {
         eprintln!("skipping: set BB_LIVE_TEST=1, BB_WORKSPACE=<slug>, and resolvable credentials");
         return;
     }
-    let Some(repo) = std::env::var("BB_LIVE_REPO")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        eprintln!("skipping: set BB_LIVE_REPO=<workspace>/<repo> to exercise reviewer suggestions");
-        return;
-    };
-    let Some(pr) = std::env::var("BB_LIVE_PR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        eprintln!("skipping: set BB_LIVE_PR=<id> to exercise reviewer suggestions");
-        return;
-    };
+    let repo = require("BB_LIVE_REPO");
+    let pr = require("BB_LIVE_PR");
     let assert = bb()
         .args([
             "pr",
