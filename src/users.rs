@@ -158,14 +158,11 @@ impl UserPool {
         self.resolve_inner(query, extra, true)
     }
 
+    /// `query` must already be a non-blank name that is not a `{uuid}`: every
+    /// caller settles both before a pool is loaded, so re-checking them here
+    /// would only duplicate the check without ever being the thing that fires.
     fn resolve_inner(&self, query: &str, extra: &[User], mutating: bool) -> Result<User> {
         let query = query.trim();
-        if query.is_empty() {
-            return Err(BbError::Config("empty user name".into()));
-        }
-        if let Some(user) = uuid_user(query) {
-            return Ok(user);
-        }
         if mutating && !self.incomplete.is_empty() {
             return Err(BbError::Config(format!(
                 "cannot resolve `{query}` by name: {} could not be read ({}) — pass a `{{uuid}}` to be exact",

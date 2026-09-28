@@ -284,29 +284,33 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
         return Err(BbError::Config("no reviewer name given".into()));
     }
 
-    let pool = if requested
-        .iter()
-        .any(|name| users::uuid_user(name).is_none())
-    {
-        Some(users::load_user_pool(&ctx.client, &ctx.slug).await?)
-    } else {
-        None
-    };
+    // Split first, then resolve: a `{uuid}` is already exact, so the pool is
+    // loaded only when there is at least one name that actually needs it.
     let mut uuids: Vec<String> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     for name in requested {
-        let user = if let Some(user) = users::uuid_user(name) {
-            user
-        } else if let Some(pool) = pool.as_ref() {
-            pool.resolve_for_write(name, &[])?
-        } else {
-            return Err(BbError::Config(format!("could not resolve `{name}`")));
-        };
-        let uuid = user
-            .uuid
-            .clone()
-            .ok_or_else(|| BbError::Config(format!("`{}` has no uuid to tag", user.name())))?;
-        if !uuids.contains(&uuid) {
-            uuids.push(uuid);
+        match users::uuid_user(name) {
+            // `uuid_user` only answers for a `{uuid}`, so it always has one.
+            Some(user) => {
+                let uuid = user.uuid.unwrap_or_default();
+                if !uuid.is_empty() && !uuids.contains(&uuid) {
+                    uuids.push(uuid);
+                }
+            }
+            None => names.push(name),
+        }
+    }
+    if !names.is_empty() {
+        let pool = users::load_user_pool(&ctx.client, &ctx.slug).await?;
+        for name in names {
+            let user = pool.resolve_for_write(name, &[])?;
+            let uuid = user
+                .uuid
+                .clone()
+                .ok_or_else(|| BbError::Config(format!("`{}` has no uuid to tag", user.name())))?;
+            if !uuids.contains(&uuid) {
+                uuids.push(uuid);
+            }
         }
     }
 
