@@ -17,12 +17,17 @@ fn bb(server: &MockServer) -> Command {
 }
 
 fn suggest(server: &MockServer) -> Command {
+    let mut cmd = suggest_human(server);
+    cmd.arg("--json");
+    cmd
+}
+
+fn suggest_human(server: &MockServer) -> Command {
     let mut cmd = bb(server);
     cmd.arg("pr")
         .arg("reviewers")
         .arg("suggest")
-        .arg("--acknowledge-private-data")
-        .arg("--json");
+        .arg("--acknowledge-private-data");
     cmd
 }
 
@@ -531,4 +536,540 @@ async fn reading_history_needs_an_explicit_acknowledgement() {
             .is_empty(),
         "no request may be made before the acknowledgement"
     );
+}
+
+async fn mount_one_maintained_file(server: &MockServer) {
+    mount_existing_context(server, "acme/widgets").await;
+    mount_pool(
+        server,
+        serde_json::json!([{ "user": { "uuid": "{dana}", "display_name": "Dana" } }]),
+    )
+    .await;
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            server,
+            "acme/widgets",
+            "tgt-sha",
+            path,
+            serde_json::json!([commit("{dana}", "Dana", "m1", "2026-08-20T10:00:00+00:00")]),
+            200,
+        )
+        .await;
+        mount_source_history(
+            server,
+            "acme/widgets",
+            "srcsha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+}
+
+/// The human view is what a person reads before choosing reviewers, and it is
+/// where the claims the report keeps apart have to stay apart.
+#[tokio::test]
+async fn human_output_names_the_subject_scan_and_the_verdict() {
+    let server = MockServer::start().await;
+    mount_one_maintained_file(&server).await;
+
+    let out = suggest_human(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("reviewer suggestions"), "{stdout}");
+    assert!(stdout.contains("#7"), "{stdout}");
+    assert!(stdout.contains("feature/x"), "{stdout}");
+    assert!(stdout.contains("main"), "{stdout}");
+    assert!(stdout.contains("files 2 scanned"), "{stdout}");
+    assert!(stdout.contains("Dana"), "{stdout}");
+    assert!(stdout.contains("CAN REVIEW"), "{stdout}");
+    assert!(stdout.contains("yes"), "{stdout}");
+}
+
+/// A fork states both repositories, because a reader who does not know the
+/// history came from elsewhere will misread the ranking.
+#[tokio::test]
+async fn human_output_names_both_repositories_for_a_fork() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "contrib/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgt-sha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+        mount_source_history(
+            &server,
+            "contrib/widgets",
+            "srcsha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+
+    let out = suggest_human(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("contrib/widgets"), "{stdout}");
+    assert!(stdout.contains("acme/widgets"), "{stdout}");
+    assert!(stdout.contains("no suggestions"), "{stdout}");
+}
+
+/// A prospective pair is not a pull request, so the header says what it is.
+#[tokio::test]
+async fn human_output_names_a_prospective_pair() {
+    let server = MockServer::start().await;
+    mount_revision(&server, "feature%2Fx", "srcsha").await;
+    mount_revision(&server, "main", "tgtsha").await;
+    mount_current_user(&server).await;
+    mount_pool(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/diffstat/feature%2Fx..main",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "new": { "path": "src/one.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgtsha",
+        "src/one.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "src/one.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+
+    let out = suggest_human(&server)
+        .args(["main", "feature/x"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("feature/x"), "{stdout}");
+    assert!(stdout.contains("main"), "{stdout}");
+    assert!(stdout.contains("no suggestions"), "{stdout}");
+}
+
+/// Partial history is a warning, not a footnote: a truncated read presented as
+/// exhaustive is how a real maintainer gets missed without anyone noticing.
+#[tokio::test]
+async fn human_output_warns_when_the_history_is_partial() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+    // One path reads clean, one is unreadable: partial, but not empty.
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgt-sha",
+        "src/lib.rs",
+        serde_json::json!([commit("{dana}", "Dana", "m1", "2026-08-20T10:00:00+00:00")]),
+        200,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "src/lib.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgt-sha",
+        "old/name.rs",
+        serde_json::json!([]),
+        404,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "old/name.rs",
+        serde_json::json!([]),
+        404,
+    )
+    .await;
+
+    let out = suggest_human(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("partial"), "{stderr}");
+    // The per-path reason is named, not swallowed.
+    assert!(stderr.contains("old/name.rs"), "{stderr}");
+}
+
+/// Every argument contract is settled before a single request goes out, so a bad
+/// invocation cannot half-read a repository.
+///
+/// `--pr` against a positional target is rejected by clap before `run` is
+/// reached; the guard inside `run` covers library callers, and is tested there.
+#[tokio::test]
+async fn the_argument_contracts_are_checked_before_any_request() {
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["--pr", "7", "--since", "nonsense"], "invalid --since"),
+        (
+            vec!["--since", "0d", "main", "feature/x"],
+            "--since must be between",
+        ),
+        (vec!["  "], "a target branch is required"),
+        (vec!["main", "  "], "source branch cannot be empty"),
+        (vec!["main", "main"], "source and target are both"),
+    ];
+    for (args, expected) in cases {
+        let server = MockServer::start().await;
+        let out = suggest(&server).args(&args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} was accepted");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "{args:?} made a request before failing: {stderr}"
+        );
+    }
+}
+
+/// A source repository Bitbucket will not name is not something to guess at: the
+/// old fallback read the target's history and called it the fork's.
+#[tokio::test]
+async fn an_unreadable_source_repository_is_refused() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 7,
+            "author": { "uuid": "{author}", "display_name": "Author" },
+            "source": {
+                "branch": { "name": "feature/x" },
+                "commit": { "hash": "srcsha" },
+                "repository": { "full_name": "not a slug" }
+            },
+            "destination": {
+                "branch": { "name": "main" },
+                "commit": { "hash": "tgt-sha" },
+                "repository": { "full_name": "acme/widgets" }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("source repository"), "{stderr}");
+}
+
+/// Without a pull request there is no endpoint to carry a revision, so the
+/// branches are resolved once here. An empty branch has no history to speak of.
+#[tokio::test]
+async fn an_empty_branch_has_no_history_to_suggest_from() {
+    let server = MockServer::start().await;
+    mount_revision(&server, "feature%2Fx", "srcsha").await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/diffstat/feature%2Fx..main",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "new": { "path": "src/one.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/commits/main"))
+        .and(query_param("pagelen", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = suggest(&server)
+        .args(["main", "feature/x"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no commits"), "{stderr}");
+}
+
+/// An unreadable pool must not discard the ranking; eligibility just becomes
+/// unknown rather than a verdict nobody earned.
+#[tokio::test]
+async fn an_unreadable_user_pool_leaves_eligibility_unknown() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    // Every pool endpoint fails hard, so no pool can be loaded at all.
+    for endpoint in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+    for file in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgt-sha",
+            file,
+            serde_json::json!([commit("{dana}", "Dana", "m1", "2026-08-20T10:00:00+00:00")]),
+            200,
+        )
+        .await;
+        mount_source_history(
+            &server,
+            "acme/widgets",
+            "srcsha",
+            file,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["suggestions"][0]["name"], "Dana");
+    assert_eq!(value["suggestions"][0]["eligibility"], "unknown");
+}
+
+/// A commit the report cannot attribute is skipped, not guessed at: no linked
+/// Bitbucket user, no uuid, an unparseable date, or one older than the window.
+/// None of those may become a suggestion, and none may abort the run.
+#[tokio::test]
+async fn a_commit_that_cannot_be_attributed_is_skipped() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+    let skip = serde_json::json!([
+        { "hash": "raw-only", "date": "2026-08-20T10:00:00+00:00", "author": { "raw": "Someone" } },
+        { "hash": "no-uuid", "date": "2026-08-20T10:00:00+00:00", "author": { "user": { "display_name": "Nameless" } } },
+        { "hash": "bad-date", "author": { "user": { "uuid": "{x}", "display_name": "Undated" } } },
+        { "hash": "too-old", "date": "2000-01-01T00:00:00+00:00", "author": { "user": { "uuid": "{y}", "display_name": "Ancient" } } }
+    ]);
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(&server, "acme/widgets", "tgt-sha", path, skip.clone(), 200).await;
+        mount_source_history(
+            &server,
+            "acme/widgets",
+            "srcsha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "unattributable commits must not fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["suggestions"], serde_json::json!([]));
+}
+
+/// Without `--source` the source branch is the current checkout's, which is the
+/// workflow a developer runs from a feature branch.
+#[tokio::test]
+async fn an_explicit_target_uses_the_checkout_branch_by_default() {
+    let project = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["init"],
+        vec!["symbolic-ref", "HEAD", "refs/heads/feature/checkout"],
+        vec![
+            "remote",
+            "add",
+            "origin",
+            "https://bitbucket.org/acme/widgets",
+        ],
+    ] {
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+    }
+    let server = MockServer::start().await;
+    mount_revision(&server, "feature%2Fcheckout", "srcsha").await;
+    mount_revision(&server, "main", "tgtsha").await;
+    mount_current_user(&server).await;
+    mount_pool(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/diffstat/feature%2Fcheckout..main",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "new": { "path": "src/one.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgtsha",
+        "src/one.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "src/one.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+
+    let out = suggest(&server)
+        .current_dir(project.path())
+        .args(["main"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["prospective"]["source"], "feature/checkout");
+}
+
+/// The prospective flow excludes the future author. If the account cannot be
+/// read, the command still runs — it just cannot drop anyone, and says so by
+/// leaving the field it would have filtered on empty.
+#[tokio::test]
+async fn a_future_author_lookup_failure_does_not_stop_the_report() {
+    for status in [404u16, 403] {
+        let server = MockServer::start().await;
+        mount_revision(&server, "feature%2Fx", "srcsha").await;
+        mount_revision(&server, "main", "tgtsha").await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&server)
+            .await;
+        mount_pool(&server, serde_json::json!([])).await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/repositories/acme/widgets/diffstat/feature%2Fx..main",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{ "new": { "path": "src/one.rs" } }]
+            })))
+            .mount(&server)
+            .await;
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgtsha",
+            "src/one.rs",
+            serde_json::json!([commit(
+                "{other}",
+                "Other",
+                "m1",
+                "2026-08-20T10:00:00+00:00"
+            )]),
+            200,
+        )
+        .await;
+        mount_source_history(
+            &server,
+            "acme/widgets",
+            "srcsha",
+            "src/one.rs",
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+
+        let out = suggest(&server)
+            .args(["main", "feature/x"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{status} on /user should not stop the report: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["suggestions"][0]["name"], "Other");
+    }
+}
+
+/// An authentication failure is never a partial answer: it stops the run.
+#[tokio::test]
+async fn an_expired_token_stops_the_report() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgt-sha",
+            path,
+            serde_json::json!([]),
+            401,
+        )
+        .await;
+    }
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "expected the auth exit code");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not authenticated"));
 }

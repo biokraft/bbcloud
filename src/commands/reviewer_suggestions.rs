@@ -47,7 +47,7 @@ struct ProspectiveIdentity {
     target_revision: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SuggestArgs {
     pub pr: Option<u64>,
     pub target: Option<String>,
@@ -723,5 +723,198 @@ impl PoolEligibility {
         } else {
             Eligibility::Unknown
         }
+    }
+}
+
+/// The window and eligibility rules are pure decisions, so they are pinned here
+/// rather than through five mocked HTTP round trips each. An accepted spelling
+/// that stops being accepted is a silent behaviour change; a rejected one that
+/// starts being accepted quietly widens a history read.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::users::Eligibility as PoolEligibility2;
+
+    #[test]
+    fn since_accepts_the_documented_spellings() {
+        for (value, days) in [
+            ("30d", 30),
+            // A bare number carries no unit, so it is read as days.
+            ("30", 30),
+            ("12w", 84),
+            ("6mo", 180),
+            ("6m", 180),
+            ("1y", 365),
+            ("2years", 730),
+            (" 45D ", 45),
+        ] {
+            assert_eq!(
+                parse_since(value).unwrap(),
+                Duration::days(days),
+                "unexpected window for `{value}`"
+            );
+        }
+    }
+
+    #[test]
+    fn since_rejects_what_it_cannot_bound() {
+        for value in [
+            "",
+            "d",
+            "abc",
+            "30x",
+            "0d",
+            "3651d",
+            "18446744073709551615y",
+        ] {
+            assert!(
+                parse_since(value).is_err(),
+                "`{value}` should not parse into a window"
+            );
+        }
+    }
+
+    #[test]
+    fn eligibility_separates_proof_of_access_from_a_missing_answer() {
+        let complete = PoolEligibility {
+            explicit: HashSet::from(["{yes}".to_string()]),
+            known: HashSet::from(["{maybe}".to_string()]),
+            complete: true,
+        };
+        assert_eq!(complete.for_uuid("{yes}"), Eligibility::True);
+        // Read in full, and not in it: that is a real no.
+        assert_eq!(complete.for_uuid("{absent}"), Eligibility::False);
+        // In the pool, but only as a workspace member: no proof of access.
+        assert_eq!(complete.for_uuid("{maybe}"), Eligibility::Unknown);
+
+        let partial = PoolEligibility {
+            explicit: HashSet::new(),
+            known: HashSet::new(),
+            complete: false,
+        };
+        // An unreadable pool cannot rule anyone out.
+        assert_eq!(partial.for_uuid("{absent}"), Eligibility::Unknown);
+    }
+
+    #[test]
+    fn pool_eligibility_ignores_entries_without_a_uuid() {
+        let pool = UserPool {
+            entries: vec![crate::users::PoolEntry {
+                user: User {
+                    uuid: None,
+                    account_id: Some("acct-1".into()),
+                    display_name: Some("Nameless".into()),
+                    nickname: None,
+                },
+                sources: vec!["workspace".into()],
+                eligibility: PoolEligibility2::Explicit,
+            }],
+            incomplete: vec![],
+        };
+        let eligibility = PoolEligibility::from_pool(&pool);
+        assert!(eligibility.explicit.is_empty());
+        assert!(eligibility.known.is_empty());
+        // A complete pool with nobody in it means nobody can be tagged.
+        assert!(eligibility.complete);
+    }
+
+    /// clap rejects `--pr` alongside a positional target, but `run` is public
+    /// and a library caller can hand it both. The guard has to hold on its own.
+    #[tokio::test]
+    async fn run_refuses_an_ambiguous_or_empty_subject() {
+        let server = wiremock::MockServer::start().await;
+        let ctx = Ctx {
+            client: Client::new(
+                crate::credentials::Credentials {
+                    email: "dev@example.com".into(),
+                    token: crate::secret::SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: crate::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: Format::Json,
+        };
+        let base = SuggestArgs {
+            pr: None,
+            target: None,
+            source: None,
+            since: "12mo".into(),
+            limit: 5,
+            file_limit: 25,
+            acknowledge_private_data: true,
+        };
+        // Neither a pull request nor a target.
+        let err = run(&ctx, base.clone()).await.unwrap_err();
+        assert!(err.to_string().contains("either --pr"), "{err}");
+
+        // Both a pull request and a target.
+        let err = run(
+            &ctx,
+            SuggestArgs {
+                pr: Some(7),
+                target: Some("main".into()),
+                ..base.clone()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("either --pr"), "{err}");
+
+        // A prospective target has no use for an explicit source alongside a pr.
+        let err = run(
+            &ctx,
+            SuggestArgs {
+                pr: Some(7),
+                source: Some("feature/x".into()),
+                ..base
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--source is only valid"), "{err}");
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "a rejected subject must not have touched the api"
+        );
+    }
+
+    /// Bitbucket returns a hash for every commit, so `commit_key` only falls
+    /// back when a response is malformed. The fallback is deliberately
+    /// approximate and errs toward over-counting: two hashless commits sharing
+    /// a date and a summary ("fix typo" twice in one day) must not collapse
+    /// into one, because that would silently under-count a real contributor.
+    /// The cost is that one hashless commit spanning N files counts N times.
+    #[test]
+    fn a_hashless_commit_is_counted_once_per_path_not_merged() {
+        let commit = Commit {
+            hash: None,
+            summary: None,
+            author: None,
+            date: Some("2026-08-20T10:00:00+00:00".into()),
+        };
+        // Stable, and never empty: the same (commit, path) is the same evidence.
+        let key = commit_key(&commit, "src/lib.rs");
+        assert!(!key.is_empty());
+        assert_eq!(key, commit_key(&commit, "src/lib.rs"));
+        // Two files of the same commit stay distinguishable rather than merging.
+        assert_ne!(key, commit_key(&commit, "src/main.rs"));
+
+        // A real hash wins outright and is path-independent: one commit
+        // touching many files is still one commit.
+        let hashed = Commit {
+            hash: Some("abc123".into()),
+            summary: None,
+            author: None,
+            date: Some("2026-08-20T10:00:00+00:00".into()),
+        };
+        assert_eq!(commit_key(&hashed, "src/lib.rs"), "abc123");
+        assert_eq!(commit_key(&hashed, "src/main.rs"), "abc123");
     }
 }

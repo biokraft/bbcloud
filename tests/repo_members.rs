@@ -168,3 +168,77 @@ async fn authentication_failure_stops_before_later_pools() {
 
     bb(&server).args(["repo", "members"]).assert().code(2);
 }
+
+/// The human table is how a person chooses reviewers, so it has to say what the
+/// JSON says: which pools a row came from, and whether repository access is
+/// proven or merely possible.
+#[tokio::test]
+async fn human_output_labels_sources_and_repository_access() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{m}", "display_name": "Member Only", "nickname": "member" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "user": { "uuid": "{d}", "display_name": "Direct Grant" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server).args(["repo", "members"]).output().unwrap();
+    assert!(out.status.success(), "view failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("REPOSITORY ACCESS"), "{stdout}");
+    assert!(stdout.contains("Member Only"), "{stdout}");
+    // A workspace member is not proof of access to this repository.
+    assert!(stdout.contains("unknown"), "{stdout}");
+    // A direct permission is.
+    assert!(stdout.contains("explicit"), "{stdout}");
+    assert!(stdout.contains("Direct Grant"), "{stdout}");
+}
+
+/// A partial pool is told to the reader in words, not left to be inferred from
+/// a row count that looks complete.
+#[tokio::test]
+async fn human_output_names_the_pools_it_could_not_read() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server).args(["repo", "members"]).output().unwrap();
+    assert!(out.status.success(), "view failed: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not read some user pools"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("workspace"), "{stderr}");
+    assert!(stderr.contains("repository"), "{stderr}");
+}

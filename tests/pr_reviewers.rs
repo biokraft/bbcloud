@@ -252,3 +252,30 @@ async fn a_missing_pr_exits_three() {
         .assert()
         .code(3);
 }
+
+/// `bb pr reviewers` is a group, and neither shape is a valid call on its own.
+/// The bare call says what to pass instead, because an agent that guessed wrong
+/// should be corrected rather than left guessing again.
+///
+/// The id-before-subcommand shape is rejected by clap, so the guard in `main`
+/// that names the right flag is a defensive default rather than a live path.
+#[tokio::test]
+async fn a_bare_reviewers_call_says_what_it_needs() {
+    let server = MockServer::start().await;
+
+    let out = bb(&server).args(["pr", "reviewers"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("add") && stderr.contains("suggest"),
+        "{stderr}"
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "a malformed invocation must not reach the api"
+    );
+}

@@ -449,3 +449,92 @@ async fn both_lookups_refused_with_no_match_still_errors_normally() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+/// A 401 is not an authorization gap to degrade around: the token is wrong, and
+/// every later pool would be read with the same wrong token. Whichever pool
+/// answers first, the command stops with the authentication exit code.
+#[tokio::test]
+async fn a_401_on_any_pool_stops_immediately() {
+    for failing in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+    ] {
+        let server = MockServer::start().await;
+        let mut pools = vec![
+            (
+                "/workspaces/acme/members",
+                "/repositories/acme/widgets/permissions-config/users",
+            ),
+            (
+                "/repositories/acme/widgets/permissions-config/users",
+                "/repositories/acme/widgets/effective-default-reviewers",
+            ),
+        ];
+        let (first, second) = pools.remove(0);
+        let (first, second) = if failing == first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+        Mock::given(method("GET"))
+            .and(path(first))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(second))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BbError::Auth), "{failing}: got {err:?}");
+    }
+}
+
+/// A pool that cannot be read is named in `partial`, so a caller can tell an
+/// incomplete answer from a complete one. Default reviewers are a pool too.
+#[tokio::test]
+async fn a_403_on_default_reviewers_is_reported_as_partial() {
+    let server = MockServer::start().await;
+    mount_members(&server, serde_json::json!([])).await;
+    mount_permissions_config(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+        .await
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("nobody"), "{message}");
+}
+
+/// An empty name is a caller mistake, and naming it plainly is more useful than
+/// an empty search that reports every user as a candidate.
+#[tokio::test]
+async fn an_empty_name_is_rejected_before_any_lookup() {
+    let server = MockServer::start().await;
+    let err = resolve_user(&client_for(&server.uri()), &slug(), "   ", &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, BbError::Config(_)), "got {err:?}");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "an empty name must not spend a pool lookup"
+    );
+}
