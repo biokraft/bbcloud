@@ -272,21 +272,25 @@ bb pr reviewers suggest --pr 42 --acknowledge-private-data --json  # file-owner 
 bb pr reviewers suggest main --acknowledge-private-data --json      # prospective for a target
 bb pr reviewers add 42 dana,ash --json  # tag reviewers, comma-separated
 bb pr reviewers remove 42 ash --json       # untag a reviewer
-bb repo members --json                      # names, uuids, and resolver-pool sources
+bb repo reviewers --json                    # names, uuids, and resolver-pool sources
 ```
 
 Names match case-insensitively as a substring of display name or nickname, against the
 repository's user list plus its effective default reviewers. An exact match wins over a longer
 substring match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when
 ambiguous. Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
-`bb repo members --json` exposes the same resolver pool and reports any partial sources.
+`bb repo reviewers --json` exposes the same resolver pool and reports any partial sources. It is not
+called `members` because workspace membership and default-reviewer status say nothing about access to
+*this* repository, so a name it returns is not automatically taggable.
 `bb pr reviewers suggest` is read-only and never calls an add or create endpoint. It needs
 `--acknowledge-private-data`: it reads private file paths, colleague names, dates and account ids
 out of commit history, so say what those categories are and get a yes before running it. It reports
 `target_commits` (who maintains the changed files) and `source_commits` (who else worked on this
-branch) as separate claims, and each suggestion's `eligibility` as `true`, `false`, or `unknown` —
+branch) as separate claims, and each suggestion's `can_review` as `yes`, `no`, or `unknown` —
 file ownership is not repository access. Show the `commit_count`, `files`, `last_commit_on`, and
-`eligibility` evidence to the user before asking which people to select.
+`can_review` evidence to the user before asking which people to select. When `history_complete` is
+`false`, say the scan was partial and quote `files_skipped` and `paths_skipped` rather than
+presenting a truncated list as the full set of people who could review.
 
 Every name is resolved before any write, so one bad name in `add 42 a,b` writes nothing. Adding
 someone already tagged makes no write and exits 0. Removing someone not tagged is an error, exit
@@ -350,7 +354,7 @@ Both filters match a substring, and ignore case.
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
-| `bb pr reviewers suggest --pr <id>` / `suggest <target> [source]` (needs `--acknowledge-private-data`) | `{pull_request\|prospective,since,files_scanned,files_skipped,history_complete,errors[],suggestions[{name,uuid,commit_count,target_commits,source_commits,files,last_commit_on,eligibility}]}` |
+| `bb pr reviewers suggest --pr <id>` / `suggest <target> [source]` (needs `--acknowledge-private-data`) | `{pull_request\|prospective,since,files_scanned,files_skipped,paths_scanned,paths_skipped,history_complete,errors[],suggestions[{name,uuid,commit_count,target_commits,source_commits,files,last_commit_on,can_review}]}` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
 | `bb pr create <target> [source] … [--description-stdin]` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
@@ -360,7 +364,7 @@ Both filters match a substring, and ignore case.
 | `bb branch list …` | `[{branch,user,updated}]` |
 | `bb project list` | the projects in a workspace |
 | `bb repo list [--project KEY]` | repositories with identity, URLs, and timestamps |
-| `bb repo members` | `{users,partial}` for the reviewer resolver pools |
+| `bb repo reviewers` | `{users,partial}` for the reviewer resolver pools |
 | `bb repo create <name> --project KEY` | create a repository, private by default |
 | `bb auth status` | `{email,token,account}`, token redacted |
 | `bb browse --print [--pr <id>\|--branches]` | `{url}` |

@@ -72,14 +72,18 @@ Use the target branch from Step 1, not a hardcoded `main`. The command reads the
 diffstat, then reads two distinct populations: `target_commits`, who maintains the changed files on
 the target branch, and `source_commits`, who else worked on this branch and is not already merged.
 Present them as what they are — "maintains this file" and "worked on this branch" are different
-claims, and the report keeps them apart. It also reports skipped files, per-path errors, and
-`history_complete`; never hide those facts.
+claims, and the report keeps them apart. A renamed file is read under both its paths and a deleted
+file under the path it had, so a removal is never silently invisible.
 
-`eligibility` is separate from all of it, because owning a file is not access to the repository.
-`true` means the person is in this repository's permission configuration, `false` means the user
-pool was read in full and they are not in it, `unknown` means no complete pool was available.
-Never present an `unknown` or `false` row as a reviewer who can be tagged; present it as a name and
-let the user decide.
+It also reports the scan honestly: `files_scanned`/`files_skipped` count changed files,
+`paths_scanned`/`paths_skipped` count distinct paths, and `history_complete` is `false` whenever
+anything was cut. Pass those facts on; never present a partial scan as a complete one.
+
+`can_review` is separate from all of it, because owning a file is not access to the repository.
+`yes` means the person is in this repository's permission configuration, `no` means the user pool
+was read in full and they are not in it, `unknown` means no complete pool was available. Never
+present an `unknown` or `no` row as a reviewer who can be tagged; present it as a name and let the
+user decide.
 
 The command excludes the pull-request author and current reviewers, and in prospective mode the
 authenticated user, since Bitbucket rejects a pull request's author as a reviewer. It does not
@@ -89,17 +93,20 @@ the user selects people.
 ## Step 3 — resolve those names against Bitbucket
 
 Suggestions already carry exact UUIDs. If the user names someone else, use
-`bb repo members --json` to resolve that name against the same workspace, repository-permission,
+`bb repo reviewers --json` to resolve that name against the same workspace, repository-permission,
 and effective-default-reviewer pools used by reviewer resolution:
 
 ```bash
-bb repo members -R <workspace>/<repo> --json
+bb repo reviewers -R <workspace>/<repo> --json
 ```
 
 Use each returned `name`, `nickname`, and `uuid` to match the Git candidates. `partial` tells you
 which pools could not be read; never present those results as complete. A candidate with no
 plausible match goes under **could not be mapped** with the Git name. If a name is ambiguous,
 keep the candidate unselected and let the user choose a UUID; do not guess.
+
+The command is `repo reviewers`, not `repo members`, on purpose: two of its three sources say
+nothing about access to this repository, so a name it returns is not automatically taggable.
 
 `eligibility` is `explicit` when the person is in this repository's own permission configuration
 and `unknown` when they come only from workspace membership or default-reviewer status. Only an
