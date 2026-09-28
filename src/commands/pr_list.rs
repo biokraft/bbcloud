@@ -198,16 +198,17 @@ fn needs_user_pool(query: Option<&str>) -> bool {
     query.is_some_and(|value| value != "@me" && !(value.starts_with('{') && value.ends_with('}')))
 }
 
-fn resolve_uuid(pool: Option<&UserPool>, query: &str) -> Result<Option<String>> {
-    if let Some(user) = uuid_user(query) {
-        return Ok(user.uuid);
-    }
-    match pool {
-        Some(pool) => Ok(pool.resolve(query, &[])?.uuid),
-        None => Err(BbError::Config(
-            "user name could not be resolved without a user pool".into(),
-        )),
-    }
+/// Resolves a reviewer or author **name** to a uuid.
+///
+/// The pool is required rather than optional because a name cannot be resolved
+/// without one. An `Option` here would have carried an error arm for a state the
+/// caller cannot produce, which is a way of saying "this can fail" about
+/// something that cannot. A `{uuid}` never reaches this function: the caller
+/// returns it directly, since it is exact and needs no pool.
+fn resolve_uuid(pool: &UserPool, query: &str) -> Result<String> {
+    pool.resolve(query, &[])?
+        .uuid
+        .ok_or_else(|| BbError::Config(format!("`{query}` has no uuid to match on")))
 }
 
 async fn my_uuid(ctx: &Ctx) -> Result<Option<String>> {
@@ -249,10 +250,21 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         } else {
             None
         };
-    let reviewer_uuid = match args.reviewer.as_deref() {
-        Some(name) => resolve_uuid(pool.as_ref(), name)?,
-        None => None,
+
+    // A `{uuid}` is exact and needs no pool. Any other value is a name, and a
+    // name filter is exactly what loaded the pool — so the two never overlap
+    // and the absent-filter case is the only way out of here with nothing.
+    let resolve_filter = |query: Option<&str>| -> Result<Option<String>> {
+        let Some(query) = query else { return Ok(None) };
+        if let Some(uuid) = uuid_user(query).and_then(|user| user.uuid) {
+            return Ok(Some(uuid));
+        }
+        match (pool.as_ref(), query) {
+            (Some(pool), _) => Ok(Some(resolve_uuid(pool, query)?)),
+            (None, _) => Ok(None),
+        }
     };
+    let reviewer_uuid = resolve_filter(args.reviewer.as_deref())?;
 
     // `GET /user` must happen at most once per invocation, so every flag that
     // needs "who am I" (`--author @me`, `--needs-my-review`, `--review-state`)
@@ -264,10 +276,10 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
         None
     };
 
-    let author_uuid = match args.author.as_deref() {
-        Some("@me") => me.clone(),
-        Some(name) => resolve_uuid(pool.as_ref(), name)?,
-        None => None,
+    let author_uuid = if author_is_me {
+        me.clone()
+    } else {
+        resolve_filter(args.author.as_deref())?
     };
 
     let want_draft = args.state.eq_ignore_ascii_case("draft");
