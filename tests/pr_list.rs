@@ -970,3 +970,131 @@ async fn empty_result_with_build_prints_only_an_empty_json_array() {
 
     assert_eq!(text.trim(), "[]");
 }
+/// A limit of zero asks for no rows, so nothing is fetched. The early return
+/// must come before the name filters, which would otherwise spend a pool lookup
+/// for rows that are about to be discarded.
+#[tokio::test]
+async fn a_zero_limit_fetches_nothing() {
+    let server = MockServer::start().await;
+    for endpoint in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+        "/repositories/acme/widgets/pullrequests",
+        "/user",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })),
+            )
+            .mount(&server)
+            .await;
+    }
+
+    let out = bb(&server)
+        .args(["pr", "list", "--limit", "0", "--author", "dana", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "list failed: {out:?}");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value, serde_json::json!([]));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "--limit 0 should not touch the api at all"
+    );
+}
+
+/// `--author {uuid}` and `--reviewer {uuid}` are already exact, so they are used
+/// without a pool lookup. `--author @me` is the caller's own account.
+#[tokio::test]
+async fn an_exact_uuid_filter_needs_no_user_pool() {
+    let server = MockServer::start().await;
+    mount_list(&server, serde_json::json!([pr_with_reviewers()])).await;
+    for endpoint in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+        "/user",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+
+    let out = bb(&server)
+        .args(["pr", "list", "--author", "{sean}", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "list failed: {out:?}");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 1);
+}
+
+/// A `{uuid}` is exact, and passing it through unchanged is what stops a
+/// malformed one from being read as a name.
+#[tokio::test]
+async fn a_uuid_reviewer_filter_is_never_read_as_a_name() {
+    let server = MockServer::start().await;
+    mount_list(&server, serde_json::json!([pr_with_reviewers()])).await;
+    for endpoint in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+
+    let out = bb(&server)
+        .args(["pr", "list", "--reviewer", "{a}", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "list failed: {out:?}");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 1);
+}
+
+/// A page that points back at itself would loop forever. The walk stops as soon
+/// as a URL repeats, and returns what it has rather than hanging.
+///
+/// The guard keys on the URL as written, so an absolute `next` does not match
+/// the relative first request and the page is fetched once more before the
+/// repeat is caught. The point of the test is that the run ends at all.
+#[tokio::test]
+async fn a_pagination_loop_terminates_with_what_it_has() {
+    let server = MockServer::start().await;
+    let first = format!(
+        "{}/repositories/acme/widgets/pullrequests?pagelen=50",
+        server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .and(query_param("pagelen", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "id": 1, "source": { "branch": { "name": "feature/a" } } }],
+            // Points at itself: the next fetch is a URL already seen.
+            "next": first
+        })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "list", "--limit", "50", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "list failed: {out:?}");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Terminated instead of following the cycle indefinitely.
+    let rows = value.as_array().unwrap().len();
+    assert!(rows < 10, "pagination looped: {rows} rows");
+}

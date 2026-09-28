@@ -495,3 +495,85 @@ mod tests {
         assert!(line.contains("Dana"), "got: {line}");
     }
 }
+/// clap rejects these flag pairs on the command line, but `create` is public and
+/// a library caller can build an `CreateArgs` that trips them. The guards have
+/// to hold on their own, and they must hold before the first request goes out.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod create_guard_tests {
+    use super::*;
+    use crate::api::Client;
+    use crate::credentials::Credentials;
+    use crate::output::Format;
+    use crate::secret::SecretString;
+
+    fn args() -> CreateArgs {
+        CreateArgs {
+            target: "main".into(),
+            source: Some("feature/x".into()),
+            title: Some("t".into()),
+            description: None,
+            description_stdin: false,
+            no_default_reviewers: false,
+            reviewer: None,
+            interactive: false,
+            web: false,
+            close_source_branch: false,
+        }
+    }
+
+    async fn ctx(server: &wiremock::MockServer) -> Ctx {
+        Ctx {
+            client: Client::new(
+                Credentials {
+                    email: "dev@example.com".into(),
+                    token: SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: crate::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: Format::Json,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_description_cannot_arrive_from_two_places_at_once() {
+        let server = wiremock::MockServer::start().await;
+        let ctx = ctx(&server).await;
+        let err = create(
+            &ctx,
+            CreateArgs {
+                description: Some("typed".into()),
+                description_stdin: true,
+                ..args()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("cannot be used together"), "{err}");
+
+        // Piped prose and the interactive editor are two different answers to
+        // the same question, and neither can be taken as the other's.
+        let err = create(
+            &ctx,
+            CreateArgs {
+                description_stdin: true,
+                interactive: true,
+                ..args()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--interactive"), "{err}");
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "a rejected combination must not have opened a pull request"
+        );
+    }
+}
