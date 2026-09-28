@@ -1073,3 +1073,201 @@ async fn an_expired_token_stops_the_report() {
     assert_eq!(out.status.code(), Some(2), "expected the auth exit code");
     assert!(String::from_utf8_lossy(&out.stderr).contains("not authenticated"));
 }
+
+/// Bitbucket omits the repository on an endpoint that is the same repository
+/// the request was made against. Falling back to it is correct here — but only
+/// because the caller passed the repository the request was made to.
+#[tokio::test]
+async fn an_endpoint_without_a_repository_falls_back_to_the_requested_one() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 7,
+            "author": { "uuid": "{author}", "display_name": "Author" },
+            "source": {
+                "branch": { "name": "feature/x" },
+                "commit": { "hash": "srcsha" }
+            },
+            "destination": {
+                "branch": { "name": "main" },
+                "commit": { "hash": "tgt-sha" }
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/diffstat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "new": { "path": "src/one.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+    mount_pool(&server, serde_json::json!([])).await;
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgt-sha",
+        "src/one.rs",
+        serde_json::json!([commit("{dana}", "Dana", "m1", "2026-08-20T10:00:00+00:00")]),
+        200,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "src/one.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["pull_request"]["source_repository"], "acme/widgets");
+    assert_eq!(value["suggestions"][0]["name"], "Dana");
+}
+
+/// A commit author's display name can arrive on a later commit than the one that
+/// first introduced them to the report. The name must not be lost.
+#[tokio::test]
+async fn a_display_name_arriving_later_is_still_reported() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+    let values = serde_json::json!([
+        { "hash": "m1", "date": "2026-08-20T10:00:00+00:00",
+          "author": { "user": { "uuid": "{dana}" } } },
+        { "hash": "m2", "date": "2026-08-21T10:00:00+00:00",
+          "author": { "user": { "uuid": "{dana}", "display_name": "Dana Fischer" } } }
+    ]);
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgt-sha",
+            path,
+            values.clone(),
+            200,
+        )
+        .await;
+        mount_source_history(
+            &server,
+            "acme/widgets",
+            "srcsha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["suggestions"][0]["name"], "Dana Fischer");
+}
+
+/// "Can review" has three answers, and a human reader must be able to tell
+/// "no" from "nobody could find out". Here one pool is refused and the person
+/// is in none of the readable ones, so the answer is genuinely unknowable.
+#[tokio::test]
+async fn the_human_table_says_unknown_when_no_pool_could_be_read() {
+    let server = MockServer::start().await;
+    mount_existing_context(&server, "acme/widgets").await;
+    // One pool refused, the rest readable: the person is present but the
+    // answer is not knowable, so the table must not claim a yes or a no.
+    Mock::given(method("GET"))
+        .and(path("/workspaces/acme/members"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/permissions-config/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+    for path in ["src/lib.rs", "old/name.rs"] {
+        mount_target_history(
+            &server,
+            "acme/widgets",
+            "tgt-sha",
+            path,
+            serde_json::json!([commit(
+                "{stranger}",
+                "Stranger",
+                "m1",
+                "2026-08-20T10:00:00+00:00"
+            )]),
+            200,
+        )
+        .await;
+        mount_source_history(
+            &server,
+            "acme/widgets",
+            "srcsha",
+            path,
+            serde_json::json!([]),
+            200,
+        )
+        .await;
+    }
+
+    let out = suggest_human(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("unknown"), "{stdout}");
+}
+
+/// A server error on the account lookup is neither "not the author" nor a
+/// partial answer; it is a failure, and it must not be read as either.
+#[tokio::test]
+async fn a_server_error_on_the_account_lookup_stops_the_prospective_report() {
+    let server = MockServer::start().await;
+    mount_revision(&server, "feature%2Fx", "srcsha").await;
+    mount_revision(&server, "main", "tgtsha").await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/acme/widgets/diffstat/feature%2Fx..main",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "new": { "path": "src/one.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+
+    let out = suggest(&server)
+        .args(["main", "feature/x"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("500"));
+}
