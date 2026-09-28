@@ -1055,3 +1055,172 @@ mod partition_tests {
         assert!(inline.is_empty());
     }
 }
+
+/// The API surface a library caller reaches has no clap in front of it, so the
+/// guards and the compatibility wrapper are pinned directly.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod view_api_tests {
+    use super::*;
+    use crate::api::Client;
+    use crate::credentials::Credentials;
+    use crate::repo::RepoSlug;
+    use crate::secret::SecretString;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ctx(server: &MockServer) -> Ctx {
+        Ctx {
+            client: Client::new(
+                Credentials {
+                    email: "dev@example.com".into(),
+                    token: SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: RepoSlug::parse("acme/widgets").unwrap(),
+            format: crate::output::Format::Json,
+        }
+    }
+
+    async fn mount(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "title": "t", "author": { "display_name": "Me" },
+                "source": { "branch": { "name": "feature/x" } },
+                "destination": { "branch": { "name": "main" } },
+                "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/7" } }
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{ "id": 1, "content": { "raw": "hi" }, "user": { "display_name": "Alice" } }]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// The four-argument wrapper is what existing library callers use; it must
+    /// still render the same thing the option-taking path does.
+    #[tokio::test]
+    async fn the_compatibility_wrapper_still_renders() {
+        let server = MockServer::start().await;
+        mount(&server).await;
+        view(&ctx(&server), 7, false, false).await.unwrap();
+    }
+
+    /// `--metadata-only` answers a different question than the flags it clashes
+    /// with, so combining them is an error rather than a silent precedence rule.
+    #[tokio::test]
+    async fn metadata_only_refuses_the_flags_it_cannot_honour() {
+        let server = MockServer::start().await;
+        for extra in [
+            ViewArgs {
+                comments_only: true,
+                ..Default::default()
+            },
+            ViewArgs {
+                unresolved: true,
+                ..Default::default()
+            },
+        ] {
+            let err = view_with_options(
+                &ctx(&server),
+                ViewArgs {
+                    id: 7,
+                    metadata_only: true,
+                    ..extra
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("--metadata-only"), "{err}");
+        }
+    }
+}
+
+/// The thread walk is the part of `pr view` that decides which comments a
+/// reviewer still has to answer for, so its edges are pinned here rather than
+/// only through the shapes the api is supposed to send.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod thread_tests {
+    use super::*;
+    use crate::api::models::{CommentParent, Inline};
+
+    fn comment(id: u64, parent: Option<u64>, resolved: bool) -> Comment {
+        Comment {
+            id,
+            content: None,
+            user: None,
+            created_on: None,
+            inline: Some(Inline {
+                path: Some("src/lib.rs".into()),
+                from: None,
+                to: Some(1),
+            }),
+            parent: parent.map(|id| CommentParent { id }),
+            deleted: false,
+            resolution: resolved.then(|| serde_json::json!({})),
+            pending: false,
+        }
+    }
+
+    fn roots(comments: Vec<Comment>) -> HashMap<u64, u64> {
+        let by_id: HashMap<u64, &Comment> = comments.iter().map(|c| (c.id, c)).collect();
+        comments
+            .iter()
+            .map(|c| {
+                let (root_id, _) = thread_root(c, &by_id);
+                (c.id, root_id)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_nested_reply_reaches_the_top_of_its_thread() {
+        let roots = roots(vec![
+            comment(1, None, false),
+            comment(2, Some(1), false),
+            comment(3, Some(2), false),
+            comment(4, Some(3), false),
+        ]);
+        assert_eq!(roots[&1], 1);
+        assert_eq!(roots[&2], 1);
+        assert_eq!(roots[&3], 1);
+        assert_eq!(roots[&4], 1);
+    }
+
+    /// A cycle would otherwise loop forever on data the api should never send.
+    /// Returning a self-root keeps the walk finite and the comment visible.
+    #[test]
+    fn a_parent_cycle_terminates_instead_of_hanging() {
+        let comments = [comment(1, Some(2), false), comment(2, Some(1), false)];
+        let by_id: HashMap<u64, &Comment> = comments.iter().map(|c| (c.id, c)).collect();
+        let (root_id, _) = thread_root(&comments[0], &by_id);
+        assert!(root_id == 1 || root_id == 2, "cycle root was {root_id}");
+    }
+
+    /// A reply whose parent is not in the page cannot be traced further. It is
+    /// treated as its own root rather than dropped, so the comment is still
+    /// reported and still counted.
+    #[test]
+    fn a_reply_to_an_absent_parent_is_still_reported() {
+        let comments = vec![comment(1, None, false), comment(2, Some(99), false)];
+        let roots = roots(comments);
+        assert_eq!(roots[&2], 2);
+
+        let (general, inline, unresolved) = partition_with_summary(
+            vec![comment(1, None, false), comment(2, Some(99), false)],
+            true,
+        );
+        assert!(general.is_empty());
+        assert_eq!(inline.len(), 2);
+        // The orphaned reply counts as its own open thread, not a silent gap.
+        assert_eq!(unresolved, 2);
+    }
+}

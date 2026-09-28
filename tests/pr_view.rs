@@ -449,6 +449,183 @@ async fn view_exposes_pending_comments() {
         .stdout(contains("[pending]"));
 }
 
+/// `--build` in human mode is a table of checks, and the rollup names the
+/// state a reader acts on.
+#[tokio::test]
+async fn human_build_section_renders_the_check_table() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "key": "PIPE", "name": "Pipeline", "state": "FAILED", "url": "https://ci/1" }]
+        })))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "view", "7", "--build"])
+        .assert()
+        .success()
+        .stdout(contains("build"))
+        .stdout(contains("state: FAILED"))
+        .stdout(contains("PIPE"))
+        .stdout(contains("Pipeline"));
+}
+
+/// A pull request with no checks is not a passing one, so the section says so
+/// rather than printing an empty table.
+#[tokio::test]
+async fn human_build_section_says_so_when_there_are_no_checks() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "view", "7", "--build"])
+        .assert()
+        .success()
+        .stdout(contains("no build statuses"));
+}
+
+#[tokio::test]
+async fn human_conflicts_section_renders_the_conflict_table() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/conflicts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "path": "src/lib.rs", "scenario": "content", "message": "both changed" }]
+        })))
+        .mount(&server)
+        .await;
+
+    bb(&server)
+        .args(["pr", "view", "7", "--conflicts"])
+        .assert()
+        .success()
+        .stdout(contains("conflicts"))
+        .stdout(contains("src/lib.rs"))
+        .stdout(contains("both changed"));
+}
+
+#[tokio::test]
+async fn human_conflicts_section_says_none_when_the_branch_is_clean() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/conflicts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--conflicts"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("none"),
+        "a clean merge should say so: {stdout}"
+    );
+}
+
+/// `--metadata-only` promises the pull request without its comments, so the
+/// human path must not print comment headings at all.
+#[tokio::test]
+async fn metadata_only_omits_the_comment_sections_from_human_output() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments(&server).await;
+
+    let out = bb(&server)
+        .args(["pr", "view", "7", "--metadata-only"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "view failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("fix the thing"), "header missing: {stdout}");
+    assert!(
+        !stdout.contains("general comments") && !stdout.contains("inline comments"),
+        "metadata-only printed comment sections: {stdout}"
+    );
+    assert!(
+        !stdout.contains("general remark"),
+        "metadata-only printed a comment body: {stdout}"
+    );
+}
+
+/// The human path states how many threads still need an answer, and labels the
+/// inline section accordingly.
+#[tokio::test]
+async fn human_output_counts_the_unresolved_threads() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(
+        &server,
+        serde_json::json!({
+            "values": [
+                {
+                    "id": 900,
+                    "content": { "raw": "open point" },
+                    "user": { "display_name": "Reviewer" },
+                    "created_on": "2026-08-04T10:00:00+00:00",
+                    "inline": { "path": "src/lib.rs", "to": 3 }
+                },
+                {
+                    "id": 901,
+                    "content": { "raw": "resolved point" },
+                    "user": { "display_name": "Reviewer" },
+                    "created_on": "2026-08-04T11:00:00+00:00",
+                    "inline": { "path": "src/main.rs", "to": 9 },
+                    "resolution": {}
+                }
+            ]
+        }),
+    )
+    .await;
+
+    bb(&server)
+        .args(["pr", "view", "7", "--unresolved"])
+        .assert()
+        .success()
+        .stdout(contains("unresolved threads: 1"))
+        .stdout(contains("inline comments (unresolved)"))
+        .stdout(contains("open point"));
+}
+
+/// Without `--unresolved` the heading is the plain one, so a reader can tell the
+/// two views apart.
+#[tokio::test]
+async fn the_inline_heading_drops_the_unresolved_qualifier_by_default() {
+    let server = MockServer::start().await;
+    mock_pr_and_comments_with(&server, comments_body()).await;
+
+    bb(&server)
+        .args(["pr", "view", "7"])
+        .assert()
+        .success()
+        .stdout(contains("inline comments\n"))
+        .stdout(contains("src/lib.rs"));
+}
+
+/// `--metadata-only` answers a different question than `--comments-only` and
+/// `--unresolved`; combining them is a caller mistake, not a silent precedence.
+#[tokio::test]
+async fn metadata_only_rejects_the_flags_it_cannot_honour() {
+    for extra in [["--comments-only"], ["--unresolved"]] {
+        let server = MockServer::start().await;
+        let mut cmd = bb(&server);
+        cmd.args(["pr", "view", "7", "--metadata-only"]).args(extra);
+        let out = cmd.output().unwrap();
+        assert!(!out.status.success(), "{extra:?} was accepted");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("--metadata-only"), "{extra:?}: {stderr}");
+    }
+}
+
 // NOTE: the brief's fourth test — an inline comment with neither path nor
 // line, expecting the dash fallback at pr_comments.rs:135 — is not included.
 // `Comment::is_inline()` (src/api/models.rs:110-114) only classifies a
