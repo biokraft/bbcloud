@@ -637,34 +637,51 @@ mod description_tests {
         assert!(err.to_string().contains("piped or redirected"), "{err}");
     }
 
-    /// The refusal has to happen *before* the read, or a terminal blocks
-    /// forever. A reader that records being touched proves the ordering.
+    /// A reader that records being touched, so the ordering can be asserted
+    /// rather than assumed: a terminal must be refused *before* any read, or
+    /// it blocks forever waiting for an EOF.
+    struct Records<'a> {
+        body: &'a [u8],
+        touched: std::cell::Cell<bool>,
+    }
+    impl std::io::Read for Records<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.touched.set(true);
+            if self.body.is_empty() {
+                return Ok(0);
+            }
+            let take = self.body.len().min(buf.len());
+            buf[..take].copy_from_slice(&self.body[..take]);
+            self.body = &self.body[take..];
+            Ok(take)
+        }
+    }
+
     #[test]
     fn a_terminal_is_refused_before_anything_is_read() {
-        use std::cell::Cell;
-        struct Records<'a>(&'a Cell<bool>);
-        impl std::io::Read for Records<'_> {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                self.0.set(true);
-                Ok(0)
-            }
-        }
-        let touched = Cell::new(false);
-        let err = description_from_reader(&mut Records(&touched), true).unwrap_err();
+        let mut reader = Records {
+            body: b"never read",
+            touched: std::cell::Cell::new(false),
+        };
+        let err = description_from_reader(&mut reader, true).unwrap_err();
         assert!(err.to_string().contains("piped or redirected"), "{err}");
         assert!(
-            !touched.get(),
+            !reader.touched.get(),
             "stdin was read before the terminal was refused"
         );
     }
 
     #[test]
     fn a_pipe_is_read_and_normalized() {
-        let mut input = "hello\r\nworld\r\n".as_bytes();
+        let mut reader = Records {
+            body: b"hello\r\nworld\r\n",
+            touched: std::cell::Cell::new(false),
+        };
         assert_eq!(
-            description_from_reader(&mut input, false).unwrap(),
+            description_from_reader(&mut reader, false).unwrap(),
             "hello\nworld"
         );
+        assert!(reader.touched.get(), "a pipe should have been read");
     }
 
     #[test]
