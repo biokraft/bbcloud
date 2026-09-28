@@ -54,21 +54,21 @@ async fn resolve_all(ctx: &Ctx, names: &str, extra: &[User]) -> Result<Vec<User>
     if requested.is_empty() {
         return Err(BbError::Config("no reviewer name given".into()));
     }
-    let pool: Option<UserPool> = if requested.iter().any(|name| uuid_user(name).is_none()) {
-        Some(load_user_pool(&ctx.client, &ctx.slug).await?)
-    } else {
-        None
-    };
+    // Split first, then resolve: a `{uuid}` is already exact, so the pool is
+    // loaded only when there is at least one name that actually needs it.
     let mut resolved = Vec::new();
+    let mut by_name: Vec<&str> = Vec::new();
     for name in requested {
-        let user = if let Some(user) = uuid_user(name) {
-            user
-        } else if let Some(pool) = pool.as_ref() {
-            pool.resolve_for_write(name, extra)?
-        } else {
-            return Err(BbError::Config(format!("could not resolve `{name}`")));
-        };
-        resolved.push(user);
+        match uuid_user(name) {
+            Some(user) => resolved.push(user),
+            None => by_name.push(name),
+        }
+    }
+    if !by_name.is_empty() {
+        let pool: UserPool = load_user_pool(&ctx.client, &ctx.slug).await?;
+        for name in by_name {
+            resolved.push(pool.resolve_for_write(name, extra)?);
+        }
     }
     Ok(resolved)
 }
