@@ -16,3 +16,6 @@ Thumbs.db
 
 # Worktrees for isolated feature work.
 /.worktrees
+
+# Local coverage artifact; ci writes its own inside the runner.
+lcov.info
