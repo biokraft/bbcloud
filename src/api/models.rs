@@ -564,16 +564,30 @@ impl DiffStatEntry {
             .unwrap_or("-")
     }
 
-    /// The path the file had before the change. A rename moves a file, and the
-    /// person who maintained the old path is exactly who knows the moved code.
+    /// The path the file has after the change, when it has one. A removal has
+    /// none, which is why `path` falls back and why `paths` must be asked for
+    /// the whole set rather than trusting this one alone.
     pub fn new_file_path(&self) -> Option<&str> {
         self.new_file.as_ref().and_then(|p| p.path.as_deref())
     }
 
-    /// The pre-change path, when it differs from the new one.
+    /// The path the file had before the change, when the diffstat carried one.
+    ///
+    /// A rename carries both, and the person who maintained the old path is
+    /// exactly who knows the moved code. A *removal* carries only this one, so
+    /// it is also the entry's only path — returning it here is what keeps a
+    /// deleted file from vanishing from every consumer that walks `paths`.
     pub fn old_file_path(&self) -> Option<&str> {
-        let old = self.old_file.as_ref().and_then(|p| p.path.as_deref())?;
-        (old != self.path()).then_some(old)
+        self.old_file.as_ref().and_then(|p| p.path.as_deref())
+    }
+
+    /// Every path this entry names, old before new. A rename yields two, a
+    /// removal yields the one it had, and an addition yields the one it gained.
+    /// The same path can appear twice; callers that care de-duplicate.
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        [self.old_file_path(), self.new_file_path()]
+            .into_iter()
+            .flatten()
     }
 }
 
@@ -922,5 +936,55 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(repo.project_key(), "ENG");
+    }
+
+    fn diffstat(value: serde_json::Value) -> DiffStatEntry {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// A removal carries no `new` key, so `path` resolves to the old one. When
+    /// `old_file_path` then also insisted on differing from it, the entry named
+    /// no path at all and the deleted file silently vanished — which is the one
+    /// change most worth a reviewer's attention.
+    #[test]
+    fn a_removed_file_still_names_its_one_path() {
+        let entry = diffstat(serde_json::json!({
+            "status": "removed", "old": { "path": "src/gone.rs" }
+        }));
+        assert_eq!(entry.new_file_path(), None);
+        assert_eq!(entry.old_file_path(), Some("src/gone.rs"));
+        assert_eq!(entry.path(), "src/gone.rs");
+        assert_eq!(entry.paths().collect::<Vec<_>>(), vec!["src/gone.rs"]);
+    }
+
+    #[test]
+    fn a_rename_names_both_paths_old_first() {
+        let entry = diffstat(serde_json::json!({
+            "status": "renamed",
+            "old": { "path": "src/before.rs" },
+            "new": { "path": "src/after.rs" }
+        }));
+        assert_eq!(entry.path(), "src/after.rs");
+        assert_eq!(
+            entry.paths().collect::<Vec<_>>(),
+            vec!["src/before.rs", "src/after.rs"]
+        );
+    }
+
+    #[test]
+    fn an_addition_names_only_its_new_path() {
+        let entry = diffstat(serde_json::json!({
+            "status": "added", "new": { "path": "src/new.rs" }
+        }));
+        assert_eq!(entry.paths().collect::<Vec<_>>(), vec!["src/new.rs"]);
+    }
+
+    /// An entry with neither key is the api telling us nothing, not a file
+    /// literally named `-`.
+    #[test]
+    fn an_entry_with_no_path_yields_none() {
+        let entry = diffstat(serde_json::json!({ "status": "modified" }));
+        assert_eq!(entry.path(), "-");
+        assert_eq!(entry.paths().count(), 0);
     }
 }

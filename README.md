@@ -186,7 +186,7 @@ scopes are enough:
 | `read:user:bitbucket` | **mandatory.** `bb auth login` verifies the token against `/user`, so login fails without it |
 | `read:pullrequest:bitbucket` | `pr list`, `pr view`, `pr diff`, `pr files`, `pr commits`, `pr mine` |
 | `write:pullrequest:bitbucket` | `pr create`, `pr comment`, `pr resolve`, `pr unresolve`, `pr request-changes`, `pr retarget`, `pr edit` |
-| `read:repository:bitbucket` | `branch list`, `repo list`, `repo members`, the default-reviewer lookup `pr create` does, `pr view --conflicts` (whose redirect target is a repository resource, not a pull-request one), and the workspace/repository scan `pr mine` does |
+| `read:repository:bitbucket` | `branch list`, `repo list`, `repo reviewers`, the default-reviewer lookup `pr create` does, `pr view --conflicts` (whose redirect target is a repository resource, not a pull-request one), and the workspace/repository scan `pr mine` does |
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 | `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
 
@@ -249,7 +249,7 @@ bb pr mine --role reviewer --build        # your PRs across every repo you can s
 bb branch list --user alice
 bb project list                                  # projects in the workspace
 bb repo list --project ENG                       # repositories in one project
-bb repo members --json                            # reviewer-resolver users and partial sources
+bb repo reviewers --json                          # reviewer-resolver users and partial sources
 bb repo create api-gateway --project ENG         # private by default
 bb repo create docs --project ENG --public       # explicit opt-in to public
 bb update                                 # check for a newer release and update
@@ -261,11 +261,13 @@ source code. Everything else — the scm, fork policy, main branch name, wiki an
 is left to Bitbucket and the workspace's own settings rather than overridden from here.
 
 `repo list --json` preserves the full repository slug, project identity, web URL, clone URLs, and
-raw update timestamp. `repo members --json` lists the people a reviewer name can resolve to and
-names any user pools the token could not read in `partial`. Each row carries `eligibility`:
-`explicit` when the user is in the repository's own permission configuration, `unknown` when the
-row comes only from workspace membership or default-reviewer status. Membership is not proof of
-access to the selected repository, so a name that resolves from a partial pool is refused by any
+raw update timestamp. `repo reviewers --json` lists the people a reviewer name can resolve to and
+names any user pools the token could not read in `partial`. It is deliberately not called
+`members`: two of its three sources — workspace membership and default-reviewer status — say nothing
+about access to *this* repository, so a person it lists may not be taggable. Each row carries
+`eligibility`: `explicit` when the user is in the repository's own permission configuration,
+`unknown` when the row comes only from workspace membership or default-reviewer status. Because
+membership is not proof of access, a name that resolves only from a partial pool is refused by any
 command that would then write a reviewer — pass a `{uuid}` instead.
 
 Omit `--project` in a terminal and you get a picker. Outside a terminal it is an error naming the
@@ -281,10 +283,12 @@ successful|failed|inprogress|stopped|none` (filters on that rollup and implies `
 repository other than the checkout's — pairing a local branch name with an unrelated repository
 returns confidently wrong rows, or none.
 
-`--limit` is an output cap, not a page cap. Filtering — including `--build-status` — is applied
-first, and the command keeps paging until it has that many matching rows, so a match on page three is
-still found with `--limit 1`. The page size stays at 50 because that is the largest value Bitbucket's
-pull-request endpoint is documented to accept.
+`--limit` is an output cap, not a page cap, and it defaults to **100**. Filtering — including
+`--build-status` — is applied first, and the command keeps paging until it has that many matching
+rows, so a match on page three is still found with `--limit 1`. The page size stays at 50 because
+that is the largest value Bitbucket's pull-request endpoint is documented to accept. Because the
+cap is silent, a repository with more than 100 matching pull requests shows the first 100 and no
+warning; pass a larger `--limit` when you need the rest.
 
 `bb pr mine` is the one command that is not repository-scoped. There is no Bitbucket api left that
 lists which workspaces you belong to, so the workspace(s) to scan are resolved in this order:
@@ -320,14 +324,21 @@ live in the same repository — a fork's branch does not contain the target's co
 there would read a population that does not exist. The report names the source and target
 repositories and the exact commit each was read at, so the evidence is reproducible and a branch
 pushed to mid-command cannot change what the report claims. A renamed file is read under both its
-old and new path.
+old and new path, and a **deleted** file under the path it had — a removal is the strongest possible
+signal that somebody knows the code, so it is never dropped.
+
+`--file-limit` bounds how many changed files are examined (default 25) and it really bounds the
+requests made, not just the numbers reported. A report names `files_scanned`, `files_skipped`,
+`paths_scanned` and `paths_skipped`: entries and paths are counted separately because a rename is
+one entry and two paths. A single report reads at most 100 distinct paths, and `history_complete` is
+`false` whenever anything was cut, so a suggestion list never implies it saw the whole change.
 
 `--acknowledge-private-data` is required, because this reads private file paths, colleague names,
 dates, and account ids out of commit history and into whatever is on the other end of the model.
 Say what those categories are before running it.
 
-Each suggestion carries `eligibility`: `true` when the person is in this repository's own permission
-configuration, `false` when the user pool was read in full and they are not in it, and `unknown`
+Each suggestion carries `can_review`: `yes` when the person is in this repository's own permission
+configuration, `no` when the user pool was read in full and they are not in it, and `unknown`
 otherwise. Ownership of a file is not access to the repository, and the report never implies it is.
 The author and current reviewers are excluded, and so is the authenticated user in prospective mode —
 Bitbucket rejects a pull request's author as a reviewer. A rate limit, a server error, or a network

@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use assert_cmd::Command;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
@@ -73,6 +73,14 @@ async fn mount_existing_context(server: &MockServer, source_repo: &str) {
                   "new": { "path": "src/lib.rs" } }
             ]
         })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_pr_only(server: &MockServer, source_repo: &str) {
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body(source_repo)))
         .mount(server)
         .await;
 }
@@ -235,10 +243,10 @@ async fn suggestions_come_from_target_maintainers_and_source_coauthors() {
         .iter()
         .any(|f| f == "old/name.rs"));
     // Dana is in the repository's own permission configuration.
-    assert_eq!(suggestions[0]["eligibility"], "true");
+    assert_eq!(suggestions[0]["can_review"], "yes");
     // The pool was read in full and the coauthor is in none of it, so this is a
     // real negative rather than a missing answer.
-    assert_eq!(suggestions[1]["eligibility"], "false");
+    assert_eq!(suggestions[1]["can_review"], "no");
 }
 
 #[tokio::test]
@@ -370,7 +378,7 @@ async fn a_fork_reads_both_repositories_and_subtracts_nothing() {
 /// A complete pool that does not contain the person is a real negative, not an
 /// unknown.
 #[tokio::test]
-async fn a_complete_pool_marks_an_absent_person_as_ineligible() {
+async fn a_complete_pool_marks_an_absent_person_as_not_a_reviewer() {
     let server = MockServer::start().await;
     mount_existing_context(&server, "acme/widgets").await;
     mount_pool(&server, serde_json::json!([])).await;
@@ -402,7 +410,7 @@ async fn a_complete_pool_marks_an_absent_person_as_ineligible() {
 
     let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(value["suggestions"][0]["eligibility"], "false");
+    assert_eq!(value["suggestions"][0]["can_review"], "no");
 }
 
 /// The person about to open the pull request is its author, and Bitbucket
@@ -834,10 +842,10 @@ async fn an_empty_branch_has_no_history_to_suggest_from() {
     assert!(stderr.contains("no commits"), "{stderr}");
 }
 
-/// An unreadable pool must not discard the ranking; eligibility just becomes
+/// An unreadable pool must not discard the ranking; `can_review` just becomes
 /// unknown rather than a verdict nobody earned.
 #[tokio::test]
-async fn an_unreadable_user_pool_leaves_eligibility_unknown() {
+async fn an_unreadable_user_pool_leaves_can_review_unknown() {
     let server = MockServer::start().await;
     mount_existing_context(&server, "acme/widgets").await;
     // Every pool endpoint fails hard, so no pool can be loaded at all.
@@ -881,7 +889,7 @@ async fn an_unreadable_user_pool_leaves_eligibility_unknown() {
     );
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["suggestions"][0]["name"], "Dana");
-    assert_eq!(value["suggestions"][0]["eligibility"], "unknown");
+    assert_eq!(value["suggestions"][0]["can_review"], "unknown");
 }
 
 /// A commit the report cannot attribute is skipped, not guessed at: no linked
@@ -1270,4 +1278,189 @@ async fn a_server_error_on_the_account_lookup_stops_the_prospective_report() {
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("500"));
+}
+
+/// `--file-limit` is the flag that says how much history this command may read,
+/// so it has to bound the work rather than only the numbers in the report. It
+/// previously changed `files_scanned` and left every path being read anyway,
+/// which meant the report described a scan that never happened.
+#[tokio::test]
+async fn file_limit_bounds_the_paths_whose_history_is_read() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body("acme/widgets")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/diffstat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [
+                { "new": { "path": "src/one.rs" } },
+                { "new": { "path": "src/two.rs" } },
+                { "new": { "path": "src/three.rs" } }
+            ]
+        })))
+        .mount(&server)
+        .await;
+    mount_pool(&server, serde_json::json!([])).await;
+    // Any history request answers empty; what matters is which paths are asked
+    // for, and only the first entry's path may be.
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(".*/commits/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = suggest(&server)
+        .args(["--pr", "7", "--file-limit", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    // The report is honest about the cut...
+    assert_eq!(value["files_scanned"], 1);
+    assert_eq!(value["files_skipped"], 2);
+    assert_eq!(value["paths_scanned"], 1);
+    assert_eq!(value["history_complete"], false);
+
+    // ...and the work matches the report.
+    let asked: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|request| request.url.to_string())
+        .filter(|url| url.contains("/commits/"))
+        .collect();
+    assert!(
+        asked.iter().all(|url| url.contains("path=src%2Fone.rs")),
+        "history was read for paths the limit excluded: {asked:?}"
+    );
+}
+
+/// A file this change deletes has exactly one path, and the people who
+/// maintained it are the ones best placed to say whether deleting it was right.
+/// `old_file_path` used to insist on differing from `path()`, which for a
+/// removal is that same path — so the entry named nothing and the deletion
+/// silently vanished from the report.
+#[tokio::test]
+async fn a_removed_file_is_still_offered_as_evidence() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body("acme/widgets")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/diffstat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "status": "removed", "old": { "path": "src/gone.rs" } }]
+        })))
+        .mount(&server)
+        .await;
+    mount_pool(&server, serde_json::json!([])).await;
+    mount_target_history(
+        &server,
+        "acme/widgets",
+        "tgt-sha",
+        "src/gone.rs",
+        serde_json::json!([commit("{dana}", "Dana", "aaa", "2026-08-20T10:00:00+00:00")]),
+        200,
+    )
+    .await;
+    mount_source_history(
+        &server,
+        "acme/widgets",
+        "srcsha",
+        "src/gone.rs",
+        serde_json::json!([]),
+        200,
+    )
+    .await;
+
+    let out = suggest(&server).args(["--pr", "7"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    assert_eq!(value["paths_scanned"], 1, "the deleted path was not read");
+    let names: Vec<&str> = value["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Dana"],
+        "the deleted file's maintainer is missing"
+    );
+}
+
+/// `--file-limit` counts diffstat entries, but a rename is one entry and two
+/// paths, so the distinct-path ceiling can be crossed by a change that is well
+/// inside its own file budget. When that happens the report has to say so:
+/// maintainers of the dropped paths are simply absent, and an absent name is
+/// indistinguishable from a wrong one.
+#[tokio::test]
+async fn the_path_ceiling_is_reported_rather_than_silently_applied() {
+    let server = MockServer::start().await;
+    mount_pr_only(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+
+    // 60 renames = 60 entries but 120 distinct paths, over the 100-path ceiling.
+    let entries: Vec<serde_json::Value> = (0..60)
+        .map(|i| {
+            serde_json::json!({
+                "status": "renamed",
+                "old": { "path": format!("old/{i}.rs") },
+                "new": { "path": format!("new/{i}.rs") }
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/diffstat"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": entries })),
+        )
+        .mount(&server)
+        .await;
+    // Every path reads, so the report is about the cut rather than about a
+    // failure: 20 of the 120 paths never get a history request.
+    Mock::given(method("GET"))
+        .and(path_regex(r"/repositories/acme/widgets/commits/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = suggest_human(&server)
+        .args(["--pr", "7", "--file-limit", "60"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("exceeded the 100-path ceiling"), "{stderr}");
+
+    let out = suggest(&server)
+        .args(["--pr", "7", "--file-limit", "60"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // 100 paths were read and 20 were left out, so the two add up to the 120
+    // distinct paths the change actually touched.
+    assert_eq!(value["paths_scanned"], 100);
+    assert_eq!(value["paths_skipped"], 20);
 }

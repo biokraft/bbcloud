@@ -107,9 +107,17 @@ These are enforced by lints or tests. Breaking one breaks the build.
   `openssl-src` appear in `Cargo.lock` and are compiled into the binary. This is a deliberate
   tradeoff, not an oversight: it is what lets `cargo install bbcloud` work on a stock Linux machine
   with no system packages.
-- **Redirects are disabled** (`reqwest::redirect::Policy::none()` in `src/api/mod.rs`) so the
-  `Authorization` header can never be replayed to another host. Every request carries a 10s connect
-  and 30s total timeout.
+- **Redirects are followed only within the same origin.** Bitbucket answers some endpoints with a
+  302 to another url on the same host — `/pullrequests/{id}/diff` and `/pullrequests/{id}/conflicts`
+  are both pure redirects that never return a body — so refusing every redirect would break them
+  outright. `same_origin_redirect_policy` in `src/api/mod.rs` therefore follows a redirect only when
+  the new url has the same scheme, host and port as the previous one, and stops otherwise, so the
+  `Authorization` header is never replayed to another host. `Client::url` applies the same origin
+  check to the url it builds, which is what catches a `next` link pointing off-origin. Both
+  directions are pinned in `tests/api_client.rs` — `follows_a_same_origin_redirect_and_replays_auth`
+  and `does_not_follow_a_cross_origin_redirect`, the latter asserting the other server received
+  **zero** requests. Change that policy and both tests must change with it. Every request carries a
+  10s connect and 30s total timeout.
 
 ## Secrets
 
@@ -139,17 +147,36 @@ src/secret.rs          redact(), SecretString re-export
 src/credentials.rs     keyring get/set/delete, env override, legacy PHP config path
 src/git.rs             injection-safe git invocation
 src/repo.rs            RepoSlug parse/resolve, percent-encoded path(), browse_url()
-src/api/mod.rs         Client: auth header, pagination, error mapping
+src/api/mod.rs         Client: auth header, same-origin redirects, pagination, error mapping
 src/api/models.rs      serde models, all Option-tolerant with documented fallbacks
 src/output.rs          Format, tables, color, spinners, relative_time
-src/users.rs           resolve a typed name to one Bitbucket user
+src/users.rs           UserPool: the three user lists a reviewer name resolves against
 src/skill.rs           embedded SKILL.md, agent detection, install/status/uninstall state
 src/commands/*.rs      one module per command group
 src/commands/pr_list.rs       `pr list`: fetch, filter, render
 src/commands/pr_reviewers.rs  `pr reviewers` list/add/remove
 src/commands/pr_edit.rs       `pr edit`: title/description via the same PUT as retarget
+src/commands/reviewer_suggestions.rs  `pr reviewers suggest`: read-only file-ownership evidence
+src/commands/repo.rs          `repo list`/`create`/`reviewers`
 src/commands/skill.rs         `bb skill install/status/uninstall`
 ```
+
+**`UserPool` is the one place a reviewer name becomes a person.** It merges three lists — workspace
+members, the repository's permission-config users, and effective default reviewers — and records
+which of them could not be read in `incomplete`. Two rules follow from that and must not be relaxed:
+
+- A name is never resolved against a partial pool on a path that **writes** a reviewer
+  (`resolve_for_write`). An unreadable list may hide the person the caller meant, and tagging the
+  wrong human is not recoverable by the user.
+- Repository access (`RepositoryAccess`) is reported separately from plausibility. A workspace
+  member is not proof of access to *this* repository, and `repo reviewers` is named for what it
+  returns precisely because "members" would have implied otherwise.
+
+**`paginate` versus `paginate_limited`.** `paginate` walks every page up to `MAX_PAGES`. Use
+`paginate_limited` only when the caller filters *below* the page walk and the limit is a cap on
+values returned — `pr list --limit` is that case, and it must keep paging when any other filter is
+present, or a match on page three is silently dropped. Never hand-roll a page loop; the cycle
+detection in `paginate` is what stops a repeating `next` from refetching one page a hundred times.
 
 **`bb skill *` deliberately bypasses `Ctx`.** It needs no `Client`, no `RepoSlug`, and no
 credentials — it only reads and writes local skill files, so it must keep working on a machine
@@ -204,7 +231,10 @@ does not run under `--yes`, and the `inquire` prompt stays on stderr so `--json`
 pure. The agent skill carries the matching rule — ask the user once, never mark uninvited, never
 approve — and must stay in step with this gate.
 
-**Use `Client::paginate`** rather than hand-rolling a page loop. It follows `next` and caps at 100 pages.
+**Use `Client::paginate` or `Client::paginate_limited`** rather than hand-rolling a page loop. Both
+follow `next`, cap at 100 pages, and stop on a repeated url. The only difference is that
+`paginate_limited` also stops once it has collected `limit` values — use it only when the limit caps
+output and no other filter runs above the walk.
 
 ## JSON output
 
@@ -287,12 +317,22 @@ The mocked suite proves the code calls an endpoint correctly, never that the end
 exists — wiremock serves whatever path is mounted, retired or not. That gap is exactly how
 `bb pr mine` shipped completely broken in v0.13.0: it called four endpoints Atlassian had already
 removed, and the wiremock suite stayed green the entire time. `tests/live.rs` closes it with a
-credential-gated, opt-in smoke test against the real API. Before releasing any change that adds or
-moves an API call, run it:
+credential-gated, opt-in smoke test against the real API.
+
+**All four variables are required, and a missing one is a failure rather than a skip.** Without that,
+the invocation below silently exercises nothing and still reports success, which is the exact shape
+of the bug this file exists to catch. `BB_LIVE_TEST=1` is the opt-in; the other three say *what* to
+look at. `BB_LIVE_REPO` and `BB_LIVE_PR` have no default because a live run against an arbitrary
+repository proves nothing about the code under test.
 
 ```
-BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
+BB_LIVE_TEST=1 BB_WORKSPACE=<slug> BB_LIVE_REPO=<workspace>/<repo> BB_LIVE_PR=<id> \
+  cargo test --test live -- --ignored
 ```
+
+`BB_LIVE_REPO` and `BB_LIVE_PR` are not needed by every test — `repo_reviewers_endpoint_is_live` takes
+only the repository, and the two that read a pull request need the id — but set both and the whole
+file runs.
 
 ## Environment variables
 
@@ -306,6 +346,9 @@ BB_LIVE_TEST=1 BB_WORKSPACE=<slug> cargo test --test live -- --ignored
 | `BB_KEYRING_DISABLE` | force keyring lookup failure (testing) |
 | `BB_SKILL_NO_AUTO_REFRESH` | disable the pre-command auto-refresh of tracked agent skill files |
 | `BB_NO_UPDATE_CHECK` | disable the once-a-day passive check for a newer release |
+| `BB_LIVE_TEST` | set to `1` to let the `tests/live.rs` smoke tests run against the real API |
+| `BB_LIVE_REPO` | the `workspace/repo` those tests act on; **required** once `BB_LIVE_TEST=1` |
+| `BB_LIVE_PR` | the pull request id those tests read; **required** by the two that read one |
 | `NO_COLOR` | disable color and spinners |
 
 ## Releasing

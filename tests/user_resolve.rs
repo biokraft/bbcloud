@@ -4,13 +4,31 @@ mod support;
 
 use bb_cli::error::BbError;
 use bb_cli::repo::RepoSlug;
-use bb_cli::users::resolve_user;
+use bb_cli::users::UserPool;
 use support::client_for;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn slug() -> RepoSlug {
     RepoSlug::parse("acme/widgets").unwrap()
+}
+
+/// The path every command actually takes: load the pool, then resolve against
+/// it. Pinned here rather than through a convenience wrapper so a regression in
+/// `UserPool` cannot hide behind a second entry point.
+async fn resolve(
+    client: &bb_cli::api::Client,
+    slug: &RepoSlug,
+    query: &str,
+    extra: &[bb_cli::api::models::User],
+) -> Result<bb_cli::api::models::User, bb_cli::error::BbError> {
+    if let Some(user) = bb_cli::users::uuid_user(query) {
+        return Ok(user);
+    }
+    if query.trim().is_empty() {
+        return Err(bb_cli::error::BbError::Config("empty user name".into()));
+    }
+    UserPool::load(client, slug).await?.resolve(query, extra)
 }
 
 async fn mount_members(server: &MockServer, members: serde_json::Value) {
@@ -57,7 +75,7 @@ async fn mount_permissions_config(server: &MockServer, entries: serde_json::Valu
 async fn a_uuid_is_used_verbatim_without_any_lookup() {
     let server = MockServer::start().await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "{9a1b}", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "{9a1b}", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{9a1b}"));
@@ -85,7 +103,7 @@ async fn a_substring_of_the_display_name_resolves() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dan", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dan", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
@@ -105,7 +123,7 @@ async fn an_ambiguous_query_errors_and_names_every_candidate() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "ana", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "ana", &[])
         .await
         .unwrap_err();
     match err {
@@ -137,7 +155,7 @@ async fn an_exact_name_beats_a_longer_substring_match() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "ANA", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "ANA", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{1}"));
@@ -150,7 +168,7 @@ async fn no_match_errors_naming_the_query() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "nobody", &[])
         .await
         .unwrap_err();
     match err {
@@ -172,7 +190,7 @@ async fn an_email_is_not_special_cased() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "ana@example.com", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "ana@example.com", &[])
         .await
         .unwrap_err();
     assert!(matches!(err, BbError::Config(_)), "got {err:?}");
@@ -195,7 +213,7 @@ async fn a_403_on_members_falls_back_to_the_remaining_pool() {
     .await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
@@ -213,7 +231,7 @@ async fn the_extra_pool_is_searched_too() {
     let extra: Vec<bb_cli::api::models::User> =
         serde_json::from_value(serde_json::json!([{ "uuid": "{x}", "display_name": "Ex Ternal" }]))
             .unwrap();
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "ternal", &extra)
+    let user = resolve(&client_for(&server.uri()), &slug(), "ternal", &extra)
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{x}"));
@@ -235,7 +253,7 @@ async fn a_name_present_only_in_the_permissions_config_list_resolves() {
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "wenyi", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "wenyi", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{w}"));
@@ -260,7 +278,7 @@ async fn a_members_403_with_a_working_permissions_list_resolves_without_warning(
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "wenyi", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "wenyi", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{w}"));
@@ -282,7 +300,7 @@ async fn no_match_with_a_members_403_warns_and_errors() {
     mount_default_reviewers(&server, serde_json::json!([])).await;
     mount_permissions_config(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "nobody", &[])
         .await
         .unwrap_err();
     match err {
@@ -318,7 +336,7 @@ async fn a_person_in_both_permissions_and_default_reviewers_is_not_ambiguous() {
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
@@ -344,7 +362,7 @@ async fn a_duplicate_identity_keeps_the_richer_record() {
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{m}"));
@@ -369,7 +387,7 @@ async fn account_id_deduplicates_when_uuid_is_absent() {
     .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.display_name.as_deref(), Some("Dana"));
@@ -389,7 +407,7 @@ async fn a_record_with_no_stable_identity_is_not_resolvable() {
     mount_permissions_config(&server, serde_json::json!([])).await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap_err();
     assert!(matches!(err, BbError::Config(_)), "got {err:?}");
@@ -414,7 +432,7 @@ async fn a_403_on_permissions_config_falls_back_to_default_reviewers() {
     )
     .await;
 
-    let user = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+    let user = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
         .await
         .unwrap();
     assert_eq!(user.uuid.as_deref(), Some("{p}"));
@@ -438,7 +456,7 @@ async fn both_lookups_refused_with_no_match_still_errors_normally() {
         .await;
     mount_default_reviewers(&server, serde_json::json!([])).await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "nobody", &[])
         .await
         .unwrap_err();
     match err {
@@ -478,7 +496,7 @@ async fn a_401_on_any_pool_stops_immediately() {
                 .await;
         }
 
-        let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+        let err = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
             .await
             .unwrap_err();
         assert!(matches!(err, BbError::Auth), "{failing}: got {err:?}");
@@ -512,7 +530,7 @@ async fn a_server_error_on_a_pool_surfaces_instead_of_degrading() {
                 .await;
         }
 
-        let err = resolve_user(&client_for(&server.uri()), &slug(), "dana", &[])
+        let err = resolve(&client_for(&server.uri()), &slug(), "dana", &[])
             .await
             .unwrap_err();
         match err {
@@ -537,7 +555,7 @@ async fn a_403_on_default_reviewers_is_reported_as_partial() {
         .mount(&server)
         .await;
 
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "nobody", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "nobody", &[])
         .await
         .unwrap_err();
     let message = err.to_string();
@@ -549,7 +567,7 @@ async fn a_403_on_default_reviewers_is_reported_as_partial() {
 #[tokio::test]
 async fn an_empty_name_is_rejected_before_any_lookup() {
     let server = MockServer::start().await;
-    let err = resolve_user(&client_for(&server.uri()), &slug(), "   ", &[])
+    let err = resolve(&client_for(&server.uri()), &slug(), "   ", &[])
         .await
         .unwrap_err();
     assert!(matches!(err, BbError::Config(_)), "got {err:?}");

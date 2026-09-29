@@ -47,7 +47,7 @@ async fn lists_deduplicated_candidates_with_their_sources() {
         .await;
 
     let out = bb(&server)
-        .args(["repo", "members", "--json"])
+        .args(["repo", "reviewers", "--json"])
         .output()
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -86,7 +86,7 @@ async fn a_forbidden_user_pool_is_reported_as_partial() {
         .await;
 
     let out = bb(&server)
-        .args(["repo", "members", "--json"])
+        .args(["repo", "reviewers", "--json"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -119,7 +119,7 @@ async fn a_missing_repository_is_not_reported_as_a_partial_pool() {
         .await;
 
     bb(&server)
-        .args(["repo", "members", "--json"])
+        .args(["repo", "reviewers", "--json"])
         .assert()
         .code(3);
 }
@@ -142,7 +142,7 @@ async fn empty_user_pools_produce_an_empty_json_report() {
     }
 
     let out = bb(&server)
-        .args(["repo", "members", "--json"])
+        .args(["repo", "reviewers", "--json"])
         .output()
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -166,7 +166,7 @@ async fn authentication_failure_stops_before_later_pools() {
         .mount(&server)
         .await;
 
-    bb(&server).args(["repo", "members"]).assert().code(2);
+    bb(&server).args(["repo", "reviewers"]).assert().code(2);
 }
 
 /// The human table is how a person chooses reviewers, so it has to say what the
@@ -197,7 +197,7 @@ async fn human_output_labels_sources_and_repository_access() {
         .mount(&server)
         .await;
 
-    let out = bb(&server).args(["repo", "members"]).output().unwrap();
+    let out = bb(&server).args(["repo", "reviewers"]).output().unwrap();
     assert!(out.status.success(), "view failed: {out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("REPOSITORY ACCESS"), "{stdout}");
@@ -232,7 +232,7 @@ async fn human_output_names_the_pools_it_could_not_read() {
         .mount(&server)
         .await;
 
-    let out = bb(&server).args(["repo", "members"]).output().unwrap();
+    let out = bb(&server).args(["repo", "reviewers"]).output().unwrap();
     assert!(out.status.success(), "view failed: {out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

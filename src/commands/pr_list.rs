@@ -1,14 +1,12 @@
 use crate::api::models::{BuildState, BuildStatus, PullRequest, ReviewState, ReviewerState};
-use crate::api::Page;
 use crate::commands::pr::Ctx;
 use crate::commands::pr_build;
 use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
 use crate::repo;
-use crate::users::{current_user, load_user_pool, uuid_user, UserPool};
+use crate::users::{current_user, uuid_user, UserPool};
 use serde::Serialize;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ReviewStateArg {
@@ -177,21 +175,6 @@ fn list_path(state: &str, current_branch: Option<&str>, page_size: usize) -> Str
     path
 }
 
-async fn fetch_limited(ctx: &Ctx, path: &str, limit: usize) -> Result<Vec<PullRequest>> {
-    let mut target = Some(path.to_string());
-    let mut seen = HashSet::new();
-    let mut collected = Vec::new();
-    while let Some(url) = target {
-        if collected.len() >= limit || !seen.insert(url.clone()) {
-            break;
-        }
-        let page: Page<PullRequest> = ctx.client.get_json(&url).await?;
-        collected.extend(page.values);
-        target = page.next;
-    }
-    Ok(collected)
-}
-
 /// The uuid of whoever the token belongs to, fetched at most once per invocation
 /// and only when a filter actually needs it.
 fn needs_user_pool(query: Option<&str>) -> bool {
@@ -252,7 +235,7 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     let wants_pool =
         needs_user_pool(args.reviewer.as_deref()) || needs_user_pool(args.author.as_deref());
     let (reviewer_uuid, pool) = if wants_pool {
-        let pool = load_user_pool(&ctx.client, &ctx.slug).await?;
+        let pool = UserPool::load(&ctx.client, &ctx.slug).await?;
         let reviewer_uuid = match args.reviewer.as_deref() {
             Some(query) => Some(resolve_uuid(&pool, query)?),
             None => None,
@@ -293,10 +276,13 @@ pub async fn list(ctx: &Ctx, args: ListArgs) -> Result<()> {
     let path = ctx.path(&list_path(&args.state, current_branch.as_deref(), 50));
 
     let spinner = output::spinner("fetching pull requests");
+    // With no filter to apply above it, `--limit` can stop the walk early. With
+    // one, every page is needed: a match may sit on page three, and truncating
+    // the download would silently drop it while still reporting the cap.
     let prs: Vec<PullRequest> = if requires_full_scan {
         ctx.client.paginate(&path).await?
     } else {
-        fetch_limited(ctx, &path, args.limit).await?
+        ctx.client.paginate_limited(&path, args.limit).await?
     };
     spinner.finish_and_clear();
 

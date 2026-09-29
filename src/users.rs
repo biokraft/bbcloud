@@ -21,7 +21,7 @@ struct RepoPermission {
 /// say nothing about access to the selected repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Eligibility {
+pub enum RepositoryAccess {
     /// Directly listed in the repository's permission configuration.
     Explicit,
     /// A plausible reviewer, with no proof of access to this repository.
@@ -29,19 +29,24 @@ pub(crate) enum Eligibility {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PoolEntry {
+pub struct PoolEntry {
     pub user: User,
     pub sources: Vec<String>,
-    pub eligibility: Eligibility,
+    pub eligibility: RepositoryAccess,
 }
 
+/// Everyone a reviewer name could resolve to for one repository, and which of
+/// those lists could not be read in full.
 #[derive(Debug, Clone)]
-pub(crate) struct UserPool {
+pub struct UserPool {
     pub entries: Vec<PoolEntry>,
+    /// Names of the pools that returned 403. Non-empty means the pool is a
+    /// subset, so absence from it proves nothing.
     pub incomplete: Vec<String>,
 }
 
-pub(crate) fn uuid_user(query: &str) -> Option<User> {
+/// A `{uuid}` is already exact and needs no pool.
+pub fn uuid_user(query: &str) -> Option<User> {
     let query = query.trim();
     if query.starts_with('{') && query.ends_with('}') {
         Some(User {
@@ -56,7 +61,7 @@ pub(crate) fn uuid_user(query: &str) -> Option<User> {
 }
 
 impl UserPool {
-    pub(crate) async fn load(client: &Client, slug: &RepoSlug) -> Result<Self> {
+    pub async fn load(client: &Client, slug: &RepoSlug) -> Result<Self> {
         let mut pool = Self {
             entries: Vec::new(),
             incomplete: Vec::new(),
@@ -72,7 +77,7 @@ impl UserPool {
             Ok(memberships) => {
                 for membership in memberships {
                     if let Some(user) = membership.user {
-                        pool.add(user, "workspace", Eligibility::Unknown);
+                        pool.add(user, "workspace", RepositoryAccess::Unknown);
                     }
                 }
             }
@@ -90,7 +95,7 @@ impl UserPool {
             Ok(permissions) => {
                 for permission in permissions {
                     if let Some(user) = permission.user {
-                        pool.add(user, "repository", Eligibility::Explicit);
+                        pool.add(user, "repository", RepositoryAccess::Explicit);
                     }
                 }
             }
@@ -111,7 +116,7 @@ impl UserPool {
             Ok(reviewers) => {
                 for reviewer in reviewers {
                     if let Some(user) = reviewer.user {
-                        pool.add(user, "default_reviewer", Eligibility::Unknown);
+                        pool.add(user, "default_reviewer", RepositoryAccess::Unknown);
                     }
                 }
             }
@@ -125,7 +130,7 @@ impl UserPool {
         Ok(pool)
     }
 
-    fn add(&mut self, user: User, source: &str, eligibility: Eligibility) {
+    fn add(&mut self, user: User, source: &str, eligibility: RepositoryAccess) {
         if let Some(entry) = self
             .entries
             .iter_mut()
@@ -135,8 +140,8 @@ impl UserPool {
             if !entry.sources.iter().any(|value| value == source) {
                 entry.sources.push(source.into());
             }
-            if eligibility == Eligibility::Explicit {
-                entry.eligibility = Eligibility::Explicit;
+            if eligibility == RepositoryAccess::Explicit {
+                entry.eligibility = RepositoryAccess::Explicit;
             }
             return;
         }
@@ -147,14 +152,14 @@ impl UserPool {
         });
     }
 
-    pub(crate) fn resolve(&self, query: &str, extra: &[User]) -> Result<User> {
+    pub fn resolve(&self, query: &str, extra: &[User]) -> Result<User> {
         self.resolve_inner(query, extra, false)
     }
 
     /// Name resolution for commands that will write a reviewer. An incomplete
     /// pool can hide the person the caller meant, so a name is never good enough
     /// there; a `{uuid}` bypasses the pool entirely.
-    pub(crate) fn resolve_for_write(&self, query: &str, extra: &[User]) -> Result<User> {
+    pub fn resolve_for_write(&self, query: &str, extra: &[User]) -> Result<User> {
         self.resolve_inner(query, extra, true)
     }
 
@@ -270,25 +275,4 @@ fn is_exact(user: &User, needle: &str) -> bool {
 
 pub async fn current_user(client: &Client) -> Result<User> {
     client.get_json("/user").await
-}
-
-pub(crate) async fn load_user_pool(client: &Client, slug: &RepoSlug) -> Result<UserPool> {
-    UserPool::load(client, slug).await
-}
-
-pub async fn resolve_user(
-    client: &Client,
-    slug: &RepoSlug,
-    query: &str,
-    extra: &[User],
-) -> Result<User> {
-    if let Some(user) = uuid_user(query) {
-        return Ok(user);
-    }
-    // Checked here as well as in the pool, so a blank query fails before three
-    // paginated endpoints have been walked to find out there is nothing to find.
-    if query.trim().is_empty() {
-        return Err(BbError::Config("empty user name".into()));
-    }
-    UserPool::load(client, slug).await?.resolve(query, extra)
 }

@@ -2,7 +2,7 @@ use crate::api::models::{PullRequest, ReviewerRef, ReviewerState, User};
 use crate::commands::pr::Ctx;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::users::{load_user_pool, uuid_user, UserPool};
+use crate::users::{uuid_user, UserPool};
 
 async fn fetch(ctx: &Ctx, id: u64) -> Result<PullRequest> {
     ctx.client
@@ -65,7 +65,7 @@ async fn resolve_all(ctx: &Ctx, names: &str, extra: &[User]) -> Result<Vec<User>
         }
     }
     if !by_name.is_empty() {
-        let pool: UserPool = load_user_pool(&ctx.client, &ctx.slug).await?;
+        let pool = UserPool::load(&ctx.client, &ctx.slug).await?;
         for name in by_name {
             resolved.push(pool.resolve_for_write(name, extra)?);
         }
