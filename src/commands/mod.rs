@@ -12,5 +12,6 @@ pub mod pr_retarget;
 pub mod pr_reviewers;
 pub mod project;
 pub mod repo;
+pub mod reviewer_suggestions;
 pub mod skill;
 pub mod update;

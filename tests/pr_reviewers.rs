@@ -53,16 +53,21 @@ async fn mount_members(server: &MockServer) {
                 { "user": { "uuid": "{r}", "display_name": "Ash Doe", "nickname": "ash" } }
             ]
         })))
+        .expect(1)
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .expect(1)
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/acme/widgets/permissions-config/users"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .expect(1)
         .mount(server)
         .await;
 }
@@ -246,4 +251,73 @@ async fn a_missing_pr_exits_three() {
         .args(["pr", "reviewers", "999"])
         .assert()
         .code(3);
+}
+
+/// `bb pr reviewers` is a group, and neither shape is a valid call on its own.
+/// The bare call says what to pass instead, because an agent that guessed wrong
+/// should be corrected rather than left guessing again.
+///
+/// The id-before-subcommand shape is rejected by clap, so the guard in `main`
+/// that names the right flag is a defensive default rather than a live path.
+#[tokio::test]
+async fn a_bare_reviewers_call_says_what_it_needs() {
+    let server = MockServer::start().await;
+
+    let out = bb(&server).args(["pr", "reviewers"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("add") && stderr.contains("suggest"),
+        "{stderr}"
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "a malformed invocation must not reach the api"
+    );
+}
+
+/// `{uuid}` values are what the open-pr skill hands back from the resolver, so
+/// tagging a whole set of them must cost no user-pool request at all — the pool
+/// exists to turn a name into a uuid, and there is nothing left to turn.
+#[tokio::test]
+async fn a_set_of_uuids_needs_no_user_pool() {
+    let server = MockServer::start().await;
+    mount_get_pr(&server).await;
+    for endpoint in [
+        "/workspaces/acme/members",
+        "/repositories/acme/widgets/permissions-config/users",
+        "/repositories/acme/widgets/effective-default-reviewers",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+    // `{a}` is already tagged, so the union is unchanged plus the new `{ash}`.
+    mount_put_expecting(
+        &server,
+        serde_json::json!([{ "uuid": "{a}" }, { "uuid": "{r}" }, { "uuid": "{ash}" }]),
+    )
+    .await;
+
+    bb(&server)
+        .args(["pr", "reviewers", "add", "7", "{a},{ash}"])
+        .assert()
+        .success();
+
+    let touched_pool = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|request| {
+            let url = request.url.to_string();
+            url.contains("/members") || url.contains("permissions-config")
+        });
+    assert!(!touched_pool, "a uuid-only set must not read the user pool");
 }

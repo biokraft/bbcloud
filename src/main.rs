@@ -177,6 +177,8 @@ enum RepoCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
+    /// List the people available for reviewer resolution
+    Members,
     /// List the repositories in a workspace
     #[command(alias = "l", alias = "ls")]
     List {
@@ -202,6 +204,9 @@ enum PrCommand {
     List {
         /// Only show pull requests targeting this branch
         destination: Option<String>,
+        /// Only show pull requests from the current branch
+        #[arg(long)]
+        current: bool,
         /// State filter: OPEN, MERGED, DECLINED, SUPERSEDED, DRAFT or ALL
         #[arg(long, default_value = "OPEN")]
         state: String,
@@ -223,6 +228,9 @@ enum PrCommand {
         /// Only pull requests whose build rolls up to this state
         #[arg(long, value_enum)]
         build_status: Option<commands::pr_list::BuildStateArg>,
+        /// Maximum number of pull requests to return
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
     /// Print the raw diff for a pull request
     #[command(alias = "d")]
@@ -281,8 +289,11 @@ enum PrCommand {
         source: Option<String>,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "description_stdin")]
         description: Option<String>,
+        /// Read the pull request description from stdin
+        #[arg(long, conflicts_with = "interactive")]
+        description_stdin: bool,
         /// Do not attach the repository's default reviewers
         #[arg(long)]
         no_default_reviewers: bool,
@@ -320,7 +331,7 @@ enum PrCommand {
         #[arg(long)]
         conflicts: bool,
     },
-    /// Show, add or remove the reviewers tagged on a pull request
+    /// List, suggest, add or remove reviewers
     #[command(args_conflicts_with_subcommands = true)]
     Reviewers {
         /// Pull request id (omit when using add/remove)
@@ -332,7 +343,7 @@ enum PrCommand {
     Comment {
         id: u64,
         /// Comment text
-        #[arg(long, short = 'b')]
+        #[arg(long, short = 'b', conflicts_with = "body_stdin")]
         body: Option<String>,
         /// Read the comment text from stdin
         #[arg(long)]
@@ -406,6 +417,29 @@ enum ReviewersCommand {
         id: u64,
         /// Reviewer names, comma-separated; a `{uuid}` is taken verbatim
         names: String,
+    },
+    /// Suggest reviewers from recent file ownership; never writes reviewers
+    Suggest {
+        /// Existing pull request id
+        #[arg(long, conflicts_with_all = ["target", "source"])]
+        pr: Option<u64>,
+        /// Target branch for a prospective pull request
+        target: Option<String>,
+        /// Source branch for a prospective pull request
+        source: Option<String>,
+        /// History window, for example 30d, 12w, 6mo or 1y
+        #[arg(long, default_value = "12mo")]
+        since: String,
+        /// Maximum number of suggestions
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Maximum number of changed files to scan
+        #[arg(long, default_value_t = 25)]
+        file_limit: usize,
+        /// Confirm the file paths, colleague names, dates and account ids in
+        /// commit history may be read and shown to the user
+        #[arg(long)]
+        acknowledge_private_data: bool,
     },
 }
 
@@ -529,181 +563,7 @@ async fn run(cli: Cli) -> Result<()> {
             AuthCommand::Status => commands::auth::status(format).await,
             AuthCommand::Logout => commands::auth::logout(format),
         },
-        Command::Pr { command } => {
-            if let PrCommand::Mine {
-                role,
-                state,
-                workspace,
-                repo_limit,
-                build,
-            } = command
-            {
-                return commands::pr_mine::run(
-                    format,
-                    commands::pr_mine::MineArgs {
-                        role,
-                        state,
-                        workspace,
-                        repo_limit,
-                        build,
-                    },
-                )
-                .await;
-            }
-            let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
-            match command {
-                PrCommand::List {
-                    destination,
-                    state,
-                    reviewer,
-                    author,
-                    review_state,
-                    needs_my_review,
-                    build,
-                    build_status,
-                } => {
-                    commands::pr_list::list(
-                        &ctx,
-                        commands::pr_list::ListArgs {
-                            destination,
-                            state,
-                            reviewer,
-                            author,
-                            review_state,
-                            needs_my_review,
-                            build,
-                            build_status,
-                        },
-                    )
-                    .await
-                }
-                PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
-                PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
-                PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
-                PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
-                PrCommand::Retarget { id, to } => commands::pr_retarget::run(&ctx, id, &to).await,
-                PrCommand::Edit {
-                    id,
-                    title,
-                    description,
-                    description_stdin,
-                } => {
-                    commands::pr_edit::run(
-                        &ctx,
-                        commands::pr_edit::EditArgs {
-                            id,
-                            title,
-                            description,
-                            description_stdin,
-                        },
-                    )
-                    .await
-                }
-                PrCommand::RequestChanges { id, yes } => {
-                    commands::pr::request_changes(&ctx, id, yes).await
-                }
-                PrCommand::NoRequestChanges { id, yes } => {
-                    commands::pr::unrequest_changes(&ctx, id, yes).await
-                }
-                PrCommand::Create {
-                    target,
-                    source,
-                    title,
-                    description,
-                    no_default_reviewers,
-                    reviewer,
-                    interactive,
-                    web,
-                    close_source_branch,
-                } => {
-                    commands::pr::create(
-                        &ctx,
-                        commands::pr::CreateArgs {
-                            target,
-                            source,
-                            title,
-                            description,
-                            no_default_reviewers,
-                            reviewer,
-                            interactive,
-                            web,
-                            close_source_branch,
-                        },
-                    )
-                    .await
-                }
-                PrCommand::Reviewers { id, command } => match (id, command) {
-                    (_, Some(ReviewersCommand::List { id })) => {
-                        commands::pr_reviewers::list(&ctx, id).await
-                    }
-                    (_, Some(ReviewersCommand::Add { id, names })) => {
-                        commands::pr_reviewers::add(&ctx, id, &names).await
-                    }
-                    (_, Some(ReviewersCommand::Remove { id, names })) => {
-                        commands::pr_reviewers::remove(&ctx, id, &names).await
-                    }
-                    (Some(id), None) => commands::pr_reviewers::list(&ctx, id).await,
-                    (None, None) => Err(bb_cli::error::BbError::Config(
-                        "pass a pull request id, or `add`/`remove`".into(),
-                    )),
-                },
-                PrCommand::View {
-                    id,
-                    unresolved,
-                    comments_only,
-                    metadata_only,
-                    build,
-                    conflicts,
-                } => {
-                    commands::pr_comments::view_with_options(
-                        &ctx,
-                        commands::pr_comments::ViewArgs {
-                            id,
-                            unresolved,
-                            comments_only,
-                            metadata_only,
-                            build,
-                            conflicts,
-                        },
-                    )
-                    .await
-                }
-                PrCommand::Comment {
-                    id,
-                    body,
-                    body_stdin,
-                    file,
-                    line,
-                    reply_to,
-                    pending,
-                    web,
-                } => {
-                    commands::pr_comments::comment(
-                        &ctx,
-                        commands::pr_comments::CommentArgs {
-                            id,
-                            body,
-                            body_stdin,
-                            file,
-                            line,
-                            reply_to,
-                            pending,
-                            web,
-                        },
-                    )
-                    .await
-                }
-                PrCommand::Resolve { id, comment, yes } => {
-                    commands::pr_comments::resolve(&ctx, id, comment, yes).await
-                }
-                PrCommand::Unresolve { id, comment } => {
-                    commands::pr_comments::unresolve(&ctx, id, comment).await
-                }
-                PrCommand::Mine { .. } => {
-                    Err(BbError::Config("pr mine does not take a repository".into()))
-                }
-            }
-        }
+        Command::Pr { command } => dispatch_pr(cli.repo.as_deref(), format, command).await,
         Command::Branch { command } => {
             let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
             match command {
@@ -723,6 +583,10 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Repo { command } => match command {
+            RepoCommand::Members => {
+                let ctx = commands::pr::Ctx::new(cli.repo.as_deref(), format)?;
+                commands::repo::members(&ctx).await
+            }
             RepoCommand::Create {
                 name,
                 project,
@@ -789,6 +653,62 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+/// Routes `bb pr reviewers …`.
+///
+/// Split out of `main` so the argument contract is a thing that can be tested:
+/// `bb pr reviewers 7 suggest` is rejected by clap before it parses, so the arm
+/// that catches it is unreachable from a command line and would otherwise sit
+/// in `main` forever unexercised.
+async fn dispatch_reviewers(
+    ctx: &commands::pr::Ctx,
+    id: Option<u64>,
+    command: Option<ReviewersCommand>,
+) -> bb_cli::error::Result<()> {
+    match (id, command) {
+        (_, Some(ReviewersCommand::List { id })) => commands::pr_reviewers::list(ctx, id).await,
+        (_, Some(ReviewersCommand::Add { id, names })) => {
+            commands::pr_reviewers::add(ctx, id, &names).await
+        }
+        (_, Some(ReviewersCommand::Remove { id, names })) => {
+            commands::pr_reviewers::remove(ctx, id, &names).await
+        }
+        (
+            None,
+            Some(ReviewersCommand::Suggest {
+                pr,
+                target,
+                source,
+                since,
+                limit,
+                file_limit,
+                acknowledge_private_data,
+            }),
+        ) => {
+            commands::reviewer_suggestions::run(
+                ctx,
+                commands::reviewer_suggestions::SuggestArgs {
+                    pr,
+                    target,
+                    source,
+                    since,
+                    limit,
+                    file_limit,
+                    acknowledge_private_data,
+                },
+            )
+            .await
+        }
+        (Some(_), Some(ReviewersCommand::Suggest { .. })) => Err(bb_cli::error::BbError::Config(
+            "pass a pull request id to `reviewers suggest` with --pr, not before the subcommand"
+                .into(),
+        )),
+        (Some(id), None) => commands::pr_reviewers::list(ctx, id).await,
+        (None, None) => Err(bb_cli::error::BbError::Config(
+            "pass a pull request id, or use `add`/`remove`/`suggest`".into(),
+        )),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = match Cli::try_parse() {
@@ -821,5 +741,323 @@ async fn main() {
     if let Err(err) = run(cli).await {
         eprintln!("error: {err}");
         std::process::exit(err.exit_code());
+    }
+}
+
+/// Routes `bb pr …`.
+///
+/// Split out of `run` so the two cases the argument tree cannot express —
+/// `pr mine` reached here at all, and a repository alongside it — are states
+/// a test can construct, rather than arms that sit in `main` unexercised.
+async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> Result<()> {
+    // `pr mine` is the one pull-request command that is not scoped to a
+    // repository, so it is settled before a repo-scoped context is built: a
+    // caller outside a checkout is told what is actually wrong instead of being
+    // handed a repository-resolution error, and a repository passed alongside it
+    // is refused rather than silently ignored.
+    if let PrCommand::Mine {
+        role,
+        state,
+        workspace,
+        repo_limit,
+        build,
+    } = &command
+    {
+        if repo.is_none() {
+            return commands::pr_mine::run(
+                format,
+                commands::pr_mine::MineArgs {
+                    role: *role,
+                    state: state.clone(),
+                    workspace: workspace.clone(),
+                    repo_limit: *repo_limit,
+                    build: *build,
+                },
+            )
+            .await;
+        }
+    }
+    let ctx = commands::pr::Ctx::new(repo, format)?;
+    match command {
+        PrCommand::List {
+            destination,
+            current,
+            state,
+            reviewer,
+            author,
+            review_state,
+            needs_my_review,
+            build,
+            build_status,
+            limit,
+        } => {
+            commands::pr_list::list(
+                &ctx,
+                commands::pr_list::ListArgs {
+                    destination,
+                    current,
+                    state,
+                    reviewer,
+                    author,
+                    review_state,
+                    needs_my_review,
+                    build,
+                    build_status,
+                    limit,
+                },
+            )
+            .await
+        }
+        PrCommand::Diff { id } => commands::pr::diff(&ctx, id).await,
+        PrCommand::Files { id } => commands::pr::files(&ctx, id).await,
+        PrCommand::Commits { id } => commands::pr::commits(&ctx, id).await,
+        PrCommand::Build { id } => commands::pr_build::run(&ctx, id).await,
+        PrCommand::Retarget { id, to } => commands::pr_retarget::run(&ctx, id, &to).await,
+        PrCommand::Edit {
+            id,
+            title,
+            description,
+            description_stdin,
+        } => {
+            commands::pr_edit::run(
+                &ctx,
+                commands::pr_edit::EditArgs {
+                    id,
+                    title,
+                    description,
+                    description_stdin,
+                },
+            )
+            .await
+        }
+        PrCommand::RequestChanges { id, yes } => commands::pr::request_changes(&ctx, id, yes).await,
+        PrCommand::NoRequestChanges { id, yes } => {
+            commands::pr::unrequest_changes(&ctx, id, yes).await
+        }
+        PrCommand::Create {
+            target,
+            source,
+            title,
+            description,
+            description_stdin,
+            no_default_reviewers,
+            reviewer,
+            interactive,
+            web,
+            close_source_branch,
+        } => {
+            commands::pr::create(
+                &ctx,
+                commands::pr::CreateArgs {
+                    target,
+                    source,
+                    title,
+                    description,
+                    description_stdin,
+                    no_default_reviewers,
+                    reviewer,
+                    interactive,
+                    web,
+                    close_source_branch,
+                },
+            )
+            .await
+        }
+        PrCommand::Reviewers { id, command } => dispatch_reviewers(&ctx, id, command).await,
+        PrCommand::View {
+            id,
+            unresolved,
+            comments_only,
+            metadata_only,
+            build,
+            conflicts,
+        } => {
+            commands::pr_comments::view_with_options(
+                &ctx,
+                commands::pr_comments::ViewArgs {
+                    id,
+                    unresolved,
+                    comments_only,
+                    metadata_only,
+                    build,
+                    conflicts,
+                },
+            )
+            .await
+        }
+        PrCommand::Comment {
+            id,
+            body,
+            body_stdin,
+            file,
+            line,
+            reply_to,
+            pending,
+            web,
+        } => {
+            commands::pr_comments::comment(
+                &ctx,
+                commands::pr_comments::CommentArgs {
+                    id,
+                    body,
+                    body_stdin,
+                    file,
+                    line,
+                    reply_to,
+                    pending,
+                    web,
+                },
+            )
+            .await
+        }
+        PrCommand::Resolve { id, comment, yes } => {
+            commands::pr_comments::resolve(&ctx, id, comment, yes).await
+        }
+        PrCommand::Unresolve { id, comment } => {
+            commands::pr_comments::unresolve(&ctx, id, comment).await
+        }
+        // `pr mine` returned above, before any repo-scoped context was
+        // built. Reached when a repository *was* given alongside it, where a
+        // repository-scoped context is meaningless and the flag the user
+        // passed should be named rather than silently ignored.
+        PrCommand::Mine { .. } => Err(BbError::Config("pr mine does not take a repository".into())),
+    }
+}
+
+/// `pr mine` scans every repository, so a repository-scoped context would be
+/// meaningless. `main` already refuses `--repo` with it before `run` is
+/// entered; this is the arm that catches it if that guard is ever removed.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod pr_mine_dispatch_tests {
+    use super::*;
+
+    fn mine() -> PrCommand {
+        PrCommand::Mine {
+            role: commands::pr_mine::RoleArg::All,
+            state: "OPEN".into(),
+            workspace: None,
+            repo_limit: 30,
+            build: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repository_alongside_pr_mine_is_refused() {
+        // The refusal happens after a repository-scoped context is built, which
+        // reads credentials from the environment. Set them here so the test
+        // neither depends on the developer's own nor touches a real keyring.
+        std::env::set_var("BB_EMAIL", "dev@example.com");
+        std::env::set_var("BB_TOKEN", "t0ken-value");
+        std::env::set_var("BB_KEYRING_DISABLE", "1");
+
+        let err = dispatch_pr(Some("acme/widgets"), Format::Json, mine())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not take a repository"),
+            "{err}"
+        );
+    }
+}
+
+/// The `bb pr reviewers` contract. clap stops most malformed calls before they
+/// reach here, so these are the cases a command line cannot produce but a
+/// future refactor of the argument tree could.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod reviewer_dispatch_tests {
+    use super::*;
+
+    fn ctx() -> commands::pr::Ctx {
+        // Built field by field rather than through `Ctx::new`, which reads the
+        // environment for credentials. No path exercised here makes a request,
+        // so the base url is never dialled — and a test must not depend on the
+        // developer's own credentials or on a keyring being present.
+        commands::pr::Ctx {
+            client: bb_cli::api::Client::new(
+                bb_cli::credentials::Credentials {
+                    email: "dev@example.com".into(),
+                    token: bb_cli::secret::SecretString::from("t0ken-value"),
+                },
+                "http://127.0.0.1:1".to_string(),
+            )
+            .unwrap(),
+            slug: bb_cli::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: bb_cli::output::Format::Json,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_id_before_suggest_is_named_as_the_mistake() {
+        let err = dispatch_reviewers(
+            &ctx(),
+            Some(7),
+            Some(ReviewersCommand::Suggest {
+                pr: None,
+                target: None,
+                source: None,
+                since: "12mo".into(),
+                limit: 5,
+                file_limit: 25,
+                acknowledge_private_data: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("--pr"), "{message}");
+        assert!(message.contains("not before the subcommand"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn the_list_subcommand_reaches_the_request_it_names() {
+        // `bb pr reviewers list 7` is the only spelling that carries an id
+        // *inside* the subcommand; the bare `bb pr reviewers 7` goes through
+        // the no-subcommand arm instead, so this path needs its own exercise.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repositories/acme/widgets/pullrequests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7,
+                "title": "fix the thing",
+                "state": "OPEN",
+                "reviewers": [{ "uuid": "{a}", "display_name": "Ana" }],
+                "participants": [
+                    { "role": "REVIEWER", "state": "approved",
+                      "user": { "uuid": "{a}", "display_name": "Ana" } }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let ctx = commands::pr::Ctx {
+            client: bb_cli::api::Client::new(
+                bb_cli::credentials::Credentials {
+                    email: "dev@example.com".into(),
+                    token: bb_cli::secret::SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: bb_cli::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: bb_cli::output::Format::Json,
+        };
+        dispatch_reviewers(&ctx, None, Some(ReviewersCommand::List { id: 7 }))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bare_reviewers_call_names_the_three_subcommands() {
+        let err = dispatch_reviewers(&ctx(), None, None).await.unwrap_err();
+        let message = err.to_string();
+        for flag in ["add", "remove", "suggest"] {
+            assert!(message.contains(flag), "{flag} missing from: {message}");
+        }
     }
 }

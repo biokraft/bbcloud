@@ -80,7 +80,7 @@ There is no `approvals` field.
 Find the pull request for the current branch:
 
 ```bash
-bb pr list --json | jq --arg b "$(git branch --show-current)" '.[] | select(.source == $b)'
+bb pr list --current --json
 ```
 
 ## Build status
@@ -268,14 +268,25 @@ the new text.
 
 ```bash
 bb pr reviewers 42 --json                     # list, same as `list`
+bb pr reviewers suggest --pr 42 --acknowledge-private-data --json  # file-owner evidence; read-only
+bb pr reviewers suggest main --acknowledge-private-data --json      # prospective for a target
 bb pr reviewers add 42 dana,ash --json  # tag reviewers, comma-separated
 bb pr reviewers remove 42 ash --json       # untag a reviewer
+bb repo members --json                      # names, uuids, and resolver-pool sources
 ```
 
 Names match case-insensitively as a substring of display name or nickname, against the
-repository's user list plus its default reviewers. An exact match wins over a longer substring
-match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when ambiguous.
-Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
+repository's user list plus its effective default reviewers. An exact match wins over a longer
+substring match. Ambiguous or no match is an error, exit 1 — the error lists the candidates when
+ambiguous. Pass `{uuid}` in braces to skip name matching entirely; every error message suggests it.
+`bb repo members --json` exposes the same resolver pool and reports any partial sources.
+`bb pr reviewers suggest` is read-only and never calls an add or create endpoint. It needs
+`--acknowledge-private-data`: it reads private file paths, colleague names, dates and account ids
+out of commit history, so say what those categories are and get a yes before running it. It reports
+`target_commits` (who maintains the changed files) and `source_commits` (who else worked on this
+branch) as separate claims, and each suggestion's `eligibility` as `true`, `false`, or `unknown` —
+file ownership is not repository access. Show the `commit_count`, `files`, `last_commit_on`, and
+`eligibility` evidence to the user before asking which people to select.
 
 Every name is resolved before any write, so one bad name in `add 42 a,b` writes nothing. Adding
 someone already tagged makes no write and exits 0. Removing someone not tagged is an error, exit
@@ -290,7 +301,7 @@ thread is supported, but only on the user's request — see
 
 ```bash
 bb pr create main --title "Cache session lookups" --json
-bb pr create main feat/cache --title "..." --description "..." --close-source-branch --json
+bb pr create main feat/cache --title "..." --description-stdin --close-source-branch --json < body.md
 bb pr create main,develop --title "..." --json      # one pull request per target
 bb pr create main --title "..." --reviewer dana,ash --json   # exactly these two reviewers
 ```
@@ -328,7 +339,7 @@ Both filters match a substring, and ignore case.
 
 | Command | Result |
 |---|---|
-| `bb pr list [target] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
+| `bb pr list [target] [--current] [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED\|DRAFT\|ALL] [--reviewer] [--author] [--review-state] [--needs-my-review] [--build] [--build-status <state>] [--limit]` | `[{id,title,state,draft,author,source,destination,reviewers[],url}]`, plus `build_state` and `build[{key,name,state,url}]` when `--build` or `--build-status` is given |
 | `bb pr view <id> [--metadata-only] [--unresolved] [--comments-only] [--build] [--conflicts]` | `{pull_request,comments_loaded,general[],inline[]}`, plus optional `build`, `conflicts`, and `unresolved_threads` |
 | `bb pr diff <id>` | plain diff; `--json` wraps it as `{id,diff}` |
 | `bb pr files <id>` | `[{status,path}]` |
@@ -339,21 +350,23 @@ Both filters match a substring, and ignore case.
 | `bb pr resolve <id> <comment> --yes` | `{resolved,pull_request}`; only on the user's request |
 | `bb pr unresolve <id> <comment>` | `{unresolved,pull_request}` |
 | `bb pr reviewers <id>` / `list <id>` | `[{name,uuid,state}]` |
+| `bb pr reviewers suggest --pr <id>` / `suggest <target> [source]` (needs `--acknowledge-private-data`) | `{pull_request\|prospective,since,files_scanned,files_skipped,history_complete,errors[],suggestions[{name,uuid,commit_count,target_commits,source_commits,files,last_commit_on,eligibility}]}` |
 | `bb pr reviewers add <id> <names>` / `remove <id> <names>` | `[{name,uuid,state}]` |
-| `bb pr create <target> [source] …` | `[{id,target,url}]` |
+| `bb pr create <target> [source] … [--description-stdin]` | `[{id,target,url}]` |
 | `bb pr retarget <id> --to <branch>` | `{id,title,source,destination,url}` |
 | `bb pr edit <id> [--title] [--description \| --description-stdin]` | `{id,title,description,url,changed[]}` |
 | `bb pr request-changes <id> --yes` | `{requested_changes:<id>}`; only on the user's request |
 | `bb pr no-request-changes <id> --yes` | `{unrequested_changes:<id>}`; only on the user's request |
 | `bb branch list …` | `[{branch,user,updated}]` |
 | `bb project list` | the projects in a workspace |
-| `bb repo list [--project KEY]` | the repositories in a workspace or project |
+| `bb repo list [--project KEY]` | repositories with identity, URLs, and timestamps |
+| `bb repo members` | `{users,partial}` for the reviewer resolver pools |
 | `bb repo create <name> --project KEY` | create a repository, private by default |
 | `bb auth status` | `{email,token,account}`, token redacted |
 | `bb browse --print [--pr <id>\|--branches]` | `{url}` |
 
-`timestamp` and `updated` hold a relative time, for example `3 days ago`. For an exact time, read
-the commit or the diff.
+Human-facing `timestamp` and `updated` fields may hold a relative time, for example `3 days ago`.
+Use raw `created_on` and `updated_on` fields for exact machine-readable times.
 
 ## When a command fails
 

@@ -8,6 +8,7 @@ use serde::Serialize;
 struct ProjectRow {
     key: String,
     name: String,
+    uuid: Option<String>,
     access: String,
 }
 
@@ -26,6 +27,7 @@ fn rows(projects: &[Project], name: Option<String>, limit: usize) -> Vec<Project
         .map(|p| ProjectRow {
             key: p.key_or_dash().to_string(),
             name: p.name_or_dash().to_string(),
+            uuid: p.uuid.clone(),
             access: p.access().to_string(),
         })
         .collect()
