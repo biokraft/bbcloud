@@ -1,4 +1,6 @@
-use crate::api::models::{Commit, DiffStatEntry, PullRequest, ReviewerRef, User};
+use crate::api::models::{
+    Commit, DiffStatEntry, EffectiveReviewer, PullRequest, ReviewerRef, User,
+};
 use crate::api::{repo_path, Client};
 use crate::credentials;
 use crate::error::{BbError, Result};
@@ -242,6 +244,7 @@ pub struct CreateArgs {
     pub source: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub description_stdin: bool,
     pub no_default_reviewers: bool,
     pub reviewer: Option<String>,
     pub interactive: bool,
@@ -252,11 +255,17 @@ pub struct CreateArgs {
 async fn default_reviewers(ctx: &Ctx) -> Result<Vec<ReviewerRef>> {
     let me: User = ctx.client.get_json("/user").await?;
     let my_uuid = me.uuid.unwrap_or_default();
-    let reviewers: Vec<User> = ctx.client.paginate(&ctx.path("/default-reviewers")).await?;
+    let reviewers: Vec<EffectiveReviewer> = ctx
+        .client
+        .paginate(&ctx.path("/effective-default-reviewers?pagelen=100"))
+        .await?;
+    let mut seen = std::collections::HashSet::new();
     Ok(reviewers
         .into_iter()
-        .filter_map(|r| r.uuid)
+        .filter_map(|reviewer| reviewer.user)
+        .filter_map(|user| user.uuid)
         .filter(|uuid| *uuid != my_uuid)
+        .filter(|uuid| seen.insert(uuid.clone()))
         .map(|uuid| ReviewerRef { uuid })
         .collect())
 }
@@ -275,16 +284,33 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
         return Err(BbError::Config("no reviewer name given".into()));
     }
 
-    // Names first, so a typo fails before anything else is asked of the api.
+    // Split first, then resolve: a `{uuid}` is already exact, so the pool is
+    // loaded only when there is at least one name that actually needs it.
     let mut uuids: Vec<String> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     for name in requested {
-        let user = users::resolve_user(&ctx.client, &ctx.slug, name, &[]).await?;
-        let uuid = user
-            .uuid
-            .clone()
-            .ok_or_else(|| BbError::Config(format!("`{}` has no uuid to tag", user.name())))?;
-        if !uuids.contains(&uuid) {
-            uuids.push(uuid);
+        match users::uuid_user(name) {
+            // `uuid_user` only answers for a `{uuid}`, so it always has one.
+            Some(user) => {
+                let uuid = user.uuid.unwrap_or_default();
+                if !uuid.is_empty() && !uuids.contains(&uuid) {
+                    uuids.push(uuid);
+                }
+            }
+            None => names.push(name),
+        }
+    }
+    if !names.is_empty() {
+        let pool = users::load_user_pool(&ctx.client, &ctx.slug).await?;
+        for name in names {
+            let user = pool.resolve_for_write(name, &[])?;
+            let uuid = user
+                .uuid
+                .clone()
+                .ok_or_else(|| BbError::Config(format!("`{}` has no uuid to tag", user.name())))?;
+            if !uuids.contains(&uuid) {
+                uuids.push(uuid);
+            }
         }
     }
 
@@ -295,7 +321,58 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
     Ok(uuids.into_iter().map(|uuid| ReviewerRef { uuid }).collect())
 }
 
+/// Normalizes a description read from stdin.
+///
+/// Whether the input is a pipe or a live terminal is decided by the caller and
+/// passed in, so the rule is a pure function and can be tested without a tty —
+/// a terminal here would block forever waiting for an EOF nobody will type.
+fn description_from(body: &str, interactive: bool) -> Result<String> {
+    if interactive {
+        return Err(BbError::Config(
+            "--description-stdin requires piped or redirected input".into(),
+        ));
+    }
+    // A description authored on Windows arrives with CRLF, and the trailing \r
+    // would otherwise be sent to bitbucket as part of the last line.
+    Ok(body
+        .replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_string())
+}
+
+/// Reads the body, given a verdict on where it is coming from.
+///
+/// The reader and the verdict are both parameters so that a live terminal is a
+/// case this can be asked about, rather than one only a real tty can produce.
+fn description_from_reader(reader: &mut impl std::io::Read, interactive: bool) -> Result<String> {
+    // A terminal is refused before anything is read: reading first would block
+    // forever waiting for an EOF that only a redirect will ever send.
+    if interactive {
+        return Err(BbError::Config(
+            "--description-stdin requires piped or redirected input".into(),
+        ));
+    }
+    let mut body = String::new();
+    reader.read_to_string(&mut body)?;
+    description_from(&body, false)
+}
+
+fn read_description_from_stdin() -> Result<String> {
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    description_from_reader(&mut std::io::stdin(), interactive)
+}
+
 pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
+    if args.description_stdin && args.description.is_some() {
+        return Err(BbError::Config(
+            "--description and --description-stdin cannot be used together".into(),
+        ));
+    }
+    if args.description_stdin && args.interactive {
+        return Err(BbError::Config(
+            "--description-stdin cannot be combined with --interactive".into(),
+        ));
+    }
     let source = match args.source {
         Some(branch) => branch,
         None => git::current_branch()?,
@@ -319,7 +396,11 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
     }
 
     let mut title = args.title;
-    let mut description = args.description;
+    let mut description = if args.description_stdin {
+        Some(read_description_from_stdin()?)
+    } else {
+        args.description
+    };
     if args.interactive {
         if title.is_none() {
             let entered = inquire::Text::new("title:")
@@ -456,5 +537,166 @@ mod tests {
         assert!(line.contains("#42"), "got: {line}");
         assert!(line.contains("fix auth token expiry"), "got: {line}");
         assert!(line.contains("Dana"), "got: {line}");
+    }
+}
+
+/// clap rejects these flag pairs on the command line, but `create` is public and
+/// a library caller can build an `CreateArgs` that trips them. The guards have
+/// to hold on their own, and they must hold before the first request goes out.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod create_guard_tests {
+    use super::*;
+    use crate::api::Client;
+    use crate::credentials::Credentials;
+    use crate::output::Format;
+    use crate::secret::SecretString;
+
+    fn args() -> CreateArgs {
+        CreateArgs {
+            target: "main".into(),
+            source: Some("feature/x".into()),
+            title: Some("t".into()),
+            description: None,
+            description_stdin: false,
+            no_default_reviewers: false,
+            reviewer: None,
+            interactive: false,
+            web: false,
+            close_source_branch: false,
+        }
+    }
+
+    async fn ctx(server: &wiremock::MockServer) -> Ctx {
+        Ctx {
+            client: Client::new(
+                Credentials {
+                    email: "dev@example.com".into(),
+                    token: SecretString::from("t0ken-value"),
+                },
+                server.uri(),
+            )
+            .unwrap(),
+            slug: crate::repo::RepoSlug::parse("acme/widgets").unwrap(),
+            format: Format::Json,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_description_cannot_arrive_from_two_places_at_once() {
+        let server = wiremock::MockServer::start().await;
+        let ctx = ctx(&server).await;
+        let err = create(
+            &ctx,
+            CreateArgs {
+                description: Some("typed".into()),
+                description_stdin: true,
+                ..args()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("cannot be used together"), "{err}");
+
+        // Piped prose and the interactive editor are two different answers to
+        // the same question, and neither can be taken as the other's.
+        let err = create(
+            &ctx,
+            CreateArgs {
+                description_stdin: true,
+                interactive: true,
+                ..args()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--interactive"), "{err}");
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "a rejected combination must not have opened a pull request"
+        );
+    }
+}
+
+/// The pipe-or-redirect rule, as a pure function. The decision is the caller's
+/// to make because only it can see the terminal; the consequence of that
+/// decision is what is worth pinning down.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod description_tests {
+    use super::*;
+
+    #[test]
+    fn a_live_terminal_is_refused_rather_than_left_to_block() {
+        let err = description_from("body", true).unwrap_err();
+        assert!(err.to_string().contains("piped or redirected"), "{err}");
+    }
+
+    /// A reader that records being touched, so the ordering can be asserted
+    /// rather than assumed: a terminal must be refused *before* any read, or
+    /// it blocks forever waiting for an EOF.
+    struct Records<'a> {
+        body: &'a [u8],
+        touched: std::cell::Cell<bool>,
+    }
+    impl std::io::Read for Records<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.touched.set(true);
+            if self.body.is_empty() {
+                return Ok(0);
+            }
+            let take = self.body.len().min(buf.len());
+            buf[..take].copy_from_slice(&self.body[..take]);
+            self.body = &self.body[take..];
+            Ok(take)
+        }
+    }
+
+    #[test]
+    fn a_terminal_is_refused_before_anything_is_read() {
+        let mut reader = Records {
+            body: b"never read",
+            touched: std::cell::Cell::new(false),
+        };
+        let err = description_from_reader(&mut reader, true).unwrap_err();
+        assert!(err.to_string().contains("piped or redirected"), "{err}");
+        assert!(
+            !reader.touched.get(),
+            "stdin was read before the terminal was refused"
+        );
+    }
+
+    #[test]
+    fn a_pipe_is_read_and_normalized() {
+        let mut reader = Records {
+            body: b"hello\r\nworld\r\n",
+            touched: std::cell::Cell::new(false),
+        };
+        assert_eq!(
+            description_from_reader(&mut reader, false).unwrap(),
+            "hello\nworld"
+        );
+        assert!(reader.touched.get(), "a pipe should have been read");
+    }
+
+    #[test]
+    fn windows_line_endings_do_not_reach_bitbucket() {
+        // A body authored on Windows arrives with CRLF; the trailing \r would
+        // otherwise become part of the last line of the description.
+        assert_eq!(
+            description_from("one\r\ntwo\r\n", false).unwrap(),
+            "one\ntwo"
+        );
+    }
+
+    #[test]
+    fn internal_newlines_and_a_missing_trailing_newline_are_kept() {
+        assert_eq!(description_from("a\n\nb", false).unwrap(), "a\n\nb");
+        assert_eq!(description_from("", false).unwrap(), "");
     }
 }

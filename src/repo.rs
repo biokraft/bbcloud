@@ -88,6 +88,13 @@ pub fn resolve(explicit: Option<&str>) -> Result<RepoSlug> {
             return RepoSlug::parse(&value);
         }
     }
+    resolve_from_git()
+}
+
+/// Resolve the repository from the checkout's Bitbucket remote, ignoring
+/// `BB_REPO`. Callers that combine a checkout branch with an explicitly selected
+/// repository use this to detect a mismatch before making an API request.
+pub fn resolve_from_git() -> Result<RepoSlug> {
     if !git::in_repo() {
         return Err(BbError::Config(
             "no git repository here — pass `--repo workspace/repo`".into(),

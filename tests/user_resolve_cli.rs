@@ -33,10 +33,19 @@ async fn mount_members_403(server: &MockServer) {
 }
 
 async fn mount_default_reviewers(server: &MockServer, reviewers: serde_json::Value) {
+    let values = reviewers
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|user| serde_json::json!({ "user": user }))
+        .collect::<Vec<_>>();
     Mock::given(method("GET"))
-        .and(path("/repositories/acme/widgets/default-reviewers"))
+        .and(path(
+            "/repositories/acme/widgets/effective-default-reviewers",
+        ))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": reviewers })),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": values })),
         )
         .mount(server)
         .await;

@@ -2,7 +2,7 @@ use crate::api::models::{PullRequest, ReviewerRef, ReviewerState, User};
 use crate::commands::pr::Ctx;
 use crate::error::{BbError, Result};
 use crate::output::{self, Format};
-use crate::users::resolve_user;
+use crate::users::{load_user_pool, uuid_user, UserPool};
 
 async fn fetch(ctx: &Ctx, id: u64) -> Result<PullRequest> {
     ctx.client
@@ -49,14 +49,26 @@ fn split_names(names: &str) -> Vec<&str> {
 
 /// Resolves every name before any write, so a typo in the second name cannot
 /// leave a half-applied change.
-async fn resolve_all(ctx: &Ctx, names: &str, pool: &[User]) -> Result<Vec<User>> {
+async fn resolve_all(ctx: &Ctx, names: &str, extra: &[User]) -> Result<Vec<User>> {
     let requested = split_names(names);
     if requested.is_empty() {
         return Err(BbError::Config("no reviewer name given".into()));
     }
+    // Split first, then resolve: a `{uuid}` is already exact, so the pool is
+    // loaded only when there is at least one name that actually needs it.
     let mut resolved = Vec::new();
+    let mut by_name: Vec<&str> = Vec::new();
     for name in requested {
-        resolved.push(resolve_user(&ctx.client, &ctx.slug, name, pool).await?);
+        match uuid_user(name) {
+            Some(user) => resolved.push(user),
+            None => by_name.push(name),
+        }
+    }
+    if !by_name.is_empty() {
+        let pool: UserPool = load_user_pool(&ctx.client, &ctx.slug).await?;
+        for name in by_name {
+            resolved.push(pool.resolve_for_write(name, extra)?);
+        }
     }
     Ok(resolved)
 }
