@@ -62,11 +62,12 @@ If two commands disagree, compare them field by field, not by eye. A claimed dif
 out to be two different pull requests wastes everyone's time:
 
 ```bash
-bb pr list -R <workspace>/<repo> --json > a.json
-bb pr mine --json > b.json
+evidence=$(mktemp -d)   # outside the working tree, so private output is never committed
+bb pr list -R <workspace>/<repo> --json > "$evidence/a.json"
+bb pr mine --json > "$evidence/b.json"
 ```
 
-Then compare the fields in question for the same `id`. Delete both files when the issue is filed.
+Then compare the fields in question for the same `id`. Delete `$evidence` when the issue is filed.
 
 ## Step 3 — redact
 
@@ -100,13 +101,13 @@ with a different theory. If an issue matches, add your evidence as a comment, af
 approval as a new issue:
 
 ```bash
-gh issue comment <number> --repo biokraft/bbcloud --body-file issue.md
+gh issue comment <number> --repo biokraft/bbcloud --body-file "$evidence/issue.md"
 ```
 
 ## Step 5 — draft the issue
 
-Write the body to a file, and pass it with `--body-file`. A long `--body` string breaks code fences
-and puts the text in the shell history.
+Write the body to `"$evidence/issue.md"`, and pass it with `--body-file`. A long `--body` string
+breaks code fences and puts the text in the shell history.
 
 Use these four headings:
 
@@ -143,7 +144,7 @@ File only on a clear yes. If the user asks for a change, redraft, show the resul
 Never file a "close enough" version.
 
 ```bash
-gh issue create --repo biokraft/bbcloud --title "<title>" --body-file issue.md
+gh issue create --repo biokraft/bbcloud --title "<title>" --body-file "$evidence/issue.md"
 ```
 
 Report the url that `gh` prints.

@@ -10,11 +10,10 @@ license: MIT
 branch, write the description or choose the reviewers. This skill does those, in order. Two steps
 stop and ask the user. Do not skip them.
 
-For the rules of `bb` itself — `--json`, exit codes, how names resolve — see the `bitbucket-cloud`
-skill.
-
 ## Operating contract
 
+- Add `--json` to every `bb` command, and branch on the exit code: `2` not authenticated (ask the
+  user to run `bb auth login`), `3` not found.
 - Find the source and the target branch before you propose a title or reviewers.
 - Collect evidence before you draft. Never invent ownership, tests or risks.
 - Stop at the description gate and at the reviewer gate. Run `bb pr create` only after the user
@@ -36,6 +35,14 @@ has no upstream, or has commits that are not pushed, push it: `git push -u origi
 is uncommitted work, ask the user whether it belongs in this pull request. If `symbolic-ref` fails,
 `git remote set-head origin --auto` sets the default branch.
 
+Check that the branch has no open pull request yet:
+
+```bash
+bb pr list --current --json
+```
+
+If it returns a row, do not open a second one. Report its `url`, and offer to edit it instead.
+
 The target is usually the default branch. A branch cut from a release or an integration branch
 targets that branch instead. The merge base shows where the branch started:
 
@@ -44,7 +51,8 @@ git log --oneline --decorate -1 "$(git merge-base HEAD <default-branch>)"
 ```
 
 If the source does not descend from the default branch, ask the user for the target. Use the
-target you find here in every later step. Do not assume `main`.
+target you find here in every later step. Do not assume `main`. Pass it to `bb` as a branch name,
+without the `origin/` prefix.
 
 Find the title convention. If the repository squash-merges, the title becomes the commit message.
 If the repository parses commits — conventional commits, release automation — a wrong title gives
@@ -106,8 +114,14 @@ hide the person the user means. Pass `{uuid}` values then.
 
 ## Step 4 — the description gate
 
-Write the description to a file. Then **print the description back** to the user in full, exactly
-as it will appear, and ask for approval. If the user asks for changes, redraft and show it again.
+Write the description to a file outside the working tree, so it is never committed:
+
+```bash
+body=$(mktemp)
+```
+
+Then **print the description back** to the user in full, exactly as it will appear, and ask for
+approval. If the user asks for changes, redraft and show it again.
 Do not create the pull request before the user approves the text.
 
 ### The shape
@@ -167,7 +181,7 @@ not suggest.
 ## Step 6 — create
 
 ```bash
-bb pr create <target> --title "<title>" --description-stdin --reviewer '{uuid-1},{uuid-2}' --json < pr-body.md
+bb pr create <target> --title "<title>" --description-stdin --reviewer '{uuid-1},{uuid-2}' --json < "$body"
 ```
 
 `--reviewer` is the full reviewer set. It replaces the repository's default reviewers, so only the
@@ -194,5 +208,5 @@ To change the title or the description, show the new text and get a yes, as in S
 
 ```bash
 bb pr edit <id> --title "<title>" --json
-bb pr edit <id> --description-stdin --json < pr-body.md
+bb pr edit <id> --description-stdin --json < "$body"
 ```

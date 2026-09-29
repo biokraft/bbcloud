@@ -29,13 +29,13 @@ and what each failure means. For flags and syntax, read `bb <command> --help`.
    a human at a prompt.
 7. Give every comment a body: `--body` for one line, `--body-stdin` for more. With neither and no
    terminal, the command fails.
-8. On exit 2, exit 3 or a `forbidden` error, stop and tell the user the next step. Never fall back
+8. On exit 2, exit 3 or an `api error 403`, stop and tell the user the next step. Never fall back
    to a browser or to another provider.
 9. `bb` can print `bb X.Y.Z is available …` on stderr. That is a notice, not a failure: the command
    succeeded, and stdout is clean. Tell the user once, and quote the upgrade command it names. Do
    not run the upgrade.
-10. If a skill this file names is not installed, `bb skill install --all` installs the full set. It
-    needs no credentials.
+10. If a skill this file names is not installed, tell the user that `bb skill install` adds it. Do
+    not run it yourself: it writes files into the repository.
 
 ## Choose the command
 
@@ -109,7 +109,7 @@ prompt for the user, so use it only for an id the user approved.
 
 Only the root of an inline thread can be resolved: `parent` is `null` and `file` is set. Check both
 before you send. With `--yes`, `bb` skips its own check, and Bitbucket answers a reply or a general
-comment with a `forbidden` error that looks like a scope problem.
+comment with `api error 403`, which `bb` explains as a missing scope.
 
 ## Verdicts belong to the user
 
@@ -218,15 +218,18 @@ partial, and quote `files_skipped`, `paths_skipped` and `errors[]`.
 
 ## When a command fails
 
+A failure exits non-zero and prints one `error: …` line on stderr. API failures read
+`error: bitbucket api error <status>: <message>`.
+
 | Signal | Cause | Next step |
 |---|---|---|
 | exit 2 | no valid credentials | Ask the user to run `bb auth login`. It prompts, so do not run it yourself. In CI, set `BB_EMAIL` and `BB_TOKEN`. |
 | exit 3 | the pull request, comment, branch or repository does not exist | Check the id, and the repository in `-R`. |
-| exit 3 from `unresolve` | the thread is not resolved | Nothing to do. |
-| `forbidden` from `resolve --yes` | the id is a reply or a general comment | Pass the root of an inline thread. |
-| `forbidden` elsewhere | the token lacks a scope | `bb auth login --help` lists each scope and the commands that need it. |
-| 409 from `resolve` | the thread is already resolved | Nothing to do. |
-| `rate limited` | too many requests | Wait, then retry once. |
+| exit 3 from `unresolve` | the thread is not resolved, or the id is wrong | Check the id. If it is right, nothing to do. |
+| `api error 403` from `resolve --yes` | the id is a reply or a general comment | Pass the root of an inline thread. |
+| `api error 403` elsewhere | the token lacks a scope | `bb auth login --help` lists each scope and the commands that need it. |
+| `api error 409` from `resolve` | the thread is already resolved | Nothing to do. |
+| `api error 429` | rate limited | Wait, then retry once. |
 | `no bitbucket.org remote found`, `no git repository here` | no repository to act on | Pass `-R <workspace>/<repo>`, or set `BB_REPO`. |
 
 `bb` authenticates with an Atlassian account email and an API token. Never suggest an app password:

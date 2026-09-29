@@ -136,11 +136,11 @@ A one-line verdict, then the groups, then a count. List at most 10 pull requests
 no closing offer of help.
 
 ```
-2 need you · 1 waiting on others · 1 quiet
+2 need you · 1 waiting on others · 1 merge candidate · 1 quiet
 
 🔴 YOU'RE BLOCKING
   [acme/api PR 225](https://bitbucket.org/acme/api/pull-requests/225)  Validate mapi responses
-    Your review is pending · 4h old
+    Your review is pending · 2d old
     → bb pr view 225 -R acme/api --unresolved --json
 
   [acme/web PR 206](https://bitbucket.org/acme/web/pull-requests/206)  Add guardrail hooks
@@ -148,7 +148,7 @@ no closing offer of help.
     → bb pr build 206 -R acme/web --json
 
 ⏳ WAITING ON OTHERS
-  [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  Dana hasn't replied to your 2 threads · 3d
+  [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  No review from Dana yet · 3d
 
 ✅ MERGE CANDIDATE
   [acme/api PR 198](https://bitbucket.org/acme/api/pull-requests/198)  Approved by Dana, build green · 2d
@@ -184,7 +184,8 @@ is `failed` or `stopped`.
 
 ### Shape rules
 
-- The verdict line is always present, and has no emoji — also when it reads `nothing needs you`.
+- The verdict line is always present, and has no emoji — also when it reads `nothing needs you`. It
+  counts each group that appears below it.
 - A group heading appears only when the group has entries.
 - `🔴 YOU'RE BLOCKING` holds rungs 1–3. Each entry has one command line that starts with `→`.
 - `⏳ WAITING ON OTHERS` holds rung 5. Name who owes the reply and for how long. Add a command only
