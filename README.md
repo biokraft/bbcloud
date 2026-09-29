@@ -28,7 +28,7 @@ $ bb pr list --build
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Across every repository you work in, not just this one:
+Across your workspaces, not just this repository:
 
 ```
 $ bb pr mine
@@ -105,24 +105,21 @@ Then, in any repository with a Bitbucket remote:
 
 ```bash
 bb pr list --build   # this repository
-bb pr mine           # every repository you work in
+bb pr mine           # across your workspaces
 ```
 
 ## Agent skills
 
-This repository ships several [Agent Skills](.agents/skills/) — the portable `SKILL.md` format
-that Claude Code, Codex, Cursor and OpenCode all read. `bitbucket-cloud` teaches the agent to
-review pull requests through `bb` rather than ask you to open a browser: the `--json` contract,
-the comment and reply flags, the exit codes, and what to do when a scope is missing. It also tells
-the agent to answer comment threads and report them, and to leave the resolve decision to you.
-`bbc-daily-brief` builds a ranked morning brief on top of `bb pr mine`, and is invoked only when
-you explicitly ask for one. `bbc-open-pr` walks the agent through opening a pull request: it
-suggests reviewers by scanning the recent history of the files the change touches, resolving each
-name against Bitbucket before it is suggested, and it prints the drafted description back to you
-for approval before creating anything. `bbc-report-bug` files a bug about `bb` itself against this
-repository with `gh`: it reproduces the problem first, replaces your workspace, repository and
-colleague names with placeholders before drafting, searches for a duplicate, and shows you the
-finished issue for approval before anything is created.
+This repository ships four [Agent Skills](.agents/skills/) — the portable `SKILL.md` format that
+Claude Code, Codex, Cursor and OpenCode all read. Each one carries what `--help` cannot: the house
+rules, the decisions that stay with you, and what each failure means.
+
+| Skill | What the agent does with it |
+| --- | --- |
+| `bitbucket-cloud` | Reads, reviews and answers pull requests through `bb` instead of sending you to a browser. It answers threads and reports them; resolving a thread, requesting changes and approving stay your decision. |
+| `bbc-open-pr` | Opens a pull request: pushes the branch, suggests reviewers from the history of the changed files once you consent to that read, and shows you the description and the reviewer pick before anything is created. |
+| `bbc-daily-brief` | Builds a ranked brief of what waits on you, from `bb pr mine` or, for one repository, from `bb pr list`. Read-only, and only when you ask for one. |
+| `bbc-report-bug` | Files a bug about `bb` itself against this repository with `gh`: it reproduces the problem, replaces your workspace, repository, people, paths and URLs with placeholders, searches for a duplicate, and shows you the issue before it is filed. |
 
 Every `bb skill` command is also spelled `bb skills`, whichever comes to hand first.
 
@@ -239,13 +236,14 @@ bb pr reviewers suggest main --acknowledge-private-data --json    # prospective 
 bb pr create main --title "Add caching"   # source branch inferred from your checkout
 bb pr create main --description-stdin < body.md --no-default-reviewers
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
+bb pr create main,release/2.4 --title "Fix login" # one PR per target; --json returns an array
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr comment 42 --pending -b "nit"       # draft until you press Finish review
 bb pr resolve 42 998877                   # confirms first, then closes the thread
 bb pr request-changes 42 --yes            # confirms first unless --yes is given
-bb pr mine --role reviewer --build        # your PRs across every repo you can see
+bb pr mine --role reviewer --build        # PRs you review, across your workspaces
 bb branch list --user alice
 bb project list                                  # projects in the workspace
 bb repo list --project ENG                       # repositories in one project
@@ -266,9 +264,10 @@ names any user pools the token could not read in `partial`. It is deliberately n
 `members`: two of its three sources — workspace membership and default-reviewer status — say nothing
 about access to *this* repository, so a person it lists may not be taggable. Each row carries
 `eligibility`: `explicit` when the user is in the repository's own permission configuration,
-`unknown` when the row comes only from workspace membership or default-reviewer status. Because
-membership is not proof of access, a name that resolves only from a partial pool is refused by any
-command that would then write a reviewer — pass a `{uuid}` instead.
+`unknown` when the row comes only from workspace membership or default-reviewer status. When any of
+the three pools cannot be read, every command that writes a reviewer (`pr reviewers add`,
+`pr create --reviewer`) refuses a name, because the unreadable pool may hide the person you meant —
+pass a `{uuid}` instead.
 
 Omit `--project` in a terminal and you get a picker. Outside a terminal it is an error naming the
 flag, never a prompt that will not be answered.
@@ -276,7 +275,10 @@ flag, never a prompt that will not be answered.
 `bb pr list` also takes `--reviewer <name>`, `--author <name|@me>`, `--review-state
 approved|changes-requested|pending`, `--state OPEN|MERGED|DECLINED|SUPERSEDED|DRAFT|ALL`,
 `--build` (adds a `BUILD` column, a worst-wins rollup per pull request), and `--build-status
-successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`).
+successful|failed|inprogress|stopped|none` (filters on that rollup and implies `--build`). Build
+status costs one request per pull request that passes the other filters, and `--build-status`
+filters after those requests, so it costs the same as `--build` — narrow with the other filters
+first.
 `--state all` asks for every state as repeated query parameters, which is the form the API documents.
 
 `--current` filters by the current symbolic branch, and refuses to run when `-R`/`BB_REPO` selects a
@@ -317,11 +319,12 @@ comment and task counts, and the original comment timestamps. Use `--metadata-on
 are unnecessary, `--build` to add statuses, and `--conflicts` to add reported merge conflicts.
 Optional sections are omitted unless requested; `--json` stdout remains one JSON value.
 
-`bb pr reviewers suggest` is read-only, and reads two distinct populations rather than one blended
-count. **Target history** is who maintains the files the change touches; **source history** is who
-worked on this branch and is not already merged, and is only subtracted from the target when both
-live in the same repository — a fork's branch does not contain the target's commits, so subtracting
-there would read a population that does not exist. The report names the source and target
+`bb pr reviewers suggest` is read-only, and keeps two kinds of evidence apart. Each suggestion
+reports `target_commits` — **target history**, who maintains the files the change touches — and
+`source_commits` — **source history**, who worked on this branch — next to the total
+`commit_count`. The target's commits are excluded from the source history only when both branches
+live in the same repository — a fork's branch does not contain the target's commits, so excluding
+them there would exclude nothing real. The report names the source and target
 repositories and the exact commit each was read at, so the evidence is reproducible and a branch
 pushed to mid-command cannot change what the report claims. A renamed file is read under both its
 old and new path, and a **deleted** file under the path it had — a removal is the strongest possible
@@ -353,6 +356,11 @@ bb pr list --json | jq -r '.[] | select(all(.reviewers[]; .state != "approved"))
 it, what it says — and waits for a yes. Without a terminal it fails and names `--yes`, so nothing
 resolves in a script or under an agent unless the command line approves it. `bb pr unresolve`
 reopens a thread, and needs no confirmation.
+
+Only the first comment of an inline thread can be resolved — the one `bb pr view` shows with no
+`parent` and with a `file`. On the prompt path `bb` refuses a reply or a general comment with a
+message that says so. `--yes` skips that lookup, so Bitbucket answers the same mistake with a 403,
+which `bb` reports as a missing scope. Check the id before you pass `--yes`.
 
 **`bb pr request-changes` and `bb pr no-request-changes` ask first too**, the same way: each shows
 the pull request it is about to mark — id, title, author — and waits for a yes before requesting or
