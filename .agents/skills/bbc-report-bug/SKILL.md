@@ -1,108 +1,93 @@
 ---
 name: bbc-report-bug
-description: Files a bug report about the `bb` CLI itself against biokraft/bbcloud with the `gh` CLI by reproducing it, redacting private Bitbucket data, and obtaining approval before creating the issue. Use only when the user asks to report, file, or open an issue about a `bb` bug. Do not use for a pull request, a daily brief, a user's application, or another repository.
+description: Files a bug report about the `bb` CLI itself against biokraft/bbcloud with the `gh` CLI — reproduces it, redacts private Bitbucket data, and gets the user's approval before it creates the issue. Use only when the user asks to report, file or open an issue about a `bb` bug. Do not use for a pull request, a daily brief, the user's own code, or another repository.
 license: MIT
 ---
 
 # Report a `bb` bug
 
-`bb` is the Bitbucket Cloud CLI you have been running. This skill files a bug about **`bb`
-itself** — wrong output, contradictory JSON, a command that fails against an endpoint
-Atlassian retired — as a GitHub issue on `biokraft/bbcloud`.
+This skill files a bug about **`bb` itself** — wrong output, JSON that contradicts itself, a
+command that fails on an endpoint Atlassian retired — as a GitHub issue on `biokraft/bbcloud`.
 
-The hard part is not writing the issue. It is that the evidence lives in the user's private
-Bitbucket workspace and the issue is public forever. Every step below exists to keep those
-two facts apart.
-
-## Rules
-
-1. **Explicit invocation only.** File an issue when the user asks for one — report this, file
-   a bug, open an issue upstream. Never file one on your own initiative because a command
-   looked wrong to you, and never as a silent step inside a larger task. A `bb` command that
-   fails mid-task is something you tell the user about; whether it becomes an issue is their
-   call.
-2. **The target is always `biokraft/bbcloud`.** This skill does not file issues anywhere else.
-   If the bug is in the user's own code, or in a repository `bb` was merely pointed at, say so
-   and stop.
-3. **Never create the issue without showing it first.** Filing is public and cannot be undone
-   — a deleted issue still sits in anyone's mail. Print the exact title and body, then wait
-   for the user to say yes. This is the same gate `bb pr resolve` and `bb pr request-changes`
-   apply, for the same reason.
-4. **Redact before you draft, not after.** See [Redaction](#redaction). Getting this wrong
-   publishes a company's private repository names under the user's name.
-5. **One issue per bug.** Search first; comment on the existing issue instead of opening a
-   second.
+The evidence lives in the user's private Bitbucket workspace, and the issue is public forever.
+Every step below keeps those two facts apart.
 
 ## Operating contract
 
-- Establish a reproducible `bb`-specific defect before drafting.
-- Redact private workspace data before any file or issue text leaves the session.
-- Search for an existing issue before creating a duplicate.
-- Show the exact title and body, wait for explicit approval, and only then call `gh`.
+1. **Explicit invocation only.** File an issue only when the user asks: report this, file a bug, open
+   an issue upstream. Never file one on your own initiative, and never as a silent step in a larger
+   task. When a `bb` command fails mid-task, tell the user. The user decides if it becomes an issue.
+2. **The target is always `biokraft/bbcloud`.** If the bug is in the user's code, or in a
+   repository that `bb` acted on, say so and stop.
+3. **Redact before you draft, not after.** A mistake here publishes a company's private repository
+   names under the user's name.
+4. **One issue per bug.** Search first. Comment on an existing issue instead of opening a second.
+5. **Never create the issue without showing it first.** Filing is public, and a deleted issue stays
+   in everyone's mail. Show the exact title and body, and wait for a yes. A comment on an existing
+   issue needs the same yes.
 
-## Step 1 — establish that it is a `bb` bug
+## Step 1 — make sure it is a `bb` bug
 
-Ask yourself what `bb` did that it should not have. A bug report needs a claim of the form
-"`bb` printed X, the correct answer is Y". If you cannot state Y, you do not have a bug yet —
-you have a question, and the answer may be in `bb --help` or the README.
+A bug report makes a claim: "`bb` printed X, the correct answer is Y". If you cannot state Y, you
+have a question, not a bug. The answer can be in `bb <command> --help` or the README.
 
-Rule these out first, because each has a different fix and none of them is an issue:
+These are not bugs. Each has its own fix:
 
-| Looks like | Actually |
+| Looks like | Is |
 |---|---|
-| exit code 2, "not authenticated" | the token is missing or expired — `bb auth login` |
-| exit code 3 on a repository that exists | wrong `-R` slug, or the token cannot see it |
-| a 403 mentioning a scope | the token lacks that scope — mint a new one |
-| output is stale | Bitbucket's own eventual consistency; re-run before reporting |
+| exit 2, "not authenticated" | a missing or expired token — `bb auth login` |
+| exit 3 on a repository that exists | a wrong `-R` slug, or a token that cannot see the repository |
+| `forbidden`, with a scope hint | a token without that scope — `bb auth login --help` lists them |
+| stale output | Bitbucket's eventual consistency — run it again |
 
-**Re-run the command before you report it.** A single observation of a wrong value is not a
-reproduction, and an intermittent result usually means the state changed underneath you rather
-than that `bb` computed it wrong.
+**Run the command again before you report it.** One wrong value is not a reproduction. An
+intermittent result usually means the state changed, not that `bb` computed it wrong.
 
-## Step 2 — reproduce, and record the evidence
+If `bb` printed `bb X.Y.Z is available …`, ask the user to upgrade and run the command again. The
+bug may already be fixed.
 
-Run the failing command with `--json`, and run whatever second command contradicts it. Capture
-both outputs. A report that says "the state was wrong" without the two outputs side by side
-cannot be acted on.
+## Step 2 — reproduce, and keep the evidence
+
+Run the failing command with `--json`. Also run the command that contradicts it. Keep both outputs:
+a report that says "the state was wrong" without them cannot be acted on.
 
 ```bash
 bb --version
 uname -sm
 ```
 
-Both go in the issue verbatim. A bug that only happens on one platform is a different bug.
+Both go in the issue as they are. A bug on one platform only is a different bug.
 
-If the report is that two commands disagree, diff them mechanically rather than by eye — a
-claimed disagreement that turns out to be two different pull requests wastes everyone's time:
+If two commands disagree, compare them field by field, not by eye. A claimed difference that turns
+out to be two different pull requests wastes everyone's time:
 
 ```bash
-bb pr list -R <repo> --json > /tmp/a.json
-bb pr mine --json > /tmp/b.json
+bb pr list -R <workspace>/<repo> --json > a.json
+bb pr mine --json > b.json
 ```
 
-Then compare the specific fields for the same id.
+Then compare the fields in question for the same `id`. Delete both files when the issue is filed.
 
-## Step 3 — redaction
+## Step 3 — redact
 
-Everything from the user's Bitbucket workspace is private. Replace it before it reaches the
-draft:
+Everything from the user's Bitbucket workspace is private. Replace it before it reaches the draft:
 
-- **Workspace, repository and project names** → `acme`, `acme/api`, `PROJ`. Keep the shape
-  (`workspace/repo`), lose the name.
-- **Human names, display names, emails, account uuids** → `Reviewer A`, `{uuid-1}`. Keep
-  distinct people distinct, so a report about two reviewers still reads correctly.
-- **Pull request titles, branch names, commit messages** → describe them (`a PR title`), or
-  drop them. They leak roadmaps.
-- **Pull request ids and numbers** → keep them. They are meaningless without the workspace and
-  they make the report readable.
-- **Tokens, `BB_TOKEN`, anything from `bb auth status`** → never include, redacted or not. If a
-  token appears anywhere in captured output, the capture is discarded, not edited.
+- **Workspace, repository and project names, and every url that holds them** → `acme`,
+  `acme/api`, `PROJ`. Keep the shape (`workspace/repo`), drop the name.
+- **Names, display names, emails and account uuids** → `Reviewer A`, `{uuid-1}`. Keep different
+  people different, so a report about two reviewers still reads correctly.
+- **Pull request titles, branch names, commit messages and file paths** → describe them (`a PR
+  title`), or drop them. They leak roadmaps.
+- **Pull request and comment ids** → keep them. Without the workspace they mean nothing, and they
+  make the report readable.
+- **Tokens, `BB_TOKEN`, and the output of `bb auth status`** → never include, redacted or not. If
+  a token appears in a capture, discard the capture. Do not edit it.
 
-Redact the JSON too. Trim it to the fields the bug is about — a full `--json` dump is both a
-leak and unreadable.
+Redact the JSON too. Cut it to the fields the bug is about. A full `--json` dump leaks, and nobody
+reads it.
 
-Before drafting, re-read your redacted evidence once and ask whether a stranger could name the
-user's employer from it. If yes, redact again.
+Read the redacted evidence once more, and ask: can a stranger name the user's employer from this?
+If yes, redact again.
 
 ## Step 4 — search for a duplicate
 
@@ -110,71 +95,66 @@ user's employer from it. If yes, redact again.
 gh issue list --repo biokraft/bbcloud --state all --limit 30 --search "<two or three key words>"
 ```
 
-Search the symptom, not your theory about the cause — the existing issue was filed by someone
-with a different theory. If a match exists, add your evidence as a comment instead:
+Search for the symptom, not for your theory of the cause. The existing issue can come from someone
+with a different theory. If an issue matches, add your evidence as a comment, after the same
+approval as a new issue:
 
 ```bash
-gh issue comment <number> --repo biokraft/bbcloud --body-file <path>
+gh issue comment <number> --repo biokraft/bbcloud --body-file issue.md
 ```
-
-The same approval gate applies to a comment.
 
 ## Step 5 — draft the issue
 
-Write it to a file and pass `--body-file`; `--body` with a long string mangles code fences and
-puts the content in shell history.
+Write the body to a file, and pass it with `--body-file`. A long `--body` string breaks code fences
+and puts the text in the shell history.
 
-Use this shape. It is the shape maintainers of this repository already use, and the four
-headings are what makes a report actionable:
+Use these four headings:
 
 ```markdown
 ## What happened
 
-One or two sentences. What `bb` printed, and what it should have printed. Name both commands
-if two disagree.
+One or two sentences: what `bb` printed, and what it should print. Name both
+commands if two disagree.
 
 ## Repro
 
-1. Numbered steps someone else can follow, with the exact commands.
-2. Redacted output at the step where it goes wrong.
+1. Numbered steps, with the exact commands.
+2. The redacted output at the step where it goes wrong.
 
 ## Guess at cause
 
-Optional, and label it a guess. Say which code path or endpoint you suspect and why. A wrong
-guess in a well-evidenced report costs nothing; a guess presented as a finding costs trust.
+Optional, and labelled as a guess. Name the code path or endpoint you suspect,
+and why.
 
 ## Environment
 
 bb <version>, <os> <arch>
 ```
 
-Title: what is wrong, not that something is wrong. `reviewer state disagrees between 'pr mine'
-and 'pr list'` beats `bug in pr mine`.
+The title says what is wrong, not that something is wrong: `reviewer state disagrees between
+'pr mine' and 'pr list'`, not `bug in pr mine`.
 
 ## Step 6 — the approval gate
 
-Print the title and the full body. Ask the user, plainly, whether to file it against
-`biokraft/bbcloud`. Then wait.
+Show the title and the full body. Ask the user if you can file it against `biokraft/bbcloud`. Then
+wait.
 
-Do not file if the answer is anything other than yes. Do not file a "close enough" version of
-a body the user asked you to change — redraft, show it again, ask again.
-
-On approval:
+File only on a clear yes. If the user asks for a change, redraft, show the result, and ask again.
+Never file a "close enough" version.
 
 ```bash
-gh issue create --repo biokraft/bbcloud --title "<title>" --body-file <path>
+gh issue create --repo biokraft/bbcloud --title "<title>" --body-file issue.md
 ```
 
-Report the URL `gh` prints back.
+Report the url that `gh` prints.
 
-## When `gh` is missing or unauthenticated
+## When `gh` is missing or not logged in
 
 ```bash
 gh auth status
 ```
 
-If `gh` is not installed or not logged in, stop and tell the user which of the two it is and
-the one command that fixes it (`brew install gh`, or `gh auth login`). Do not fall back to
-`curl` against the GitHub API, and do not ask the user to paste a token — you have a finished
-issue body on disk, and the user opening the browser themselves is a fine outcome. Give them
-the path to it.
+If `gh` is not installed, or not logged in, stop. Tell the user which of the two it is, and the one
+command that fixes it: install `gh` from <https://cli.github.com>, or run `gh auth login`. Never fall
+back to `curl` on the GitHub API, and never ask for a token. Give the user the path to the finished
+body file. To file it by hand is a good result.
