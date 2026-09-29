@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use assert_cmd::Command;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn bb(server: &MockServer) -> Command {
@@ -73,6 +73,14 @@ async fn mount_existing_context(server: &MockServer, source_repo: &str) {
                   "new": { "path": "src/lib.rs" } }
             ]
         })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_pr_only(server: &MockServer, source_repo: &str) {
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_body(source_repo)))
         .mount(server)
         .await;
 }
@@ -1396,4 +1404,63 @@ async fn a_removed_file_is_still_offered_as_evidence() {
         vec!["Dana"],
         "the deleted file's maintainer is missing"
     );
+}
+
+/// `--file-limit` counts diffstat entries, but a rename is one entry and two
+/// paths, so the distinct-path ceiling can be crossed by a change that is well
+/// inside its own file budget. When that happens the report has to say so:
+/// maintainers of the dropped paths are simply absent, and an absent name is
+/// indistinguishable from a wrong one.
+#[tokio::test]
+async fn the_path_ceiling_is_reported_rather_than_silently_applied() {
+    let server = MockServer::start().await;
+    mount_pr_only(&server, "acme/widgets").await;
+    mount_pool(&server, serde_json::json!([])).await;
+
+    // 60 renames = 60 entries but 120 distinct paths, over the 100-path ceiling.
+    let entries: Vec<serde_json::Value> = (0..60)
+        .map(|i| {
+            serde_json::json!({
+                "status": "renamed",
+                "old": { "path": format!("old/{i}.rs") },
+                "new": { "path": format!("new/{i}.rs") }
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/repositories/acme/widgets/pullrequests/7/diffstat"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": entries })),
+        )
+        .mount(&server)
+        .await;
+    // Every path reads, so the report is about the cut rather than about a
+    // failure: 20 of the 120 paths never get a history request.
+    Mock::given(method("GET"))
+        .and(path_regex(r"/repositories/acme/widgets/commits/.*"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "values": [] })))
+        .mount(&server)
+        .await;
+
+    let out = suggest_human(&server)
+        .args(["--pr", "7", "--file-limit", "60"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("exceeded the 100-path ceiling"), "{stderr}");
+
+    let out = suggest(&server)
+        .args(["--pr", "7", "--file-limit", "60"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // 100 paths were read and 20 were left out, so the two add up to the 120
+    // distinct paths the change actually touched.
+    assert_eq!(value["paths_scanned"], 100);
+    assert_eq!(value["paths_skipped"], 20);
 }
