@@ -5,7 +5,7 @@ use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
 use crate::repo::RepoSlug;
-use crate::users::{load_user_pool, UserPool};
+use crate::users::UserPool;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
@@ -13,6 +13,11 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_IN_FLIGHT: usize = 8;
 const MAX_COMMITS_PER_PATH: usize = 100;
+/// The ceiling on paths read in one report, so a machine-generated branch with
+/// thousands of files cannot fan out into thousands of requests. It is separate
+/// from `MAX_COMMITS_PER_PATH`, which bounds one path's history, and it is
+/// reported rather than applied silently.
+const MAX_PATHS: usize = 100;
 
 /// Which side of the comparison an author's evidence came from. Target history
 /// is who maintains the file; source-only history is who else worked on this
@@ -59,13 +64,17 @@ pub struct SuggestArgs {
 }
 
 /// What the target repository can prove about a suggested reviewer.
+///
+/// Three states, because a name that could not be proven taggable is not the
+/// same claim as one proven untaggable, and a report that conflates them either
+/// hides a blocker or invents one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Eligibility {
+enum CanReview {
     /// Listed in this repository's own permission configuration.
-    True,
+    Yes,
     /// The pool is complete and the person is not in it.
-    False,
+    No,
     /// No complete pool was available, or the row is not a direct permission.
     Unknown,
 }
@@ -79,7 +88,7 @@ struct Suggestion {
     source_commits: usize,
     files: Vec<String>,
     last_commit_on: Option<String>,
-    eligibility: Eligibility,
+    can_review: CanReview,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +106,12 @@ struct Report {
     since: String,
     files_scanned: usize,
     files_skipped: usize,
+    /// Distinct paths history was actually read for. Exceeds `files_scanned`
+    /// when a rename contributed both its paths.
+    paths_scanned: usize,
+    /// Distinct paths dropped by the hard path ceiling. Non-zero means the
+    /// change was larger than one report is allowed to read.
+    paths_skipped: usize,
     history_complete: bool,
     errors: Vec<HistoryError>,
     suggestions: Vec<Suggestion>,
@@ -105,6 +120,41 @@ struct Report {
 struct History {
     commits: Vec<Commit>,
     complete: bool,
+}
+
+/// The paths to read, and an honest account of what was left out.
+///
+/// `file_limit` caps diffstat *entries*; `MAX_PATHS` caps distinct *paths*,
+/// because a rename is one entry and two paths. Both cuts are returned so the
+/// report can state them: a suggestion list that silently dropped half the
+/// change is the same failure as an empty one that exits zero.
+struct PathPlan {
+    /// The paths to read history for, in the order the diffstat listed them.
+    paths: Vec<String>,
+    files_scanned: usize,
+    files_skipped: usize,
+    paths_skipped: usize,
+}
+
+fn plan_paths(diffstat: &[DiffStatEntry], file_limit: usize) -> PathPlan {
+    let scanned = &diffstat[..diffstat.len().min(file_limit)];
+    let mut paths: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in scanned {
+        for path in entry.paths() {
+            if path != "-" && seen.insert(path.to_string()) {
+                paths.push(path.to_string());
+            }
+        }
+    }
+    let paths_scanned = paths.len();
+    paths.truncate(MAX_PATHS);
+    PathPlan {
+        paths,
+        files_scanned: scanned.len(),
+        files_skipped: diffstat.len() - scanned.len(),
+        paths_skipped: paths_scanned - MAX_PATHS.min(paths_scanned),
+    }
 }
 
 #[derive(Default)]
@@ -143,12 +193,10 @@ fn parse_since(value: &str) -> Result<Duration> {
             "--since must be between 1 and 3650 units".into(),
         ));
     }
-    let total_days = amount
-        .checked_mul(days)
-        .ok_or_else(|| BbError::Config("--since is too large".into()))?;
-    let total_days =
-        i64::try_from(total_days).map_err(|_| BbError::Config("--since is too large".into()))?;
-    Ok(Duration::days(total_days))
+    // Bounded by the check above and by `days`, which is at most 365, so the
+    // product is at most 1_332_250 and cannot overflow either type. An overflow
+    // arm here would be a branch that can never fire.
+    Ok(Duration::days((amount * days) as i64))
 }
 
 /// The repository an endpoint really points at. A pull request from a fork
@@ -330,7 +378,7 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
     }
     if args.pr.is_some() && args.source.is_some() {
         return Err(BbError::Config(
-            "--source is only valid with a prospective target".into(),
+            "a source branch is only valid with a prospective target, not alongside --pr".into(),
         ));
     }
     let window = parse_since(&args.since)?;
@@ -353,26 +401,20 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
         excluded,
     } = inputs;
 
-    // A rename has two paths, and the maintainer of the old path is exactly the
-    // person who knows the code being moved.
-    let mut all_paths: Vec<String> = Vec::new();
-    let mut entries = 0usize;
-    for entry in &diffstat {
-        for path in [entry.new_file_path(), entry.old_file_path()]
-            .into_iter()
-            .flatten()
-        {
-            if path != "-" && !all_paths.contains(&path.to_string()) {
-                all_paths.push(path.to_string());
-            }
-        }
-        entries += 1;
-    }
-    let files_scanned = entries.min(args.file_limit);
-    let files_skipped = entries.saturating_sub(files_scanned);
-    let paths: Vec<String> = all_paths.into_iter().take(MAX_COMMITS_PER_PATH).collect();
+    // `--file-limit` bounds how many *diffstat entries* are looked at, so the
+    // flag the user set is the work actually done. A rename contributes two
+    // paths and a removal one, so paths are counted after that cut and can
+    // exceed it — reported separately rather than conflated.
+    let PathPlan {
+        paths,
+        files_scanned,
+        files_skipped,
+        paths_skipped,
+    } = plan_paths(&diffstat, args.file_limit);
 
-    let mut history_complete = files_skipped == 0;
+    // The evidence is only exhaustive when nothing was cut and every path read
+    // its whole history.
+    let mut history_complete = files_skipped == 0 && paths_skipped == 0;
     let mut errors = Vec::new();
     let mut candidates: HashMap<String, Candidate> = HashMap::new();
     let mut succeeded = 0usize;
@@ -465,7 +507,7 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
 
     errors.sort_by(|left, right| left.path.cmp(&right.path));
 
-    let eligibility = PoolEligibility::load(&ctx.client, &target_repo).await;
+    let access = AccessPool::load(&ctx.client, &target_repo).await;
 
     let mut suggestions: Vec<Suggestion> = candidates
         .into_values()
@@ -475,7 +517,7 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
             let uuid = candidate.user.uuid.clone().unwrap_or_default();
             Suggestion {
                 name: candidate.user.name().to_string(),
-                eligibility: eligibility.for_uuid(&uuid),
+                can_review: access.can_review(&uuid),
                 uuid,
                 commit_count: candidate.target_commits.len() + candidate.source_commits.len(),
                 target_commits: candidate.target_commits.len(),
@@ -507,6 +549,8 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
         since: cutoff.to_rfc3339_opts(SecondsFormat::Secs, true),
         files_scanned,
         files_skipped,
+        paths_scanned: paths.len(),
+        paths_skipped,
         history_complete,
         errors,
         suggestions,
@@ -527,11 +571,22 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
                 output::info(&format!("{} → {}", prospective.source, prospective.target));
             }
             output::info(&format!(
-                "since {} · files {} scanned · {} skipped",
-                report.since, report.files_scanned, report.files_skipped
+                "since {} · files {} scanned · {} skipped · paths {} read · {} skipped",
+                report.since,
+                report.files_scanned,
+                report.files_skipped,
+                report.paths_scanned,
+                report.paths_skipped
             ));
             if !report.history_complete {
                 output::warn("history is partial; the evidence is not exhaustive");
+            }
+            if report.paths_skipped > 0 {
+                output::warn(&format!(
+                    "{} changed path(s) exceeded the {MAX_PATHS}-path ceiling for one report; \
+                     their maintainers are not in this list",
+                    report.paths_skipped
+                ));
             }
             for error in &report.errors {
                 output::warn(&format!("{}: {}", error.path, error.message));
@@ -561,10 +616,10 @@ pub async fn run(ctx: &Ctx, args: SuggestArgs) -> Result<()> {
                                     .last_commit_on
                                     .clone()
                                     .unwrap_or_else(|| "-".into()),
-                                match suggestion.eligibility {
-                                    Eligibility::True => "yes".to_string(),
-                                    Eligibility::False => "no".to_string(),
-                                    Eligibility::Unknown => "unknown".to_string(),
+                                match suggestion.can_review {
+                                    CanReview::Yes => "yes".to_string(),
+                                    CanReview::No => "no".to_string(),
+                                    CanReview::Unknown => "unknown".to_string(),
                                 },
                             ]
                         })
@@ -681,17 +736,22 @@ async fn prospective_inputs(ctx: &Ctx, args: &SuggestArgs) -> Result<Inputs> {
     })
 }
 
-struct PoolEligibility {
+/// What the target repository's own permissions can prove about a person.
+struct AccessPool {
+    /// Directly listed in the repository's permission configuration.
     explicit: HashSet<String>,
+    /// Present in the pool at all, by any source.
     known: HashSet<String>,
+    /// Whether every pool was read in full. Without this, absence proves
+    /// nothing and `can_review` must stay `Unknown`.
     complete: bool,
 }
 
-impl PoolEligibility {
+impl AccessPool {
     /// Ownership of a file says nothing about access to the repository, so the
     /// two are reported separately rather than one implying the other.
     async fn load(client: &Client, repository: &RepoSlug) -> Self {
-        match load_user_pool(client, repository).await {
+        match UserPool::load(client, repository).await {
             Ok(pool) => Self::from_pool(&pool),
             Err(_) => Self {
                 explicit: HashSet::new(),
@@ -707,7 +767,7 @@ impl PoolEligibility {
         for entry in &pool.entries {
             if let Some(uuid) = entry.user.uuid.as_deref() {
                 known.insert(uuid.to_string());
-                if entry.eligibility == crate::users::Eligibility::Explicit {
+                if entry.eligibility == crate::users::RepositoryAccess::Explicit {
                     explicit.insert(uuid.to_string());
                 }
             }
@@ -719,18 +779,18 @@ impl PoolEligibility {
         }
     }
 
-    fn for_uuid(&self, uuid: &str) -> Eligibility {
+    fn can_review(&self, uuid: &str) -> CanReview {
         if self.explicit.contains(uuid) {
-            Eligibility::True
+            CanReview::Yes
         } else if self.complete && !self.known.contains(uuid) {
-            Eligibility::False
+            CanReview::No
         } else {
-            Eligibility::Unknown
+            CanReview::Unknown
         }
     }
 }
 
-/// The window and eligibility rules are pure decisions, so they are pinned here
+/// The window and access rules are pure decisions, so they are pinned here
 /// rather than through five mocked HTTP round trips each. An accepted spelling
 /// that stops being accepted is a silent behaviour change; a rejected one that
 /// starts being accepted quietly widens a history read.
@@ -738,7 +798,7 @@ impl PoolEligibility {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::users::Eligibility as PoolEligibility2;
+    use crate::users::RepositoryAccess;
 
     #[test]
     fn since_accepts_the_documented_spellings() {
@@ -780,29 +840,29 @@ mod tests {
     }
 
     #[test]
-    fn eligibility_separates_proof_of_access_from_a_missing_answer() {
-        let complete = PoolEligibility {
+    fn access_separates_proof_of_access_from_a_missing_answer() {
+        let complete = AccessPool {
             explicit: HashSet::from(["{yes}".to_string()]),
             known: HashSet::from(["{maybe}".to_string()]),
             complete: true,
         };
-        assert_eq!(complete.for_uuid("{yes}"), Eligibility::True);
+        assert_eq!(complete.can_review("{yes}"), CanReview::Yes);
         // Read in full, and not in it: that is a real no.
-        assert_eq!(complete.for_uuid("{absent}"), Eligibility::False);
+        assert_eq!(complete.can_review("{absent}"), CanReview::No);
         // In the pool, but only as a workspace member: no proof of access.
-        assert_eq!(complete.for_uuid("{maybe}"), Eligibility::Unknown);
+        assert_eq!(complete.can_review("{maybe}"), CanReview::Unknown);
 
-        let partial = PoolEligibility {
+        let partial = AccessPool {
             explicit: HashSet::new(),
             known: HashSet::new(),
             complete: false,
         };
         // An unreadable pool cannot rule anyone out.
-        assert_eq!(partial.for_uuid("{absent}"), Eligibility::Unknown);
+        assert_eq!(partial.can_review("{absent}"), CanReview::Unknown);
     }
 
     #[test]
-    fn pool_eligibility_ignores_entries_without_a_uuid() {
+    fn an_access_pool_ignores_entries_without_a_uuid() {
         let pool = UserPool {
             entries: vec![crate::users::PoolEntry {
                 user: User {
@@ -812,15 +872,15 @@ mod tests {
                     nickname: None,
                 },
                 sources: vec!["workspace".into()],
-                eligibility: PoolEligibility2::Explicit,
+                eligibility: RepositoryAccess::Explicit,
             }],
             incomplete: vec![],
         };
-        let eligibility = PoolEligibility::from_pool(&pool);
-        assert!(eligibility.explicit.is_empty());
-        assert!(eligibility.known.is_empty());
+        let access = AccessPool::from_pool(&pool);
+        assert!(access.explicit.is_empty());
+        assert!(access.known.is_empty());
         // A complete pool with nobody in it means nobody can be tagged.
-        assert!(eligibility.complete);
+        assert!(access.complete);
     }
 
     /// clap rejects `--pr` alongside a positional target, but `run` is public
@@ -877,7 +937,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.to_string().contains("--source is only valid"), "{err}");
+        assert!(
+            err.to_string().contains("source branch is only valid"),
+            "{err}"
+        );
 
         assert!(
             server

@@ -82,18 +82,11 @@ fn comment_time(comment: &Comment) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-/// Splits comments into general and inline buckets, oldest first. The
-/// `unresolved` filter applies only to inline threads — general comments are
-/// not resolvable in the Bitbucket API and are always kept.
-pub fn partition(comments: Vec<Comment>, unresolved: bool) -> (Vec<CommentView>, Vec<CommentView>) {
-    let (general, inline, _) = partition_with_summary(comments, unresolved);
-    (general, inline)
-}
-
-/// The same split as [`partition`], plus the number of unresolved inline roots.
-/// Keeping the old two-tuple API avoids needlessly breaking library users while
-/// the command can expose the useful count to agents.
-pub fn partition_with_summary(
+/// Splits comments into general and inline buckets, oldest first, and reports
+/// how many inline threads are still unresolved. The `unresolved` filter
+/// applies only to inline threads — general comments are not resolvable in the
+/// Bitbucket API and are always kept.
+pub fn partition(
     mut comments: Vec<Comment>,
     unresolved: bool,
 ) -> (Vec<CommentView>, Vec<CommentView>, usize) {
@@ -107,24 +100,27 @@ pub fn partition_with_summary(
         .iter()
         .map(|comment| (comment.id, comment))
         .collect();
-    let resolved_roots: HashSet<u64> = comments
+    // The walk is done once per comment here and reused below, rather than
+    // re-walking every thread for the resolved set and again for the buckets.
+    let roots: Vec<(u64, &Comment)> = comments
         .iter()
-        .filter_map(|comment| {
-            let (root_id, root) = thread_root(comment, &by_id);
-            root.is_resolved().then_some(root_id)
-        })
+        .map(|comment| thread_root(comment, &by_id))
+        .collect();
+    let resolved_roots: HashSet<u64> = roots
+        .iter()
+        .filter(|(_, root)| root.is_resolved())
+        .map(|(root_id, _)| *root_id)
         .collect();
     let mut unresolved_roots = HashSet::new();
     let mut general = Vec::new();
     let mut inline = Vec::new();
-    for comment in &comments {
-        let (root_id, root) = thread_root(comment, &by_id);
+    for (comment, (root_id, root)) in comments.iter().zip(roots.iter()) {
         if root.is_inline() {
-            if unresolved && resolved_roots.contains(&root_id) {
+            if unresolved && resolved_roots.contains(root_id) {
                 continue;
             }
             if unresolved {
-                unresolved_roots.insert(root_id);
+                unresolved_roots.insert(*root_id);
             }
             inline.push(to_view(comment, root));
         } else {
@@ -193,22 +189,9 @@ fn pr_view(pr: &PullRequest) -> PullRequestView {
     }
 }
 
-/// Compatibility wrapper for library users of the original four-argument view
-/// helper. The CLI uses [`view_with_options`] for the selective sections.
-pub async fn view(ctx: &Ctx, id: u64, unresolved: bool, comments_only: bool) -> Result<()> {
-    view_with_options(
-        ctx,
-        ViewArgs {
-            id,
-            unresolved,
-            comments_only,
-            ..Default::default()
-        },
-    )
-    .await
-}
-
-pub async fn view_with_options(ctx: &Ctx, args: ViewArgs) -> Result<()> {
+/// `bb pr view`. Every section beyond the header and comments is opt-in, so an
+/// agent pays only for the facts it asked for.
+pub async fn view(ctx: &Ctx, args: ViewArgs) -> Result<()> {
     if args.metadata_only && (args.comments_only || args.unresolved) {
         return Err(BbError::Config(
             "--metadata-only cannot be combined with --comments-only or --unresolved".into(),
@@ -233,7 +216,7 @@ pub async fn view_with_options(ctx: &Ctx, args: ViewArgs) -> Result<()> {
             .paginate(&ctx.path(&format!("/pullrequests/{}/comments?pagelen=100", args.id)))
             .await?
     };
-    let (general, inline, unresolved_threads) = partition_with_summary(comments, args.unresolved);
+    let (general, inline, unresolved_threads) = partition(comments, args.unresolved);
 
     let build = if args.build {
         let statuses = pr_build::statuses(&ctx.client, &ctx.slug, args.id).await?;
@@ -994,7 +977,7 @@ mod partition_tests {
             "user": { "display_name": "Me" },
             "created_on": "2026-08-04T10:00:00+00:00",
         }));
-        let (general, inline) = partition(vec![c], true);
+        let (general, inline, _) = partition(vec![c], true);
         assert_eq!(general.len(), 1);
         assert!(inline.is_empty());
     }
@@ -1012,13 +995,13 @@ mod partition_tests {
 
     #[test]
     fn resolved_inline_comment_dropped_when_unresolved_true() {
-        let (_, inline) = partition(vec![comment(resolved_inline())], true);
+        let (_, inline, _) = partition(vec![comment(resolved_inline())], true);
         assert!(inline.is_empty());
     }
 
     #[test]
     fn resolved_inline_comment_kept_when_unresolved_false() {
-        let (_, inline) = partition(vec![comment(resolved_inline())], false);
+        let (_, inline, _) = partition(vec![comment(resolved_inline())], false);
         assert_eq!(inline.len(), 1);
     }
 
@@ -1036,7 +1019,7 @@ mod partition_tests {
             "user": { "display_name": "Me" },
             "created_on": "2026-08-04T09:00:00+00:00",
         }));
-        let (general, _) = partition(vec![newer, older], false);
+        let (general, _, _) = partition(vec![newer, older], false);
         assert_eq!(general[0].body, "older");
         assert_eq!(general[1].body, "newer");
     }
@@ -1051,7 +1034,7 @@ mod partition_tests {
             "inline": { "path": "src/main.rs", "to": 1 },
             "resolution": {},
         }));
-        let (_, inline) = partition(vec![c], true);
+        let (_, inline, _) = partition(vec![c], true);
         assert!(inline.is_empty());
     }
 }
@@ -1104,13 +1087,63 @@ mod view_api_tests {
             .await;
     }
 
-    /// The four-argument wrapper is what existing library callers use; it must
-    /// still render the same thing the option-taking path does.
+    /// The plain path — no section flags — fetches the header and the comments,
+    /// which is what `bb pr view <id>` does.
     #[tokio::test]
-    async fn the_compatibility_wrapper_still_renders() {
+    async fn the_default_view_fetches_the_header_and_the_comments() {
         let server = MockServer::start().await;
         mount(&server).await;
-        view(&ctx(&server), 7, false, false).await.unwrap();
+        view(
+            &ctx(&server),
+            ViewArgs {
+                id: 7,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let paths: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|request| request.url.to_string())
+            .collect();
+        assert!(
+            paths
+                .iter()
+                .any(|url| url.contains("/pullrequests/7/comments")),
+            "the comments request should have been made: {paths:?}"
+        );
+    }
+
+    /// `--metadata-only` skips the comments request entirely, which is the whole
+    /// point of it: an agent that only needs the header pays for no comments.
+    #[tokio::test]
+    async fn metadata_only_makes_no_comments_request() {
+        let server = MockServer::start().await;
+        mount(&server).await;
+        view(
+            &ctx(&server),
+            ViewArgs {
+                id: 7,
+                metadata_only: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let paths: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|request| request.url.to_string())
+            .collect();
+        assert!(
+            !paths.iter().any(|url| url.contains("/comments")),
+            "metadata-only should not have fetched comments: {paths:?}"
+        );
     }
 
     /// `--metadata-only` answers a different question than the flags it clashes
@@ -1128,7 +1161,7 @@ mod view_api_tests {
                 ..Default::default()
             },
         ] {
-            let err = view_with_options(
+            let err = view(
                 &ctx(&server),
                 ViewArgs {
                     id: 7,
@@ -1214,7 +1247,7 @@ mod thread_tests {
         let roots = roots(comments);
         assert_eq!(roots[&2], 2);
 
-        let (general, inline, unresolved) = partition_with_summary(
+        let (general, inline, unresolved) = partition(
             vec![comment(1, None, false), comment(2, Some(99), false)],
             true,
         );

@@ -7,7 +7,7 @@ use crate::error::{BbError, Result};
 use crate::git;
 use crate::output::{self, Format};
 use crate::repo::{self, RepoSlug};
-use crate::users;
+use crate::users::{self, UserPool};
 use serde::Serialize;
 
 pub struct Ctx {
@@ -301,7 +301,7 @@ async fn named_reviewers(ctx: &Ctx, names: &str) -> Result<Vec<ReviewerRef>> {
         }
     }
     if !names.is_empty() {
-        let pool = users::load_user_pool(&ctx.client, &ctx.slug).await?;
+        let pool = UserPool::load(&ctx.client, &ctx.slug).await?;
         for name in names {
             let user = pool.resolve_for_write(name, &[])?;
             let uuid = user

@@ -1070,7 +1070,7 @@ fn the_open_pr_skill_keeps_both_human_gates() {
 #[test]
 fn the_open_pr_skill_resolves_names_before_suggesting() {
     let text = bb_cli::skill::skill_by_name("bbc-open-pr").unwrap().content;
-    assert!(text.contains("bb repo members"));
+    assert!(text.contains("bb repo reviewers"));
     assert!(text.contains("bb pr reviewers"));
     assert!(
         text.to_lowercase().contains("could not be mapped"),
@@ -1145,9 +1145,55 @@ fn every_skill_has_a_portable_agent_contract() {
     }
 }
 
-/// The main skill stays the command reference — an agent that installed only
-/// this one must still be able to open a pull request — but the workflow lives
-/// in `bbc-open-pr`, and this skill points at it rather than repeating it.
+/// A skill is loaded into an agent's context, so its body is a budget, not a
+/// manual. The four checks below are the shape that keeps it one.
+///
+/// The first is the real tell. A `| Command | Result |` table is `bb --help`
+/// transcribed, and it is what the main skill used to carry: 405 lines, of
+/// which roughly half was a command catalogue duplicating examples that
+/// appeared a second time inline. The agent already has the flag surface; what
+/// it does not have is which decisions are the user's and what each failure
+/// means, and those are the lines worth paying for.
+#[test]
+fn every_skill_is_a_procedure_and_not_a_man_page() {
+    for skill in bb_cli::skill::SKILLS.iter() {
+        let text = skill.content;
+        let name = skill.name;
+
+        assert!(
+            !text.contains("| Command | Result |"),
+            "{name} carries a command map: that is the manual, not a skill"
+        );
+
+        // The format's own limit is 500. A skill that needs a third of that is
+        // a skill; one that needs most of it has stopped being one.
+        assert!(
+            text.lines().count() <= 300,
+            "{name} is {} lines — trim the reference material until `bb --help` \
+             is the place to look for syntax",
+            text.lines().count()
+        );
+
+        // A skill the agent cannot execute is a note. At least one runnable
+        // block is the minimum.
+        assert!(
+            text.contains("```bash"),
+            "{name} has no runnable command; a skill must be executable"
+        );
+
+        // The house rules are the payload. A skill with no stated prohibition
+        // describes a tool and leaves every decision unmade.
+        assert!(
+            text.contains("Never ") || text.contains("never "),
+            "{name} states no prohibition, so it does not say where the agent must stop"
+        );
+    }
+}
+
+/// The main skill is a procedure, not a command reference. It carries the house
+/// rules and routes the workflow elsewhere; the open-a-pull-request template and
+/// its `## What changed` shape belong to `bbc-open-pr` alone, and duplicating
+/// them here is what turns a skill into a second copy of the manual.
 #[test]
 fn the_main_skill_points_at_the_open_pr_skill() {
     let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
@@ -1158,8 +1204,8 @@ fn the_main_skill_points_at_the_open_pr_skill() {
         "the main skill does not point at the workflow skill"
     );
     assert!(
-        text.contains("bb pr create <target>"),
-        "the command map must still carry bb pr create"
+        text.contains("the `bbc-open-pr` skill, not this one"),
+        "opening a pull request must be routed to the workflow skill explicitly"
     );
     assert!(
         !text.contains("## What changed"),
