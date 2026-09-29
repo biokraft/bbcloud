@@ -31,11 +31,15 @@ and what each failure means. For flags and syntax, read `bb <command> --help`.
    terminal, the command fails.
 8. On exit 2, exit 3 or an `api error 403`, stop and tell the user the next step. Never fall back
    to a browser or to another provider.
-9. `bb` can print `bb X.Y.Z is available …` on stderr. That is a notice, not a failure: the command
-   succeeded, and stdout is clean. Tell the user once, and quote the upgrade command it names. Do
-   not run the upgrade.
-10. If a skill this file names is not installed, tell the user that `bb skill install` adds it. Do
-    not run it yourself: it writes files into the repository.
+9. **Never run `bb auth logout`.** It deletes the stored credential, and only a human at a prompt
+   can store a new one. It fixes no error you can meet.
+10. `bb` can print `bb X.Y.Z is available …` on stderr. That is a notice, not a failure: the command
+    succeeded, and stdout is clean. Tell the user once, and quote the upgrade command it names. Do
+    not run it, and do not run `bb update`.
+11. `bb skill status --json` shows each installed skill and its state: `current`, `stale`,
+    `modified` or `missing`. It needs no credentials. If a skill this file names is `missing` or
+    `stale`, tell the user that `bb skill install` fixes it. Do not run the install yourself: it
+    writes files into the repository.
 
 ## Choose the command
 
@@ -52,6 +56,8 @@ and what each failure means. For flags and syntax, read `bb <command> --help`.
 | did CI pass | `bb pr build <id> --json` |
 | who reviews, and what each decided | `bb pr reviewers <id> --json` |
 | who should review | `bb pr reviewers suggest --pr <id> --acknowledge-private-data --json`, after the consent in [Reviewers](#reviewers) |
+| the branches on the remote | `bb branch list --json` (`-n` filters by name, `-u` by last author) |
+| the repositories in a workspace | `bb repo list --workspace <slug> --json` |
 | open a pull request | the `bbc-open-pr` skill, not this one |
 | a daily brief | the `bbc-daily-brief` skill, and only when the user asks for one |
 | report a bug in `bb` | the `bbc-report-bug` skill, and only when the user asks for one |
@@ -200,6 +206,9 @@ partial, and quote `files_skipped`, `paths_skipped` and `errors[]`.
 
 ## Cost and coverage
 
+- `bb pr list`, `bb repo list`, `bb project list` and `bb branch list` return at most `--limit`
+  rows (default 100), and say nothing when they cut. The JSON has no marker for it. When the row
+  count equals the limit, the list can be incomplete: raise `--limit`, and run it again.
 - `--build` costs one request per pull request, because Bitbucket reports builds per pull request.
   `bb pr list` fetches builds only for the rows that pass its other filters. Narrow the list first,
   then add `--build` or `--build-status <state>`. `--build-status` filters the output. It does not
@@ -223,7 +232,7 @@ A failure exits non-zero and prints one `error: …` line on stderr. API failure
 
 | Signal | Cause | Next step |
 |---|---|---|
-| exit 2 | no valid credentials | Ask the user to run `bb auth login`. It prompts, so do not run it yourself. In CI, set `BB_EMAIL` and `BB_TOKEN`. |
+| exit 2 | no valid credentials | Ask the user to run `bb auth login`. It prompts, so do not run it yourself, and never run `bb auth logout`. In CI, set `BB_EMAIL` and `BB_TOKEN`. |
 | exit 3 | the pull request, comment, branch or repository does not exist | Check the id, and the repository in `-R`. |
 | exit 3 from `unresolve` | the thread is not resolved, or the id is wrong | Check the id. If it is right, nothing to do. |
 | `api error 403` from `resolve --yes` | the id is a reply or a general comment | Pass the root of an inline thread. |

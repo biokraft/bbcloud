@@ -13,7 +13,7 @@ stop and ask the user. Do not skip them.
 ## Operating contract
 
 - Add `--json` to every `bb` command, and branch on the exit code: `2` not authenticated (ask the
-  user to run `bb auth login`), `3` not found.
+  user to run `bb auth login`; never run `bb auth logout`), `3` not found.
 - Find the source and the target branch before you propose a title or reviewers.
 - Collect evidence before you draft. Never invent ownership, tests or risks.
 - Stop at the description gate and at the reviewer gate. Run `bb pr create` only after the user

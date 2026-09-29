@@ -15,13 +15,15 @@ One ranked list of what needs the user's attention across their Bitbucket reposi
    standup summary, what needs their attention. For a narrower question — "what is failing on PR
    42", "who reviews this branch" — answer with plain `bb` commands, and produce no brief.
 2. The `bitbucket-cloud` rules apply: `--json` on every command, never `-w` or `--web`, and branch
-   on exit codes, not on error text.
+   on exit codes, not on error text. On exit 2, ask the user to run `bb auth login`. Never run
+   `bb auth logout`.
 3. **Never write to Bitbucket.** Do not comment, approve, merge or request changes while you build a
    brief. **Never resolve a comment thread**, even when it looks answered. A brief reports threads.
    It does not close them.
 4. Run the cheap scan first. Enrich only the ranked candidates.
-5. Report an incomplete scan. If `partial` is not empty, the brief opens with one line that names
-   those workspaces.
+5. Report an incomplete scan in one line under the verdict: a non-empty `partial`, a workspace with
+   more repositories than the scan read, or a list that returned exactly `--limit` rows. Name the
+   numbers: "reviews read in 30 of 140 repositories in acme".
 6. **Write to the user as "you"**: "your review is pending", "you raised two threads", "Dana owes
    you a reply". The reader owns these pull requests, not the agent. The JSON fields `my_role` and
    `my_review_state` keep the API's wording. The brief does not.
@@ -47,19 +49,29 @@ Ask the user for the workspace slugs then.
 updated repositories per workspace (default 30). Never present the brief as a complete picture of
 a workspace. `--role author` skips the reviewer half, and costs one request per workspace.
 
+To state the coverage, count each workspace once:
+
+```bash
+bb repo list --workspace <slug> --limit 10000 --json
+```
+
+It returns every repository the token can see, at one request per 100 repositories. The array
+length is the denominator for rule 5.
+
 ## One repository only
 
 When the user limits the request to one repository — "only this repo", "just acme/api" — do not
 use `bb pr mine`. Use two exact lists:
 
 ```bash
-bb pr list -R <workspace>/<repo> --needs-my-review --build --json   # you review, and have not approved
-bb pr list -R <workspace>/<repo> --author @me --build --json        # you opened it
+bb pr list -R <workspace>/<repo> --needs-my-review --build --limit 1000 --json   # you review, and have not approved
+bb pr list -R <workspace>/<repo> --author @me --build --limit 1000 --json        # you opened it
 ```
 
-They see every pull request in the repository, so they are cheaper and more complete than
-`pr mine`. A row from the first list has the role `reviewer`, and a row from the second the role
-`author`. These rows have no `my_review_state`, `updated_on` or `comment_count`. Take every row as a
+`pr mine` skips a repository outside its recency window. These lists never do, but each returns at
+most `--limit` rows (default 100), and says nothing when it cuts. Always pass `--limit`. If a list
+returns exactly that many rows, it is incomplete: report it under rule 5. A row from the first list
+has the role `reviewer`, and a row from the second the role `author`. These rows have no `my_review_state`, `updated_on` or `comment_count`. Take every row as a
 candidate, and read those facts in phase 2. The user's entry in `pull_request.reviewers[]` is the
 one whose `name` equals `account` from `bb auth status --json`.
 
