@@ -578,6 +578,41 @@ fn uninstall_with_skill_removes_only_that_one() {
 }
 
 #[test]
+fn a_local_uninstall_points_at_global_skills_it_did_not_touch() {
+    let project = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "install", "--global"])
+        .assert()
+        .success();
+
+    bb(project.path(), cfg.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success()
+        .stderr(contains("pass --global"))
+        .stderr(contains(project.path().to_str().unwrap()));
+
+    assert!(cfg
+        .path()
+        .join(".agents/skills/bitbucket-cloud/SKILL.md")
+        .is_file());
+}
+
+#[test]
+fn uninstall_with_nothing_tracked_suggests_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    bb_in(dir.path())
+        .args(["skill", "uninstall"])
+        .assert()
+        .success()
+        .stdout(contains("nothing to uninstall"))
+        .stderr(contains("--global").not());
+}
+
+#[test]
 fn the_brief_skill_states_it_is_invoked_only_on_request() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
         .unwrap()
