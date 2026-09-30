@@ -96,8 +96,15 @@ impl Client {
             reqwest::Url::parse(path_or_url)
                 .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
         } else {
-            self.base_url
-                .join(path_or_url)
+            // Concatenate rather than `Url::join`: join treats a leading `/` as an
+            // absolute path and drops the base's `/2.0` prefix.
+            let base = self.base_url.as_str().trim_end_matches('/');
+            let sep = if path_or_url.starts_with('/') {
+                ""
+            } else {
+                "/"
+            };
+            reqwest::Url::parse(&format!("{base}{sep}{path_or_url}"))
                 .map_err(|e| BbError::Config(format!("invalid Bitbucket API URL: {e}")))?
         };
 
@@ -280,6 +287,51 @@ mod tests {
             workspace_path("a c/me", "/projects"),
             "/workspaces/a%20c%2Fme/projects"
         );
+    }
+
+    fn client_for(base: &str) -> Client {
+        let creds = Credentials {
+            email: "dev@example.com".into(),
+            token: crate::secret::SecretString::from("s3cr3t-token"),
+        };
+        Client::new(creds, base.to_string()).unwrap()
+    }
+
+    #[test]
+    fn url_keeps_the_version_prefix_of_the_base() {
+        let client = client_for(DEFAULT_BASE_URL);
+        assert_eq!(
+            client.url("/user").unwrap(),
+            "https://api.bitbucket.org/2.0/user"
+        );
+        assert_eq!(
+            client
+                .url("/repositories/acme/api/pullrequests?pagelen=50")
+                .unwrap(),
+            "https://api.bitbucket.org/2.0/repositories/acme/api/pullrequests?pagelen=50"
+        );
+    }
+
+    #[test]
+    fn url_tolerates_a_trailing_slash_on_the_base() {
+        let client = client_for("https://api.bitbucket.org/2.0/");
+        assert_eq!(
+            client.url("/user").unwrap(),
+            "https://api.bitbucket.org/2.0/user"
+        );
+    }
+
+    #[test]
+    fn url_passes_an_absolute_same_origin_next_link_through() {
+        let client = client_for(DEFAULT_BASE_URL);
+        let next = "https://api.bitbucket.org/2.0/repositories/acme?page=2";
+        assert_eq!(client.url(next).unwrap(), next);
+    }
+
+    #[test]
+    fn url_refuses_another_origin() {
+        let client = client_for(DEFAULT_BASE_URL);
+        assert!(client.url("https://evil.example/2.0/user").is_err());
     }
 
     #[test]
