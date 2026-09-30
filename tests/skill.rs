@@ -1322,6 +1322,87 @@ fn the_main_skill_forbids_approving() {
     );
 }
 
+/// `bb auth logout` deletes the keyring credential, and only a human at a
+/// prompt can store a new one. Exit 2 is exactly when an agent reaches for it.
+#[test]
+fn the_main_skill_forbids_logging_out() {
+    let text = bb_cli::skill::skill_by_name("bitbucket-cloud")
+        .unwrap()
+        .content;
+    assert!(
+        text.contains("Never run `bb auth logout`"),
+        "the skill must forbid deleting the stored credential"
+    );
+}
+
+/// The subcommands one `--help` screen lists, read off the real binary rather
+/// than the clap tree, which is private to `main.rs`.
+fn subcommands(path: &[String]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let out = bb_in(dir.path())
+        .env("BB_SKILL_NO_AUTO_REFRESH", "1")
+        .args(path)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`bb {} --help` failed",
+        path.join(" ")
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .skip_while(|line| line.trim_end() != "Commands:")
+        .skip(1)
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_string)
+        .collect()
+}
+
+fn leaf_commands(path: Vec<String>, found: &mut Vec<String>) {
+    let children = subcommands(&path);
+    if children.is_empty() {
+        found.push(path.join(" "));
+    }
+    for child in children {
+        let mut next = path.clone();
+        next.push(child);
+        leaf_commands(next, found);
+    }
+}
+
+/// A hand-kept needle list only holds the commands someone remembered. This
+/// walks every command the binary has, so a new one fails here until a skill
+/// tells the agent how to use it — or `UNDOCUMENTED` says why none should.
+#[test]
+fn every_command_appears_in_a_shipped_skill() {
+    const UNDOCUMENTED: [&str; 4] = [
+        "browse",            // opens a browser, which every skill forbids
+        "completions",       // shell setup, done once by a human
+        "skill uninstall",   // removes the user's files, which is the user's call alone
+        "pr reviewers list", // documented as its default form, `bb pr reviewers <id>`
+    ];
+    let text: String = bb_cli::skill::SKILLS.iter().map(|s| s.content).collect();
+    let mut commands = Vec::new();
+    leaf_commands(Vec::new(), &mut commands);
+    assert!(
+        commands.len() > 20,
+        "the help walk found too few commands, so the parse broke: {commands:?}"
+    );
+    let missing: Vec<&String> = commands
+        .iter()
+        .filter(|command| !UNDOCUMENTED.contains(&command.as_str()))
+        .filter(|command| !text.contains(&format!("bb {command}")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "no shipped skill mentions {missing:?} — document it, or add it to UNDOCUMENTED with the reason"
+    );
+}
+
 /// `skill` is the canonical name — every other command group is singular
 /// (`pr`, `repo`, `branch`, `auth`, `project`) — but the plural is what people
 /// reach for, since the thing being managed is a set of files and the noun in

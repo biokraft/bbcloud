@@ -1,216 +1,245 @@
 ---
 name: bitbucket-cloud
-description: Reads, reviews, comments on, and reports Bitbucket Cloud pull requests with the `bb` CLI. Use for pull-request discovery, review context, comments, build or conflict status, and repository data in a Bitbucket Cloud repository. Do not use for opening a pull request, producing a daily brief, GitHub, or GitLab.
+description: Reads, reviews and answers Bitbucket Cloud pull requests with the `bb` CLI — comments, review threads, diffs, build status, conflicts, reviewers and repository data. Use when the git remote is bitbucket.org, or when the task names a Bitbucket pull request, a review comment, or a `bb` command. Do not use to open a pull request, for a daily brief, or for GitHub or GitLab.
 license: MIT
 ---
 
 # Bitbucket Cloud with `bb`
 
-`bb` is one binary for the Bitbucket Cloud REST API. Use it for all pull request work; do not use
+`bb` is the CLI for the Bitbucket Cloud REST API. Use it for all pull request work. Do not use
 `gh`, and do not send the user to the web UI.
 
-This file carries the things `bb --help` cannot: the house rules, which decisions are the user's,
-and what each failure means. `bb --help` and `bb <command> --help` carry the flag surface — read
-them for syntax, not this file.
-
-## Rules
-
-1. Add `--json` to every command and parse it. Tables are for humans and their layout changes. The
-   one exception is `bb pr diff <id>`, which is plain text.
-2. Never resolve a comment thread, mark changes requested, approve, or merge on your own initiative.
-   Each is a verdict on someone else's work. See [Verdicts belong to the user](#verdicts-belong-to-the-user).
-3. Never pass `-w` or `--web`. They start a browser.
-4. Branch on the exit code, not the error text: `0` success, `1` error, `2` not authenticated,
-   `3` not found.
-5. Give every comment a body: `--body` for one line, `--body-stdin` for more. With neither and no
-   terminal, the command fails.
-6. Add `-R workspace/repo` to act on another repository. Never guess a workspace.
-7. `bb` may print `bb X.Y.Z is available …` on **stderr**. That is a notice, not a failure: the
-   command succeeded and stdout is untouched. Mention it once, quoting the command it names. Do not
-   run the upgrade, and do not repeat it later in the session.
-8. In a new checkout, `bb skill install` sets up the agent skills. It needs no authentication.
+This file holds what `bb --help` does not: the house rules, the decisions that belong to the user,
+and what each failure means. For flags and syntax, read `bb <command> --help`.
 
 ## Operating contract
 
-1. Establish the repository from the checkout or `-R` before anything else.
-2. Use `--json` for machine decisions and keep the command's exit code.
-3. Read before writing. Use the smallest command that changes exactly the field asked for.
-4. After a write, verify the returned JSON, or run one read-back command.
-5. On exit 2, exit 3, or a scope error, stop and report the next action. Never substitute a browser
-   or another provider.
+1. Add `--json` to every command and parse stdout. Tables are for humans, and their layout can
+   change. One exception: read a diff as plain text with `bb pr diff <id>`. With `--json`, the
+   diff is a string in `{id, diff}`.
+2. Branch on the exit code, not on the error text: `0` success, `1` error, `2` not authenticated,
+   `3` not found.
+3. `bb` acts on the repository of the current checkout. For another repository, add
+   `-R <workspace>/<repo>`. Never guess a workspace.
+4. Read before you write. Use the smallest command that changes only the field the user asked for.
+   After a write, check the JSON it returns.
+5. Never resolve a thread, request changes, approve or merge on your own initiative. See
+   [Verdicts belong to the user](#verdicts-belong-to-the-user).
+6. Never pass `-w`/`--web` or `-i`/`--interactive`. The first opens a browser. The second waits for
+   a human at a prompt.
+7. Give every comment a body: `--body` for one line, `--body-stdin` for more. With neither and no
+   terminal, the command fails.
+8. On exit 2, exit 3 or an `api error 403`, stop and tell the user the next step. Never fall back
+   to a browser or to another provider.
+9. **Never run `bb auth logout`.** It deletes the stored credential, and only a human at a prompt
+   can store a new one. It fixes no error you can meet.
+10. `bb` can print `bb X.Y.Z is available …` on stderr. That is a notice, not a failure: the command
+    succeeded, and stdout is clean. Tell the user once, and quote the upgrade command it names. Do
+    not run it, and do not run `bb update`.
+11. `bb skill status --json` shows each installed skill and its state: `current`, `stale`,
+    `modified` or `missing`. It needs no credentials. If a skill this file names is `missing` or
+    `stale`, tell the user that `bb skill install` fixes it. Do not run the install yourself: it
+    writes files into the repository.
 
 ## Choose the command
 
-| The user asked for | Run |
+| The user asks for | Run |
 |---|---|
-| what needs me / what is open | `bb pr list --needs-my-review --json` |
-| my own pull requests, any repo | `bb pr mine --json` |
+| what waits on my review | `bb pr list --needs-my-review --json` |
+| my pull requests in every repository | `bb pr mine --json` |
 | the pull request for this branch | `bb pr list --current --json` |
-| one pull request, with its comments | `bb pr view <id> --json` |
-| what still needs an answer | `bb pr view <id> --unresolved --json` |
-| is it safe to merge | `bb pr view <id> --build --conflicts --unresolved --json` |
-| header only, comments are not needed | `bb pr view <id> --metadata-only --json` |
-| what changed | `bb pr diff <id>` (plain text), `bb pr files <id> --json` |
+| one pull request and its comments | `bb pr view <id> --json` |
+| the threads that still need an answer | `bb pr view <id> --unresolved --json` |
+| is it ready to merge | `bb pr view <id> --build --conflicts --unresolved --json` |
+| the header only | `bb pr view <id> --metadata-only --json` |
+| what changed | `bb pr diff <id>`, `bb pr files <id> --json`, `bb pr commits <id> --json` |
 | did CI pass | `bb pr build <id> --json` |
-| who reviews | `bb pr reviewers <id> --json` |
-| who *should* review | `bb pr reviewers suggest --pr <id> --acknowledge-private-data --json` |
+| who reviews, and what each decided | `bb pr reviewers <id> --json` |
+| who should review | `bb pr reviewers suggest --pr <id> --acknowledge-private-data --json`, after the consent in [Reviewers](#reviewers) |
+| the branches on the remote | `bb branch list --json` (`-n` filters by name, `-u` by last author) |
+| the repositories in a workspace | `bb repo list --workspace <slug> --json` |
 | open a pull request | the `bbc-open-pr` skill, not this one |
-| a daily brief | the `bbc-daily-brief` skill, and only on request |
+| a daily brief | the `bbc-daily-brief` skill, and only when the user asks for one |
+| report a bug in `bb` | the `bbc-report-bug` skill, and only when the user asks for one |
 
-`pr view` returns `{pull_request, comments_loaded, general[], inline[]}`. `comments_loaded` is
-`false` for `--metadata-only`, so empty arrays then mean comments were skipped, not that there are
-none. `--unresolved` adds `unresolved_threads`; `--build` adds `build`; `--conflicts` adds
-`conflicts`. Those three are omitted unless asked for, and `--metadata-only` cannot be combined
-with `--unresolved` or `--comments-only`.
+### Read `pr view`
 
-A comment's `parent` is `null` on the first comment of a thread and holds that comment's id on a
-reply — that is how you find the id to resolve. `created_on` is the exact RFC3339 value; the
-human-facing `timestamp` may read "3 days ago", so use `created_on` for any age you compute.
+`bb pr view <id> --json` returns `{pull_request, comments_loaded, general[], inline[]}`. Each flag
+adds one key, and the key is absent without its flag: `--unresolved` adds `unresolved_threads`,
+`--build` adds `build` (`build_state`, `statuses[]`), and `--conflicts` adds `conflicts` (`count`,
+`files[]`).
+
+`--metadata-only` skips the comments and sets `comments_loaded` to `false`. Empty arrays then mean
+"not fetched", not "none". It cannot be combined with `--unresolved` or `--comments-only`.
+
+Each comment carries `id`, `author`, `created_on`, `body`, `file`, `line`, `resolved`, `pending` and
+`parent`. `parent` is `null` on the first comment of a thread, and holds the parent's id on a reply.
+To find the root of a thread, follow `parent` until it is `null`. Compute ages from `created_on`
+(RFC 3339). `timestamp` is display text, such as "3 days ago".
 
 ## Answer a review
 
 ```bash
-bb pr comment 42 --reply-to 998877 --body "Fixed in 1a2b3c4." --json   # in the thread you address
+bb pr comment 42 --reply-to 998877 --body "Fixed in 1a2b3c4." --json
 bb pr comment 42 -f src/auth.rs -l 88 --body "This drops the error." --json
 printf 'Refactored.\n\nThe parser is now its own module.\n' | bb pr comment 42 --body-stdin --json
 ```
 
-`--line` requires `--file`. `--reply-to` accepts neither, because a reply inherits its parent's
-location. To batch a review, add `--pending`: only the user sees those comments until they press
-"Finish review" in Bitbucket, and `bb` cannot publish them. The returned `url` is private to them
-while pending, so do not share it.
+Answer in the thread you address. `--line` needs `--file`. `--reply-to` takes neither, because a
+reply keeps the location of its parent.
+
+`--pending` saves a draft comment. Only the user sees it until they select "Finish review" in
+Bitbucket, and `bb` cannot publish it. Its `url` is private while it is pending, so do not share it.
+If the JSON shows `"pending": false`, Bitbucket published the comment at once. Tell the user.
 
 ## Report threads, do not close them
 
-Answer the comments. Report what you answered. Let the user close the threads.
+Answer the comments. Report what you answered. The user closes the threads.
 
-List the threads still open, roots only:
+List the open threads, root comments only:
 
 ```bash
 bb pr view 42 --unresolved --json | jq '.inline[] | select(.parent == null)'
 ```
 
-Recommend a thread to close, wait for the answer, then resolve only the ids the user names — one
-command each, never in a loop:
+Recommend the threads to close, then wait. Resolve only the ids the user names, one command for
+each id, never in a loop:
 
 ```bash
 bb pr resolve 42 998877 --yes --json
 bb pr unresolve 42 998877 --json
 ```
 
-`resolve` asks a human and fails without a terminal. `--yes` answers that prompt for you, so use
-it only for an id the user approved. Resolve the **first** comment of a thread, the one whose
-`parent` is `null`: a reply id and a general comment are both rejected, because only inline threads
-carry a resolution.
+Without `--yes`, `resolve` asks a human, and fails when there is no terminal. `--yes` answers that
+prompt for the user, so use it only for an id the user approved.
+
+Only the root of an inline thread can be resolved: `parent` is `null` and `file` is set. Check both
+before you send. With `--yes`, `bb` skips its own check, and Bitbucket answers a reply or a general
+comment with `api error 403`, which `bb` explains as a missing scope.
 
 ## Verdicts belong to the user
 
-Each of these is a claim about someone else's work, and none of them is yours to make.
+Each verdict is a claim about someone else's work. None of them is yours to make.
 
 **Never mark changes requested on your own initiative**, and never on a pull request you did not
-just review. After you have posted comments asking for changes, ask the user once. On a yes, the
-prompt has already been answered, so pass `--yes`:
+just review. After you post comments that ask for changes, ask the user once. On a yes, the user
+has answered the prompt, so pass `--yes`:
 
 ```bash
 bb pr request-changes 42 --yes --json
 ```
 
-Without `--yes` the command confirms with a human and fails with no terminal, so it cannot be
-marked by accident. Declining is an error, not a quiet success. Withdraw a change request only
-after a re-review finds the earlier points addressed — offer it, ask first, and never to clear the
-way for a merge:
+Without `--yes`, the command asks a human, and fails when there is no terminal. A "no" at the
+prompt exits `1`, so the mark cannot land by accident.
+
+Withdraw a change request only after a re-review finds the points addressed. Offer it, and ask
+first. Never withdraw it only to clear the way for a merge:
 
 ```bash
 bb pr no-request-changes 42 --yes --json
 ```
 
-**Never approve a pull request.** `bb` has no command for it, and reaching for another tool to
-approve is wrong — the prohibition is the rule, not a missing feature. Approval is a human action,
-like merging. Bitbucket removed app passwords on 2026-07-28; `bb` authenticates with an Atlassian
-account email and an API token, and you must never suggest an app password.
+**Never approve a pull request.** `bb` has no command for it, and that is deliberate. Do not use
+another tool to approve. Approval is a human action, like a merge.
 
-## Writes that need no permission
+## Edit a pull request
 
-These correct a mistake rather than assert anything, so they carry no gate. Do them when asked, or
-when you caused the mistake.
+These commands have no confirmation prompt, so the check is yours.
 
 ```bash
-bb pr retarget 42 --to main --json     # a pull request opened against the wrong target
+bb pr retarget 42 --to main --json
 bb pr edit 42 --title "Cache session lookups" --json
 bb pr edit 42 --description-stdin --json < body.md
 ```
 
-Retargeting keeps the review history; closing and reopening throws it away. Only the destination
-moves — the API cannot change a source branch. Bitbucket recomputes the diff afterwards, so inline
-comments anchored to the old base may read as outdated; say so when you report it.
+Retarget when the user asks, or when you opened the pull request against the wrong branch. A
+retarget keeps the review history. Close-and-reopen loses it. Only the destination changes: the
+API cannot change the source branch. Bitbucket then computes a new diff, so inline comments on the
+old base can show as outdated. Say so in your report.
 
-`pr edit` changes only the fields you pass. `--description ""` clears it, and a no-op edit writes
-nothing. Never run it with no flag, because it prompts. Print the new title and description back and
-wait for a yes before writing.
+`pr edit` changes only the fields you pass. `--description ""` clears the description. An edit that
+changes nothing writes nothing. Show the user the new title or description, and wait for a yes
+before you write.
 
-## Writes that do need permission
+## Create a repository
 
-`bb repo create` writes to a shared workspace. Ask every time, and repeat back the workspace, the
-name and the project key before running it. A stray repository is somebody's cleanup job. Never
-pass `--public`: if the user has not said "public" in words, they have not said it. If `--project`
-is unknown, run `bb project list` and ask — do not infer it from the name.
+`bb repo create` writes to a shared workspace. Ask each time. Before you run it, repeat the
+workspace, the name and the project key to the user. Never pass `--public` unless the user said
+"public". If the project key is not known, run `bb project list --json` and ask. Do not infer the
+key from the name.
 
 ## Reviewers
 
-Names match case-insensitively as a substring of display name or nickname, against the repository's
-user list and its effective default reviewers; an exact match beats a longer substring. Ambiguous
-or unknown is an error, and the error lists the candidates. Pass `{uuid}` in braces to skip matching
-entirely — every error message suggests it. `bb repo reviewers --json` shows the same pool plus any
-source that could not be read. It is not called `members` because membership says nothing about
-access to *this* repository.
+A reviewer name matches case-insensitively as a substring of a display name or a nickname. `bb`
+searches three lists: the workspace members, the users in the repository's permissions, and the
+effective default reviewers. An exact match wins over a longer substring match. An ambiguous or
+unknown name is an error, and the error lists the candidates. A `{uuid}` in braces skips the search.
 
-`bb pr reviewers suggest` is read-only and never calls an add or create endpoint. It needs
-`--acknowledge-private-data`, because it reads private file paths, colleague names, dates and
-account ids out of commit history: name those categories and get a yes before running it. It
-reports `target_commits` — who maintains the changed files — separately from `source_commits`,
-who else worked on this branch, and gives each person a `can_review` of `yes`, `no` or `unknown`.
-**File ownership is not repository access**: show the `commit_count`, `files`, `last_commit_on` and
-`can_review` before asking the user to choose. When `history_complete` is `false`, say the scan was
-partial and quote `files_skipped` and `paths_skipped` rather than presenting a truncated list as
-the full set.
+```bash
+bb pr reviewers add 42 dana,ash --json
+bb pr reviewers remove 42 ash --json
+bb repo reviewers --json
+```
 
-Every name resolves before any write, so one bad name in `bb pr reviewers add 42 a,b` writes
-nothing. Adding someone already tagged writes nothing and exits 0; removing someone not tagged is
-an error with no write. Bitbucket rejects the author as a reviewer — that is its rule, not a bug.
+`bb` resolves every name before it writes, so one bad name writes nothing. To add someone already
+tagged writes nothing and exits `0`. To remove someone not tagged is an error. Bitbucket rejects
+the author as a reviewer. That is its rule, not a bug.
 
-For the whole open-a-pull-request workflow, use the `bbc-open-pr` skill. For the cross-repository
-brief, the `bbc-daily-brief` skill, and only when the user asks for one. `bb pr mine` returns
-`{pull_requests, partial}` and each row carries `repo` and `my_role`.
+A command that writes a reviewer refuses a name when one of the three lists cannot be read, because
+the missing list can hide the person the user means. Pass the `{uuid}` then. `bb repo reviewers`
+returns `{users[], partial[]}`. Each user has `name`, `nickname`, `uuid`, `sources` and
+`eligibility`. `partial` names the lists that could not be read. `eligibility` is `explicit` only
+for users in the repository's own permissions. A workspace member has no proven access to this
+repository.
 
-## What each read costs
+`bb pr reviewers suggest` is read-only. It reads commit history, so its output holds private file
+paths, colleague names, dates and account ids. Name those four categories to the user, and get a
+yes before you pass `--acknowledge-private-data`.
 
-`--build` is one extra request per pull request, because Bitbucket exposes build status only per
-pull request. `bb pr list --build-status <state> --json` filters on the rollup before the per-row
-fetch and is the cheaper way to ask.
-`build_state` is a worst-wins rollup (`failed` > `stopped` > `inprogress` > `successful` > `none`) —
-one field answers "did anything fail". Read `statuses[]` or `build[]` for *what* failed. `none` means
-no check reported, not that one passed. Statuses are fetched only for pull requests that survive the
-other filters, so narrow the list before asking for build state.
+Each row in `suggestions[]` has `name`, `uuid`, `commit_count`, `target_commits`, `source_commits`,
+`files`, `last_commit_on` and `can_review`. `target_commits` counts commits on the target branch:
+the person maintains these files. `source_commits` counts commits only on this branch: the person
+worked on this change. `can_review` is `yes` (in the repository's permissions), `no` (all lists were
+read and the person is not in them) or `unknown`. **File ownership is not repository access.** Show
+these facts, and let the user choose. When `history_complete` is `false`, say that the scan is
+partial, and quote `files_skipped`, `paths_skipped` and `errors[]`.
 
-`bb pr mine` is the only command that is not repository-scoped. It scans the `--repo-limit` most
-recently updated repositories per workspace (default 30) — a recency window, not full coverage, and
-never report it as a complete picture of a workspace. A workspace the token cannot read is listed
-in `partial` rather than failing the command; say so when reporting from a partial scan. For one
-known repository, use `bb pr list -R <repo>` instead.
+## Cost and coverage
+
+- `bb pr list`, `bb repo list`, `bb project list` and `bb branch list` return at most `--limit`
+  rows (default 100), and say nothing when they cut. The JSON has no marker for it. When the row
+  count equals the limit, the list can be incomplete: raise `--limit`, and run it again.
+- `--build` costs one request per pull request, because Bitbucket reports builds per pull request.
+  `bb pr list` fetches builds only for the rows that pass its other filters. Narrow the list first,
+  then add `--build` or `--build-status <state>`. `--build-status` filters the output. It does not
+  save requests.
+- `build_state` is a worst-wins rollup: `failed` > `stopped` > `inprogress` > `successful` > `none`.
+  One field tells you if anything failed. `none` means that no check reported, not that a check
+  passed. To find the check that failed, read `statuses[]` from `bb pr build`, or `build[]` from a
+  list row.
+- `bb pr mine` is the only command that is not scoped to one repository. It returns
+  `{pull_requests, partial}`, and each row carries `repo` and `my_role`. Its reviewer half reads only
+  the `--repo-limit` most recently updated repositories per workspace (default 30). Never report
+  its result as complete. `partial` lists the workspaces the token cannot read; mention them. For
+  one repository, use `bb pr list -R <workspace>/<repo>` instead.
+- Commands that act on a workspace take it from `--workspace`, then `BB_WORKSPACE`, then the remote
+  of the current checkout. With none of these, they fail. Ask the user for the workspace.
 
 ## When a command fails
 
-- **Exit 2** — no credentials. Ask the user to run `bb auth login`; it prompts, so do not run it
-  yourself. In CI, set `BB_EMAIL` and `BB_TOKEN`.
-- **Exit 3** — the pull request, branch, comment or repository does not exist. Confirm the id, and
-  confirm the repository with `bb auth status` and `-R`.
-- **A 403** — the token misses a scope. Reads need `read:pullrequest:bitbucket`; writes need
-  `write:pullrequest:bitbucket`; `pr view --conflicts` and `bb branch list` need
-  `read:repository:bitbucket`.
-- **`is a reply`, or `is not on the diff`** — you passed the wrong id. Read `parent` from
-  `bb pr view` and pass the id that has none.
-- **`already resolved`** — the thread is closed. Nothing to do.
-- **`no bitbucket.org remote found`**, or **`no git repository here`** — pass `-R workspace/repo`,
-  or set `BB_REPO`.
+A failure exits non-zero and prints one `error: …` line on stderr. API failures read
+`error: bitbucket api error <status>: <message>`.
 
-Source and issues: <https://github.com/biokraft/bbcloud>.
+| Signal | Cause | Next step |
+|---|---|---|
+| exit 2 | no valid credentials | Ask the user to run `bb auth login`. It prompts, so do not run it yourself, and never run `bb auth logout`. In CI, set `BB_EMAIL` and `BB_TOKEN`. |
+| exit 3 | the pull request, comment, branch or repository does not exist | Check the id, and the repository in `-R`. |
+| exit 3 from `unresolve` | the thread is not resolved, or the id is wrong | Check the id. If it is right, nothing to do. |
+| `api error 403` from `resolve --yes` | the id is a reply or a general comment | Pass the root of an inline thread. |
+| `api error 403` elsewhere | the token lacks a scope | `bb auth login --help` lists each scope and the commands that need it. |
+| `api error 409` from `resolve` | the thread is already resolved | Nothing to do. |
+| `api error 429` | rate limited | Wait, then retry once. |
+| `no bitbucket.org remote found`, `no git repository here` | no repository to act on | Pass `-R <workspace>/<repo>`, or set `BB_REPO`. |
+
+`bb` authenticates with an Atlassian account email and an API token. Never suggest an app password:
+Bitbucket removed them.

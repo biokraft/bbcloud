@@ -1,177 +1,166 @@
 ---
 name: bbc-daily-brief
-description: Produces a ranked, actionable brief of the user's Bitbucket Cloud pull requests across repositories. Use ONLY when the user explicitly asks for a daily brief, standup summary, or what needs their attention across repositories. Never invoke this skill proactively. Do not use for a single pull request, opening a pull request, or as an intermediate step in another task.
+description: Produces a ranked, actionable brief of the user's Bitbucket Cloud pull requests across repositories with the `bb` CLI. Use ONLY when the user explicitly asks for a daily brief, a standup summary, or what needs their attention across repositories. Never invoke this skill proactively. Do not use for a single pull request, to open a pull request, or as a step in another task.
 license: MIT
 ---
 
 # Daily brief
 
-One ranked list of what needs the user's attention across every Bitbucket repository, built from
-`bb`. Nothing else.
-
-## Rules
-
-1. **Explicit invocation only.** Produce a brief when the user asks for one in those words — a
-   daily brief, a standup summary, what needs their attention. If the question is narrower ("what
-   is failing on PR 42", "who is reviewing this branch"), answer it with plain `bb` commands and do
-   not produce a brief.
-2. The `bitbucket-cloud` skill's rules bind here too: `--json` on every command, never `-w` or
-   `--web`, use exit codes rather than error text.
-3. **Never resolve a comment thread.** A brief reports threads; it does not close them. This holds
-   even when the thread looks answered.
-4. Never write a comment, approve, or merge while building a brief. It is read-only.
-5. Report an incomplete scan. If phase 1 returns a non-empty `partial`, the brief opens with one
-   line naming those workspaces.
-6. **Write to the user as "you".** The brief says "your review is pending", "you raised two
-   threads", "Dana owes you a reply". Never write the brief in the first person — the reader is the
-   person whose pull requests these are, not the agent. The json fields are still named `my_role`
-   and `my_review_state`; that is the api's wording, not the brief's.
+One ranked list of what needs the user's attention across their Bitbucket repositories, built from
+`bb`, and nothing else. The brief is read-only.
 
 ## Operating contract
 
-1. Confirm the user explicitly requested a cross-repository brief.
-2. Run the cheap structural scan before any enrichment.
-3. Enrich at most the ranked candidate set; preserve `partial` and uncertainty.
-4. Produce the fixed output shape, or state why it cannot be produced. Never write to Bitbucket.
+1. **Explicit request only.** Produce a brief only when the user asks for one: a daily brief, a
+   standup summary, what needs their attention. For a narrower question — "what is failing on PR
+   42", "who reviews this branch" — answer with plain `bb` commands, and produce no brief.
+2. The `bitbucket-cloud` rules apply: `--json` on every command, never `-w` or `--web`, and branch
+   on exit codes, not on error text. On exit 2, ask the user to run `bb auth login`. Never run
+   `bb auth logout`.
+3. **Never write to Bitbucket.** Do not comment, approve, merge or request changes while you build a
+   brief. **Never resolve a comment thread**, even when it looks answered. A brief reports threads.
+   It does not close them.
+4. Run the cheap scan first. Enrich only the ranked candidates.
+5. Report an incomplete scan in one line under the verdict: a non-empty `partial`, a workspace with
+   more repositories than the scan read, or a list that returned exactly `--limit` rows. Name the
+   numbers: "reviews read in 30 of 140 repositories in acme".
+6. **Write to the user as "you"**: "your review is pending", "you raised two threads", "Dana owes
+   you a reply". The reader owns these pull requests, not the agent. The JSON fields `my_role` and
+   `my_review_state` keep the API's wording. The brief does not.
 
-## Phase 1 — structural scan, cheap
+## Phase 1 — the scan
 
 ```bash
 bb pr mine --build --json
 ```
 
-Returns `{ "pull_requests": [...], "partial": [...] }`. Each row carries `repo`, `id`, `title`,
-`url`, `state`, `draft`, `author`, `my_role` (`author` | `reviewer` | `both`), `my_review_state`
-(`approved` | `changes_requested` | `pending`, or `null` when the user is not a reviewer),
-`reviewers[]`, `updated_on` (rfc3339), `comment_count` (every comment on the pull request, inline
-and general, replies included — `null` when bitbucket did not return the field), and — because
-`--build` was passed — `build_state` (worst-wins rollup: `failed` | `stopped` | `inprogress` |
-`successful` | `none`) plus `build[]` for the individual checks.
+It returns `{pull_requests[], partial[]}`. Each row has `repo`, `id`, `title`, `url`, `state`,
+`draft`, `author`, `my_role` (`author`, `reviewer` or `both`), `my_review_state` (`approved`,
+`changes_requested`, `pending`, or `null` when the user is not a reviewer), `reviewers[]` (`name`,
+`uuid`, `state`), `updated_on` (RFC 3339) and `comment_count`. `comment_count` counts every comment,
+replies included, and is `null` when Bitbucket did not report it. `--build` adds `build_state`
+(worst-wins: `failed`, `stopped`, `inprogress`, `successful`, `none`) and `build[]`.
 
-There is no api call left that discovers which workspaces the user belongs to. The workspace(s)
-scanned are resolved from `--workspace <slug>[,<slug>...]`, then `BB_WORKSPACE`, then the git remote
-of the current checkout — see the `bitbucket-cloud` skill for the full precedence order.
+The workspaces come from `--workspace <slug>[,<slug>…]`, then `BB_WORKSPACE`, then the remote of the
+current checkout. No API lists the workspaces of a user, so with none of these the command fails.
+Ask the user for the workspace slugs then.
 
-`--role author` is one request to find who the user is, then one paginated call per workspace. The
-reviewer half adds one repository-listing call per workspace and then one call per scanned
-repository. Narrow with `--workspace <slug>` or `--repo-limit <n>` when the user asks about one
-workspace.
+**The scan is a recency window.** The reviewer half reads only the `--repo-limit` most recently
+updated repositories per workspace (default 30). Never present the brief as a complete picture of
+a workspace. `--role author` skips the reviewer half, and costs one request per workspace.
 
-**This scan is a recency window, not the whole workspace.** The reviewer half only ever looks at
-the `--repo-limit` most recently updated repositories per workspace (default 30) — a workspace with
-hundreds of repositories is covered only in a small slice. Never present a brief built this way as
-a complete picture of the workspace; if certainty about one specific repository matters, use
-`bb pr list -R <repo>` for that repository instead.
+To state the coverage, count each workspace once:
+
+```bash
+bb repo list --workspace <slug> --limit 10000 --json
+```
+
+It returns every repository the token can see, at one request per 100 repositories. The array
+length is the denominator for rule 5.
 
 ## One repository only
 
-When the user scopes the request to a single repository — "only this repo", "just for
-acme/api" — do not use `bb pr mine`. Use:
+When the user limits the request to one repository — "only this repo", "just acme/api" — do not
+use `bb pr mine`. Use two exact lists:
 
 ```bash
-bb pr list -R <workspace>/<repo> --build --json
+bb pr list -R <workspace>/<repo> --needs-my-review --build --limit 1000 --json   # you review, and have not approved
+bb pr list -R <workspace>/<repo> --author @me --build --limit 1000 --json        # you opened it
 ```
 
-This is cheaper (one call plus the build fetches, rather than a 30-repository scan) and *more*
-complete: `pr mine`'s reviewer half only covers the most recently updated repositories, while
-`pr list` sees every pull request in the named repository.
+`pr mine` skips a repository outside its recency window. These lists never do, but each returns at
+most `--limit` rows (default 100), and says nothing when it cuts. Always pass `--limit`. If a list
+returns exactly that many rows, it is incomplete: report it under rule 5. A row from the first list
+has the role `reviewer`, and a row from the second the role `author`. These rows have no `my_review_state`, `updated_on` or `comment_count`. Take every row as a
+candidate, and read those facts in phase 2. The user's entry in `pull_request.reviewers[]` is the
+one whose `name` equals `account` from `bb auth status --json`.
 
-The rows differ: `pr list` carries `reviewers[]` but no `my_role` or `my_review_state`. Work out
-whether something waits on the user by finding their own uuid in `reviewers[]` and reading its
-`state`, or let the CLI do it — `bb pr list --needs-my-review --json` returns exactly the pull
-requests where the user is a reviewer and has not approved yet.
+Ranking, thresholds and output are the same in both modes.
 
-Ranking, thresholds and output format are identical in both modes.
+## Phase 2 — enrich the candidates
 
-## Phase 2 — enrich only the candidates
-
-Phase 1 cannot read comment threads, only count them. Select candidates from phase 1 on structure
-alone:
+Phase 1 counts comments but cannot read them. Choose the candidates from phase 1 alone:
 
 - every non-draft row where `my_role` is `reviewer` or `both`
 - every row the user authored whose `build_state` is `failed` or `stopped`
-- every row the user authored whose `my_review_state` is `changes_requested`
-- every non-draft row the user authored whose `comment_count` is above `0` or `null`
-- every non-draft row the user authored whose phase-1 `build_state` is `successful` and whose reviewers are all approved
-- every row the user authored past the nudge threshold below
+- every row the user authored where an entry in `reviewers[]` has the state `changes_requested`
+- every non-draft row the user authored whose `comment_count` is above `0`, or `null`
+- every non-draft row the user authored whose `build_state` is `successful` and whose reviewers all
+  approved
+- every row the user authored that is past the nudge threshold below
 
-The `comment_count` rule is the one that catches a reviewer who commented without acting on the
-approval: `my_review_state` stays `pending` in that case, so none of the other rules fire and the
-pull request would drop out of the brief entirely. A count above zero does not mean something waits
-on the user — the user's own comments are counted too, and threads may all be resolved — it only
-means phase 2 has to look. `null` means bitbucket did not report a count, so it is treated the same
-way: look rather than assume quiet.
+The `comment_count` rule catches a reviewer who commented but gave no verdict. That reviewer's
+state stays `pending`, so no other rule fires. A count above zero does not prove that something
+waits on the user — the user's own comments count too. It only means that phase 2 must look. Treat
+`null` the same way.
 
-Take at most 12 candidates. Order them by how likely they are to be blocking somebody: rows where
-`my_role` is `reviewer` or `both` first, then the authored rows, each group oldest `updated_on`
-first. The `comment_count` rule widens this set considerably — most authored pull requests have
-some comment on them — so without that ordering a busy morning's twelve slots fill with the user's
-own pull requests and a review they are holding up never gets enriched.
+Take at most 12 candidates. Put the rows where `my_role` is `reviewer` or `both` first, then the
+authored rows. In each group, put the oldest `updated_on` first. Without this order, the user's own
+pull requests fill the slots, and a review the user holds up is never enriched.
 
-For each:
+For each candidate:
 
 ```bash
 bb pr view <id> -R <repo> --unresolved --conflicts --build --json
 ```
 
-Nothing else gets enriched. Do not fetch comments for every row phase 1 returned.
+Enrich nothing else. Do not fetch comments for every row from phase 1.
 
-A thread is **waiting on the user's answer** when it is an unresolved inline thread whose most
-recent comment is somebody else's. Use `parent` to group replies into threads and the comment
-`author` to decide whose the last word was.
+A thread **waits on the user** when it is an unresolved inline thread and its most recent comment
+is by somebody else. Group comments into threads: follow `parent` until it is `null`. Compare each
+comment's `author` with `account` from `bb auth status --json`.
 
 ## Staleness
 
-Ages are in **working days** — Saturday and Sunday do not count, so a Monday brief does not accuse
-everyone of ignoring the user all weekend.
+Ages count **working days**. Saturday and Sunday do not count, so a Monday brief does not blame
+anyone for the weekend.
 
 | Situation | Threshold | Who owes |
 |---|---|---|
-| The user is a reviewer, `my_review_state` is `pending` | over 1 working day | the user |
-| The user's pull request, a reviewer set `changes_requested` | over 1 working day | the user |
-| The user's pull request, no reviewer has acted | over 2 working days | them — nudge |
+| The user reviews, and the review is `pending` | over 1 working day | the user |
+| The user's pull request has a reviewer at `changes_requested` | over 1 working day | the user |
+| The user's pull request, and no reviewer has acted | over 2 working days | the reviewers — nudge |
 
 ## Ranking
 
-This ladder, ties broken oldest first:
+Use this ladder. Break ties oldest first.
 
-1. The user is a reviewer and a thread waits on their answer, or their review is `pending` past
-   threshold — they are the bottleneck.
-2. Their pull request has `changes_requested`, or unresolved threads waiting on their answer.
-3. Their pull request's `build_state` is `failed` or `stopped`.
-4. Their pull request has at least one reviewer and **every** one of them approved, phase-2
-   `build_state` is `successful`, `conflicts.count` is `0`, `unresolved_threads` is `0`, and
-   `task_count` is `0` — merge candidate. A pull request nobody has reviewed is not a merge
-   candidate: no human has signed off on it yet, and an empty reviewer list would otherwise satisfy
-   "every reviewer approved" by vacuous truth.
-5. Their pull request is past the nudge threshold with no reviewer action — nudge a named reviewer.
-6. Everything else — counted, never listed.
+1. The user reviews, and a thread waits on the user's answer, or the review is `pending` past the
+   threshold. The user is the bottleneck.
+2. The user's pull request has `changes_requested`, or unresolved threads that wait on the user.
+3. The user's pull request has a `build_state` of `failed` or `stopped`.
+4. Merge candidate: the user's pull request has at least one reviewer, **every** reviewer approved,
+   and phase 2 shows `build.build_state` `successful`, `conflicts.count` `0`, `unresolved_threads`
+   `0` and `pull_request.task_count` `0`. A pull request with no reviewers is not a candidate: an
+   empty list passes "every reviewer approved" by vacuous truth.
+5. The user's pull request is past the nudge threshold, and no reviewer has acted. Name a reviewer
+   to nudge.
+6. Everything else: count it, never list it.
 
-Drafts never appear in 1–5. They are not waiting on anybody; count them in the tail.
+Drafts never appear in 1–5. Nobody waits on a draft, so count it in the tail.
 
-“Merge candidate” is a factual shortlist, not permission to merge. The user still decides whether
-to merge. Do not use phase-1 build state for this predicate; phase 2 must fetch the final facts
-together, and a build that turned red after phase 1 must not be reported as green.
+A merge candidate is a list of facts, not permission to merge. The user decides. Use the build
+state from phase 2, never from phase 1: a build that failed after phase 1 must not show as green.
 
 ## Output
 
-A one-line verdict, then labelled groups, then a count. At most 10 pull requests listed. No
-preamble, no closing offer of help.
+A one-line verdict, then the groups, then a count. List at most 10 pull requests. No preamble, and
+no closing offer of help.
 
 ```
-2 need you · 1 waiting on others · 1 quiet
+2 need you · 1 waiting on others · 1 merge candidate · 1 quiet
 
 🔴 YOU'RE BLOCKING
   [acme/api PR 225](https://bitbucket.org/acme/api/pull-requests/225)  Validate mapi responses
-    Your review is pending · 4h old
+    Your review is pending · 2d old
     → bb pr view 225 -R acme/api --unresolved --json
 
   [acme/web PR 206](https://bitbucket.org/acme/web/pull-requests/206)  Add guardrail hooks
     💥 Build failed, changes requested by Dana · 5d old — oldest here
-    → bb pr diff 206 -R acme/web
+    → bb pr build 206 -R acme/web --json
 
 ⏳ WAITING ON OTHERS
-  [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  Dana hasn't replied to your 2 threads · 3d
+  [acme/api PR 221](https://bitbucket.org/acme/api/pull-requests/221)  No review from Dana yet · 3d
 
 ✅ MERGE CANDIDATE
   [acme/api PR 198](https://bitbucket.org/acme/api/pull-requests/198)  Approved by Dana, build green · 2d
@@ -179,46 +168,41 @@ preamble, no closing offer of help.
 💤 1 quiet (1 draft)
 ```
 
-### Linking, and one shape to never write
+### Links
 
-Every entry's identifier is a markdown link whose target is that row's own `url` field — never a
-url you assembled yourself, and never the plain repository path.
+Each entry's identifier is a markdown link to that row's own `url` field. Never build a url
+yourself, and never link to the repository path. `bb pr list` rows carry the same `url`.
 
-**Never write a repository path followed by a hash and the number.** That shape is GitHub's
-issue-reference syntax: chat clients and terminals silently rewrite it into a link to `github.com`,
-so a brief about Bitbucket work sends the reader to a GitHub 404. Write
-`[acme/api PR 225](<url>)` instead — the words `PR` and the id, with the real Bitbucket url as the
-link target.
+**Never write a repository path, a hash and a number with no space between them.** That is GitHub's
+issue-reference syntax. Chat clients and terminals turn it into a link to `github.com`, so the
+reader lands on a GitHub 404. Write `[acme/api PR 225](<url>)`: the word `PR`, the id, and the
+Bitbucket url as the target.
 
-In the repo-scoped mode `bb pr list` supplies the same `url` field per row, so the rule is identical
-there.
+### Emoji
 
-### The emoji vocabulary
-
-Exactly five glyphs, each earning its place as a visual anchor. **Use no others** — a brief peppered
-with decoration is harder to scan than one with none, which defeats the point.
+Use exactly these five glyphs, and no others. Each one is a visual anchor, and extra decoration
+makes the brief harder to scan.
 
 | Glyph | Means | Where |
 |---|---|---|
 | 🔴 | this is on you | the `YOU'RE BLOCKING` heading |
-| ⏳ | waiting on someone else | the `WAITING ON OTHERS` heading |
-| ✅ | no known blocker; merging remains the user's decision | the `MERGE CANDIDATE` heading |
-| 💥 | a build is failing or stopped | on the entry line, before the reason |
+| ⏳ | this waits on someone else | the `WAITING ON OTHERS` heading |
+| ✅ | no known blocker; the merge is still the user's decision | the `MERGE CANDIDATE` heading |
+| 💥 | a build failed or stopped | on the entry line, before the reason |
 | 💤 | nothing needed here | the quiet tail |
 
-🔴, ⏳, ✅ and 💤 appear once each at most, on their own heading or tail line. 💥 is the only one that
-repeats, and only on entries whose `build_state` is `failed` or `stopped`.
+🔴, ⏳, ✅ and 💤 appear at most once each. 💥 can repeat, but only on entries whose `build_state`
+is `failed` or `stopped`.
 
-### Rules for that shape
+### Shape rules
 
-- The verdict line is always present and carries no emoji, even when it reads `nothing needs you`.
-- A group heading appears only when it has entries.
-- `🔴 YOU'RE BLOCKING` holds ranking rungs 1–3, and every entry carries one command line prefixed `→`.
-- `⏳ WAITING ON OTHERS` holds rung 5. It needs no command: name who owes the reply and how long it
-  has been. Add a command only when there is something useful to run.
-- `✅ MERGE CANDIDATE` holds rung 4. It is a factual shortlist, not permission to merge. Merging is
-  the user's decision and `bb` cannot do it, so give no
-  command — say it is approved and green.
-- The quiet tail is a count with a parenthesised breakdown, never a list.
+- The verdict line is always present, and has no emoji — also when it reads `nothing needs you`. It
+  counts each group that appears below it.
+- A group heading appears only when the group has entries.
+- `🔴 YOU'RE BLOCKING` holds rungs 1–3. Each entry has one command line that starts with `→`.
+- `⏳ WAITING ON OTHERS` holds rung 5. Name who owes the reply and for how long. Add a command only
+  when it is useful.
+- `✅ MERGE CANDIDATE` holds rung 4. Give no command: `bb` cannot merge. Say that it is approved and
+  green.
+- The quiet tail is a count with a breakdown in parentheses, never a list.
 - Ages are short: `4h`, `3d`. Mark the oldest entry in a group with `— oldest here`.
-- Address the user directly throughout, per rule 6.
