@@ -173,6 +173,10 @@ bb auth logout    # removes the stored credentials
 bb auth status    # shows the account; the token is always redacted to ****last4
 ```
 
+On macOS, the keychain item is read through Apple's `/usr/bin/security`, so upgrading `bb` does
+not ask for your login password again. Credentials stored by `bb` 0.24.1 or older prompt one last
+time, once for the email and once for the token; choose **Always Allow**.
+
 ### Token scopes
 
 Grant the least you need. For the pull request workflow — listing, reading and commenting — four

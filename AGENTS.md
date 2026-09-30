@@ -129,6 +129,12 @@ The API token is the thing this codebase most needs to not leak.
 - `Credentials` has a **hand-written** `Debug` that prints `<redacted>`. Do not replace it with
   `#[derive(Debug)]`.
 - Storage is the OS keyring only (`src/credentials.rs`). Never write a token to a file.
+- On macOS the keychain is reached through `/usr/bin/security`, not the Security framework, as
+  `gh` does. Keychain trusts the app that created an item by its code signature, and an ad-hoc
+  signed `bb` gets a new one every release, so each upgrade asked for the login password. The
+  tradeoff is deliberate: any process running as the user can read the item through `security`
+  without a prompt. Always call it by absolute path, and pass the secret hex-encoded on stdin
+  (`security -i`, `-X`), never in argv.
 - `bb auth status` must never print the token. `bb auth show` does not exist and must not be added.
 - Prefer `--body-stdin` style flags for secrets so they stay out of shell history and out of `ps`
   output.
@@ -144,7 +150,7 @@ src/main.rs            clap tree + dispatch, error rendering, exit codes
 src/lib.rs             library target (so integration tests can import)
 src/error.rs           BbError (thiserror) + exit_code()
 src/secret.rs          redact(), SecretString re-export
-src/credentials.rs     keyring get/set/delete, env override, legacy PHP config path
+src/credentials.rs     keychain get/set/delete (`security` on macOS, `keyring` elsewhere), env override, legacy PHP config path
 src/git.rs             injection-safe git invocation
 src/repo.rs            RepoSlug parse/resolve, percent-encoded path(), browse_url()
 src/api/mod.rs         Client: auth header, same-origin redirects, pagination, error mapping
