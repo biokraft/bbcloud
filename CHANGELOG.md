@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0](https://github.com/biokraft/bbcloud/compare/v0.23.0...v0.24.0) - 2026-09-30
+
+### Added
+
+- *(reviewers)* suggest owners from recent file history ([#75](https://github.com/biokraft/bbcloud/pull/75))
+- *(pr)* add selective review context ([#72](https://github.com/biokraft/bbcloud/pull/72))
+
+### Documentation
+
+- *(readme)* correct the claims that contradict the code ([#80](https://github.com/biokraft/bbcloud/pull/80))
+- *(skills)* correct the claims that contradict the code ([#79](https://github.com/biokraft/bbcloud/pull/79))
+
+### Fixed
+
+- the agent-first stack completed — the bugs, refactors and skills the merged PRs still needed ([#78](https://github.com/biokraft/bbcloud/pull/78))
+
 ## [0.23.0](https://github.com/biokraft/bbcloud/compare/v0.22.0...v0.23.0) - 2026-09-25
 
 ### Added
