@@ -328,12 +328,13 @@ mod tests {
 
         type Items = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
+        #[derive(Default)]
         pub struct Builder {
             pub items: Items,
             pub refuse_writes_for: Option<&'static str>,
         }
 
-        struct Item {
+        pub struct Item {
             items: Items,
             key: String,
             refuse_writes: bool,
@@ -398,6 +399,20 @@ mod tests {
         for var in ["BB_EMAIL", "BB_TOKEN", "BB_KEYRING_DISABLE"] {
             std::env::remove_var(var);
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    #[serial]
+    fn unit_tests_never_reach_a_real_keyring() {
+        use keyring::credential::CredentialBuilderApi;
+
+        memory_keyring::install(None);
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).unwrap();
+        assert!(entry.get_credential().is::<memory_keyring::Item>());
+
+        let builder = memory_keyring::Builder::default();
+        assert!(builder.as_any().is::<memory_keyring::Builder>());
     }
 
     #[cfg(not(target_os = "macos"))]
