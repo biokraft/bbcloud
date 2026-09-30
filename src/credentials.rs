@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 const KEYRING_SERVICE: &str = "bb-cli";
 const KEYRING_USER: &str = "bitbucket-api-token";
+const KEYRING_EMAIL_USER: &str = "bitbucket-email";
 
 /// Email plus API token. `Debug` deliberately omits the token.
 #[derive(Clone)]
@@ -57,12 +58,89 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-pub fn keyring_entry() -> Option<keyring::Entry> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()
+/// macOS goes through `/usr/bin/security` rather than the Security framework,
+/// the way `gh` does. The keychain grants silent access to the app that created
+/// an item, identified by its code signature; an ad-hoc signed `bb` gets a new
+/// identity with every release, so each upgrade prompted for the login password.
+/// Apple's signed `security` binary keeps its identity across `bb` upgrades.
+#[cfg(target_os = "macos")]
+mod store {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    const SECURITY: &str = "/usr/bin/security";
+
+    pub fn get(service: &str, account: &str) -> Option<String> {
+        let out = Command::new(SECURITY)
+            .args(["find-generic-password", "-s", service, "-a", account, "-w"])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let value = String::from_utf8(out.stdout).ok()?;
+        Some(value.trim_end_matches('\n').to_string())
+    }
+
+    /// The secret travels hex-encoded over stdin, never in argv, so it stays out
+    /// of `ps` and needs no quoting.
+    pub fn set(service: &str, account: &str, secret: &str) -> Result<(), String> {
+        let mut child = Command::new(SECURITY)
+            .arg("-i")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        child
+            .stdin
+            .take()
+            .ok_or("security has no stdin")?
+            .write_all(add_command(service, account, secret).as_bytes())
+            .map_err(|e| e.to_string())?;
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    }
+
+    pub fn delete(service: &str, account: &str) {
+        let _ = Command::new(SECURITY)
+            .args(["delete-generic-password", "-s", service, "-a", account])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    pub fn add_command(service: &str, account: &str, secret: &str) -> String {
+        let hex: String = secret.bytes().map(|b| format!("{b:02x}")).collect();
+        format!("add-generic-password -U -s {service} -a {account} -X {hex}\n")
+    }
 }
 
-fn keyring_email_entry() -> Option<keyring::Entry> {
-    keyring::Entry::new(KEYRING_SERVICE, "bitbucket-email").ok()
+#[cfg(not(target_os = "macos"))]
+mod store {
+    pub fn get(service: &str, account: &str) -> Option<String> {
+        keyring::Entry::new(service, account)
+            .ok()?
+            .get_password()
+            .ok()
+    }
+
+    pub fn set(service: &str, account: &str, secret: &str) -> Result<(), String> {
+        keyring::Entry::new(service, account)
+            .and_then(|e| e.set_password(secret))
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn delete(service: &str, account: &str) {
+        if let Ok(entry) = keyring::Entry::new(service, account) {
+            let _ = entry.delete_credential();
+        }
+    }
 }
 
 pub fn load() -> Result<Credentials> {
@@ -83,8 +161,8 @@ pub fn load() -> Result<Credentials> {
         return Err(BbError::Auth);
     }
 
-    let token = keyring_entry().and_then(|e| e.get_password().ok());
-    let email = keyring_email_entry().and_then(|e| e.get_password().ok());
+    let token = store::get(KEYRING_SERVICE, KEYRING_USER);
+    let email = store::get(KEYRING_SERVICE, KEYRING_EMAIL_USER);
     match (email, token) {
         (Some(email), Some(token)) => Ok(Credentials {
             email,
@@ -99,15 +177,9 @@ pub fn store(email: &str, token: &SecretString) -> Result<()> {
         return Ok(());
     }
 
-    let token_entry =
-        keyring_entry().ok_or_else(|| BbError::Config("cannot open os keyring".into()))?;
-    let email_entry =
-        keyring_email_entry().ok_or_else(|| BbError::Config("cannot open os keyring".into()))?;
-    token_entry
-        .set_password(token.expose_secret())
+    store::set(KEYRING_SERVICE, KEYRING_USER, token.expose_secret())
         .map_err(|e| BbError::Config(format!("cannot write token to keyring: {e}")))?;
-    email_entry
-        .set_password(email)
+    store::set(KEYRING_SERVICE, KEYRING_EMAIL_USER, email)
         .map_err(|e| BbError::Config(format!("cannot write email to keyring: {e}")))?;
     Ok(())
 }
@@ -117,13 +189,9 @@ pub fn delete() -> Result<()> {
         return Ok(());
     }
 
-    for entry in [keyring_entry(), keyring_email_entry()]
-        .into_iter()
-        .flatten()
-    {
-        // A missing entry is not an error for `logout`.
-        let _ = entry.delete_credential();
-    }
+    // A missing entry is not an error for `logout`.
+    store::delete(KEYRING_SERVICE, KEYRING_USER);
+    store::delete(KEYRING_SERVICE, KEYRING_EMAIL_USER);
     Ok(())
 }
 
@@ -212,9 +280,9 @@ mod tests {
         // provide a public API to retrieve or restore the previous builder, so this
         // mutation persists for the entire remainder of the test binary.
         //
-        // Any future test that exercises the real keyring path (i.e., one that calls
-        // `keyring_entry()` or `keyring_email_entry()` when BB_KEYRING_DISABLE is unset)
-        // will panic if it runs after this test. To avoid this:
+        // Any future test that exercises the real keyring path (i.e., one that reaches
+        // `store` when BB_KEYRING_DISABLE is unset) will panic if it runs after this
+        // test. To avoid this:
         //
         // 1. Ensure any test needing real keyring access runs BEFORE this test, OR
         // 2. Ensure such tests account for the panicking builder being installed, OR
@@ -248,6 +316,28 @@ mod tests {
         std::env::remove_var("BB_KEYRING_DISABLE");
 
         assert!(result.is_ok(), "store() should still report success");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_security_command_never_carries_the_plaintext_secret() {
+        let line = store::add_command("bb-cli", "bitbucket-api-token", "ATATT_s3cr3t");
+        assert!(!line.contains("ATATT_s3cr3t"), "{line}");
+        assert!(line.ends_with(" -X 41544154545f733363723374\n"), "{line}");
+    }
+
+    /// Touches the real login keychain, so it runs only on request:
+    /// `cargo test --lib credentials -- --ignored`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn the_macos_keychain_round_trips_through_security() {
+        let service = format!("bb-cli-test-{}", std::process::id());
+        store::set(&service, "acct", "first=value_1").unwrap();
+        store::set(&service, "acct", "second").unwrap();
+        assert_eq!(store::get(&service, "acct").as_deref(), Some("second"));
+        store::delete(&service, "acct");
+        assert_eq!(store::get(&service, "acct"), None);
     }
 
     #[test]
