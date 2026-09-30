@@ -613,6 +613,18 @@ fn uninstall_with_nothing_tracked_suggests_nothing() {
 }
 
 #[test]
+fn a_global_uninstall_with_nothing_tracked_suggests_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    bb_in(dir.path())
+        .args(["skill", "uninstall", "--global"])
+        .assert()
+        .success()
+        .stdout(contains("nothing to uninstall"))
+        .stderr(contains("--global").not());
+}
+
+#[test]
 fn the_brief_skill_states_it_is_invoked_only_on_request() {
     let text = bb_cli::skill::skill_by_name("bbc-daily-brief")
         .unwrap()

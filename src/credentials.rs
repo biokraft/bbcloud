@@ -318,6 +318,139 @@ mod tests {
         assert!(result.is_ok(), "store() should still report success");
     }
 
+    /// An in-memory keyring, so the non-macOS store is exercised without a
+    /// secret-service daemon and without touching the developer's own keyring.
+    #[cfg(not(target_os = "macos"))]
+    mod memory_keyring {
+        use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        type Items = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+
+        #[derive(Default)]
+        pub struct Builder {
+            pub items: Items,
+            pub refuse_writes_for: Option<&'static str>,
+        }
+
+        pub struct Item {
+            items: Items,
+            key: String,
+            refuse_writes: bool,
+        }
+
+        impl CredentialApi for Item {
+            fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+                if self.refuse_writes {
+                    return Err(keyring::Error::PlatformFailure("locked".into()));
+                }
+                self.items
+                    .lock()
+                    .unwrap()
+                    .insert(self.key.clone(), secret.to_vec());
+                Ok(())
+            }
+
+            fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+                let items = self.items.lock().unwrap();
+                items.get(&self.key).cloned().ok_or(keyring::Error::NoEntry)
+            }
+
+            fn delete_credential(&self) -> keyring::Result<()> {
+                let removed = self.items.lock().unwrap().remove(&self.key);
+                removed.map(drop).ok_or(keyring::Error::NoEntry)
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        impl CredentialBuilderApi for Builder {
+            fn build(
+                &self,
+                _target: Option<&str>,
+                service: &str,
+                user: &str,
+            ) -> keyring::Result<Box<Credential>> {
+                Ok(Box::new(Item {
+                    items: Arc::clone(&self.items),
+                    key: format!("{service}/{user}"),
+                    refuse_writes: self.refuse_writes_for == Some(user),
+                }))
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        pub fn install(refuse_writes_for: Option<&'static str>) {
+            keyring::set_default_credential_builder(Box::new(Builder {
+                items: Items::default(),
+                refuse_writes_for,
+            }));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn clear_credential_env() {
+        for var in ["BB_EMAIL", "BB_TOKEN", "BB_KEYRING_DISABLE"] {
+            std::env::remove_var(var);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    #[serial]
+    fn unit_tests_never_reach_a_real_keyring() {
+        use keyring::credential::CredentialBuilderApi;
+
+        memory_keyring::install(None);
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).unwrap();
+        assert!(entry.get_credential().is::<memory_keyring::Item>());
+
+        let builder = memory_keyring::Builder::default();
+        assert!(builder.as_any().is::<memory_keyring::Builder>());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    #[serial]
+    fn credentials_round_trip_through_the_keyring() {
+        memory_keyring::install(None);
+        clear_credential_env();
+
+        assert!(matches!(load(), Err(BbError::Auth)));
+        store("dev@example.com", &SecretString::from("s3cr3t")).unwrap();
+        let creds = load().unwrap();
+        assert_eq!(creds.email, "dev@example.com");
+        assert_eq!(creds.token.expose_secret(), "s3cr3t");
+
+        delete().unwrap();
+        assert!(matches!(load(), Err(BbError::Auth)));
+        delete().unwrap();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    #[serial]
+    fn a_refused_keyring_write_names_what_was_not_stored() {
+        clear_credential_env();
+        for (account, what) in [(KEYRING_USER, "token"), (KEYRING_EMAIL_USER, "email")] {
+            memory_keyring::install(Some(account));
+            let err = store("dev@example.com", &SecretString::from("s3cr3t"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&format!("cannot write {what} to keyring")),
+                "{err}"
+            );
+            assert!(err.contains("locked"), "{err}");
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn the_security_command_never_carries_the_plaintext_secret() {
