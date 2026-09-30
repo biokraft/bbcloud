@@ -121,6 +121,19 @@ fn verification_hint(err: &BbError) -> Option<&'static str> {
     }
 }
 
+/// Ctrl+C or Esc lands before anything is sent, so it must not read like a
+/// rejected credential; inquire's own wording for it did.
+fn prompt_error(prompt: &str, err: inquire::InquireError) -> BbError {
+    match err {
+        inquire::InquireError::OperationInterrupted | inquire::InquireError::OperationCanceled => {
+            BbError::Config(format!(
+                "login cancelled at the {prompt} prompt — no token was checked"
+            ))
+        }
+        other => BbError::Config(format!("the {prompt} prompt failed: {other}")),
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuthStatus {
     pub email: String,
@@ -173,7 +186,7 @@ pub async fn login(email: Option<String>, token_stdin: bool, format: Format) -> 
         Some(value) => value,
         None => inquire::Text::new("atlassian account email:")
             .prompt()
-            .map_err(|e| BbError::Config(format!("cancelled: {e}")))?,
+            .map_err(|e| prompt_error("email", e))?,
     };
 
     let token = if token_stdin {
@@ -186,7 +199,7 @@ pub async fn login(email: Option<String>, token_stdin: bool, format: Format) -> 
             .with_display_mode(inquire::PasswordDisplayMode::Masked)
             .without_confirmation()
             .prompt()
-            .map_err(|e| BbError::Config(format!("cancelled: {e}")))?;
+            .map_err(|e| prompt_error("api token", e))?;
         SecretString::from(entered)
     };
 
@@ -276,4 +289,31 @@ pub fn logout(format: Format) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inquire::InquireError;
+
+    #[test]
+    fn a_cancelled_prompt_does_not_read_as_a_rejected_token() {
+        for err in [
+            InquireError::OperationInterrupted,
+            InquireError::OperationCanceled,
+        ] {
+            let msg = prompt_error("api token", err).to_string();
+            assert!(msg.contains("at the api token prompt"), "{msg}");
+            assert!(msg.contains("no token was checked"), "{msg}");
+            assert!(!msg.contains("interrupted by the user"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_terminal_fault_keeps_its_cause() {
+        let err = InquireError::IO(std::io::Error::other("device not a tty"));
+        let msg = prompt_error("email", err).to_string();
+        assert!(msg.contains("email prompt failed"), "{msg}");
+        assert!(msg.contains("device not a tty"), "{msg}");
+    }
 }
