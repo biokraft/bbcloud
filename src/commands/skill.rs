@@ -261,7 +261,19 @@ pub fn uninstall(
         }
         Format::Human => {
             if results.is_empty() {
-                output::info("nothing to uninstall");
+                match if global {
+                    0
+                } else {
+                    only_global(&root, &skills)
+                } {
+                    0 => output::info("nothing to uninstall"),
+                    n => output::warn(&format!(
+                        "nothing to uninstall under {} — pass --global to reach {n} tracked \
+                         skill file{} under your home directory",
+                        root.display(),
+                        if n == 1 { "" } else { "s" },
+                    )),
+                }
             }
             for (path, _skill, outcome) in &results {
                 match outcome {
@@ -289,6 +301,18 @@ pub fn uninstall(
         }
     }
     Ok(())
+}
+
+/// Tracked files of `skills` that `uninstall --global` would reach but an
+/// uninstall rooted at `root` does not.
+fn only_global(root: &std::path::Path, skills: &[&skill::Skill]) -> usize {
+    let Ok(home) = home_dir() else { return 0 };
+    skill::load_state()
+        .0
+        .iter()
+        .filter(|e| e.path.starts_with(&home) && !e.path.starts_with(root))
+        .filter(|e| skills.iter().any(|s| s.name == e.skill))
+        .count()
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {
