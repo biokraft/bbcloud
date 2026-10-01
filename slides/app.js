@@ -7,8 +7,6 @@
   const progressBar = document.querySelector("#progress-bar");
   const dotsContainer = document.querySelector("#slide-dots");
   const toast = document.querySelector("#toast");
-  const notesDrawer = document.querySelector("#notes-drawer");
-  const notesContent = document.querySelector("#notes-content");
   const backupPanel = document.querySelector("#backup-panel");
   const helpOverlay = document.querySelector("#help-overlay");
   const fullscreenButton = document.querySelector("#fullscreen-button");
@@ -81,11 +79,6 @@
     return clamp(Number(match[1]) - 1, 0, slides.length - 1);
   };
 
-  const getNotes = (slide) => {
-    const notes = slide.querySelector(".speaker-notes");
-    return notes ? notes.textContent.trim() : "No speaker notes for this slide.";
-  };
-
   const showToast = (message) => {
     if (!toast) {
       return;
@@ -94,13 +87,6 @@
     toast.textContent = message;
     toast.classList.add("is-visible");
     toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 1800);
-  };
-
-  const updateNotes = (index) => {
-    if (!notesContent) {
-      return;
-    }
-    notesContent.textContent = getNotes(slides[index]);
   };
 
   const updateChrome = (index) => {
@@ -135,7 +121,6 @@
       dot.setAttribute("aria-current", isActive ? "true" : "false");
     });
 
-    updateNotes(current);
     document.title = `${displayIndex} · bb — Bitbucket Cloud CLI`;
   };
 
@@ -268,9 +253,6 @@
   };
 
   const closeUtilities = () => {
-    if (notesDrawer) {
-      notesDrawer.hidden = true;
-    }
     if (backupPanel) {
       backupPanel.hidden = true;
     }
@@ -326,11 +308,6 @@
       case "T":
         event.preventDefault();
         themeButton?.click();
-        break;
-      case "n":
-      case "N":
-        event.preventDefault();
-        toggleUtility(notesDrawer);
         break;
       case "b":
       case "B":
