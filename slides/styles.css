@@ -1264,11 +1264,9 @@ kbd { padding: 0.15rem 0.45rem; border: 1px solid var(--line-2); border-radius: 
 
 .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
 
-.handout { display: none; }
-
 .noscript-message { position: fixed; right: 1rem; bottom: 1rem; left: 1rem; z-index: 70; padding: 1rem; border-radius: 0.6rem; background: var(--panel); }
 
-/* ---------- handout: phones & portrait ---------- */
+/* ---------- reading mode: phones & portrait ---------- */
 
 @media screen and (max-width: 760px), screen and (orientation: portrait) and (max-width: 1100px) {
   body { overflow: auto; }
@@ -1326,19 +1324,6 @@ kbd { padding: 0.15rem 0.45rem; border: 1px solid var(--line-2); border-radius: 
   .close-links { width: 100%; }
 
   .foot { position: static; flex-wrap: wrap; gap: 0.4em 1em; margin-top: 1.4em; }
-
-  .handout {
-    display: block;
-    margin-top: 1.2em;
-    padding: 1em 1.1em;
-    border-left: 3px solid var(--accent);
-    border-radius: 0 0.6em 0.6em 0;
-    background: var(--panel);
-    color: var(--muted);
-    font-size: 0.95em;
-  }
-
-  .handout strong { color: var(--ink); }
 
   .deck-nav, #fullscreen-button, #help-button, .slide-counter { display: none; }
 

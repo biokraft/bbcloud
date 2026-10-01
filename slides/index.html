@@ -62,7 +62,6 @@
             <span>4 agent skills in the box</span>
             <span>github.com/biokraft/bbcloud</span>
           </div>
-          <p class="handout">This deck follows one real pull request from a mid-sized product team through a review round. The team, the people, the ticket keys, the pull request numbers and the file paths are anonymised; the counts are not. It shows how <code>bb</code> — an open-source Bitbucket Cloud CLI by Seán Baufeld — lets developers, tech leads, product managers and coding agents skip most trips to Bitbucket and Jira in the browser. The two clicks that stay there are approve and merge.</p>
         </div>
       </section>
 
@@ -81,7 +80,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 8">None of these numbers is a problem. Each of them is <strong>a lot of trips to a web page.</strong></p>
           <footer class="foot"><span>one real team, anonymised · read-only git + bb · september 2026</span><span>02</span></footer>
-          <p class="handout">One mid-sized product team, one repository, the last 90 days: 27 people committed; 1,042 pull requests were merged (about 80 a week); 1,016 Jira tickets appear in commit messages; 71 pull requests were open on the day, 12 of them stacked on another feature branch; open pull requests tag 10.4 reviewers on average, and 52 of the 71 tag exactly eleven; 166 merge commits mention a conflict. The numbers aren't a problem. The browser trips behind them are.</p>
         </div>
       </section>
 
@@ -130,7 +128,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 10">Each trip costs <strong>the context that came with it</strong>. And a coding agent has no tab at all — whatever lives only in a browser, it cannot help with.</p>
           <footer class="foot"><span>pr #2187, anonymised · the tab labels on the right are a dramatisation</span><span>03</span></footer>
-          <p class="handout">One real pull request, here #2187 for ticket WEB-2203, and the places its lifecycle sends the work: Jira for the ticket, Bitbucket for the pull request, eleven default reviewers, CI (the branch reached run #71), 57 review threads across 35 files read file by file, 57 resolve clicks, a merge-conflict request that bounces you to the IDE and back, and Jira again to tell the PM. None of these trips is a decision. They are all fetches — and a coding agent cannot make them in a browser.</p>
         </div>
       </section>
 
@@ -164,7 +161,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 6">The review was <strong>good</strong>. Every comment was fair. The problem is the shape: the browser shows 57 threads one at a time, in file order.</p>
           <footer class="foot"><span>bb pr view 2187 --json · a statistics dashboard · real thread layout, anonymised</span><span>04</span></footer>
-          <p class="handout">PR #2187 (a statistics dashboard): 57 inline threads across 35 files, from three reviewers over three days, plus a general "Please resolve merge conflicts". Eleven reviewers were tagged by default and three commented. The review itself was good; the difficulty is that Bitbucket presents 57 threads one at a time, in file order. The thread layout on screen is the real one.</p>
         </div>
       </section>
 
@@ -192,7 +188,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 4"><strong>33 of 57 are mechanical</strong> — eight commits' worth. 20 are real design questions, and those deserve a human answer, not a bulk fix.</p>
           <footer class="foot"><span>a commit touches many threads · the page resolves one thread at a time</span><span>05</span></footer>
-          <p class="handout">Clustered by theme, the 57 threads collapse: ten ask for a constants file (in ten different files), seven for spelled-out names, four for one component per file, three for <code>#[MapRequestPayload]</code>, and so on. 33 are mechanical — about eight commits. The other 20 are genuine design questions. One commit can close ten threads in ten files, but the web page resolves one at a time by hand, and relies on memory to track the rest.</p>
         </div>
       </section>
 
@@ -241,7 +236,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 6">The common thread: <strong>fewer trips to Bitbucket and Jira in the browser</strong>, for people and for agents alike.</p>
           <footer class="foot"><span>why first · what it can do next · how it works last</span><span>06</span></footer>
-          <p class="handout">What each role gets. Director IT and CTO: more throughput with no licence, no server and no procurement, using the coding agents and the Atlassian MCP a team already has, and review knowledge that compounds. Tech leads: reviewers chosen from file history, merge readiness in one call, and review rounds that become checklists. Product managers: ticket replies written for them first, status answered from Jira and Bitbucket together, and updates that edit rather than pile up. Developers: they stay in the editor.</p>
         </div>
       </section>
 
@@ -287,7 +281,6 @@
             </div>
           </div>
           <footer class="foot"><span>github.com/biokraft/bbcloud · atlassian ships no official bitbucket cloud cli</span><span>07</span></footer>
-          <p class="handout">GitHub ships <code>gh</code> and GitLab ships <code>glab</code>; Atlassian ships no official Bitbucket Cloud CLI. <code>bb</code> fills that gap: written by <strong>Seán Baufeld</strong>, MIT-licensed, at <code>github.com/biokraft/bbcloud</code>, as an independent Rust rewrite of the PHP <code>bb-cli</code>. It is one Rust binary, <code>--json</code> everywhere, with four releases in September 2026. Reviewer suggestions from file history, selective review context for agents, the agent skills and the macOS keychain fix came after it, from contributors.</p>
         </div>
       </section>
 
@@ -333,7 +326,6 @@
             </div>
           </div>
           <footer class="foot"><span>anonymised from a real pr list · the real table also shows author and reviewer names</span><span>08</span></footer>
-          <p class="handout">Setup is three commands, once per machine: <code>brew install biokraft/tap/bb</code>, <code>bb auth login</code> (verifies the Atlassian API token before storing it in the keychain) and <code>bb skill install --global</code>. There is no config file: the repository comes from the git remote. The terminal shows open pull requests with their build rollup, including two stacked on other feature branches — anonymised from a real list.</p>
         </div>
       </section>
 
@@ -398,7 +390,6 @@
             </article>
           </div>
           <footer class="foot"><span>amber = jira via the atlassian mcp · blue = bitbucket via bb · green = the project gates</span><span>09</span></footer>
-          <p class="handout">One sentence to the agent — "pick up WEB-3497, fix it, run our gates, open the PR" — and six steps follow: the Atlassian MCP reads the ticket; a branch is cut in the team's naming convention (a commit hook prefixes the key on every commit); the fix and a failing-first test are written; the team's own gates run; the <code>pr-description</code> skill drafts the description and shows it before <code>bb pr create</code>; and reviewers are suggested from file history. A real pull request went exactly this way; it appears here as #3396.</p>
         </div>
       </section>
 
@@ -438,7 +429,6 @@
             </div>
           </div>
           <footer class="foot"><span>bb's gates from its readme · the app gates are a typical example</span><span>10</span></footer>
-          <p class="handout">The quality gates are the team's own, written down in <code>AGENTS.md</code>. <code>bb</code>'s own repository requires <code>cargo fmt --check</code>, <code>cargo clippy -D warnings</code> and <code>cargo test</code>; a typical PHP and React app lists static analysis, code style, unit and integration tests, and the frontend's lint, typecheck and tests. The agent runs those; CI reports to Bitbucket, and <code>bb</code> reads it. The test counts go into the commit message, where the reviewer reads them.</p>
         </div>
       </section>
 
@@ -480,7 +470,6 @@
             </div>
           </div>
           <footer class="foot"><span>a real description, lightly trimmed and anonymised · the skill is optional, MIT</span><span>11</span></footer>
-          <p class="handout">A real pull request description, lightly trimmed and anonymised, written with the <code>pr-description</code> skill: a TL;DR that states the bug and the fix, and a "what to look at" list that tells the reviewer which file carries the fix, which type change makes the guards compiler-enforced, and which spec to ignore because it passes even with the fix reverted. <code>bb pr edit --description-stdin</code> replaces the description, so re-running after a review round keeps it true.</p>
         </div>
       </section>
 
@@ -520,7 +509,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 8">The default list is a broadcast. <strong>File history is an invitation</strong> to the people who know the code.</p>
           <footer class="foot"><span>bb pr list --json · bb pr reviewers suggest · real counts, "dana" stands in for a real colleague</span><span>12</span></footer>
-          <p class="handout">Across the team's 71 open pull requests there were 740 reviewer slots: 693 pending, 42 approved, 5 changes requested; 52 PRs tagged exactly the eleven default reviewers. <code>bb pr reviewers suggest</code> reads the history of the touched files instead: for the bridge fix it names one person with three commits on three of the six files. It never tags anyone, and when it cannot know — the 57-thread PR is mostly new files — it says <code>history_complete: false</code> and suggests nobody.</p>
         </div>
       </section>
 
@@ -550,7 +538,6 @@
           </div>
           <p class="rule fill-a r" style="--i: 3">Every reply names its commit. Then the agent <strong>lists the threads it believes are addressed</strong>, and resolving stays a human decision.</p>
           <footer class="foot"><span>bb pr view 2187 --unresolved --json · bb pr comment --reply-to · bb pr resolve</span><span>13</span></footer>
-          <p class="handout">Replaying the 57-thread PR with an agent: it reads every open thread with <code>bb pr view --unresolved --json</code>, groups them by theme, makes one commit per mechanical theme (33 threads in 8 commits), replies on each thread naming the commit with <code>bb pr comment --reply-to</code>, answers the 20 design questions in-thread for review, and skips the 4 deleted ones. It then lists the threads it believes are addressed; you choose which to resolve, and <code>bb pr resolve</code> does the clicking. The memory game becomes a checklist.</p>
         </div>
       </section>
 
@@ -593,7 +580,6 @@ Repointed at the new base layout.
             </div>
           </div>
           <footer class="foot"><span>a real merge commit, anonymised and lightly trimmed · the default message just says "# conflicts:"</span><span>14</span></footer>
-          <p class="handout">"Resolve all merge conflicts" plus a pull request link: <code>bb pr view --conflicts</code> gives the source, target and files; plain git fetches, merges and resolves using both branches' intent; the team's gates run; and the commit message explains each decision. In the real merge commit shown (names changed), git reported a <strong>clean</strong> add of a template that pointed at a directory the branch deletes — it would have returned a 500 on first render. The agent caught it, repointed it, and recorded the test results.</p>
         </div>
       </section>
 
@@ -634,7 +620,6 @@ Repointed at the new base layout.
             </div>
           </div>
           <footer class="foot"><span>illustrative · drafted from the bridge-fix pr · the skill matches the diff, not the journey</span><span>15</span></footer>
-          <p class="handout">The <code>jira-ticket-reply</code> skill writes the ticket comment for two readers: first a product manager (a standalone first line, then how to test), then a tech lead (what moved in the code). The PM can stop at the fold. When feedback comes back, the same prompt names whether it will edit the earlier comment or append a new one, and it is posted through the Atlassian MCP only after it has been reviewed. The sample is illustrative, drafted from the bridge-fix pull request.</p>
         </div>
       </section>
 
@@ -654,7 +639,6 @@ Repointed at the new base layout.
           </ul>
           <p class="rule fill-a r" style="--i: 9">That is what makes a sentence reusable: <strong>"update the description and the ticket"</strong> is safe to say after every round.</p>
           <footer class="foot"><span>behaviour as documented in the bitbucket-cloud skill and bb --help, v0.24.1</span><span>16</span></footer>
-          <p class="handout">Most steps are safe to repeat. <code>bb pr edit --description-stdin</code> replaces; the ticket-reply skill names edit or append; <code>bb pr reviewers add</code> resolves all names before writing and is a no-op for someone already tagged; resolving an already-resolved thread is a 409 with nothing to do; <code>bb pr retarget</code> keeps comments and reviewers; a conflict run on an up-to-date branch finds nothing; <code>bb skill install</code> refreshes without overwriting local edits.</p>
         </div>
       </section>
 
@@ -698,7 +682,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 6">44 pending reviews is not a to-do list — it is the eleven-person default, <strong>talking</strong>. The brief ranks what actually needs action.</p>
           <footer class="foot"><span>illustrative brief · the skill runs only on request</span><span>17</span></footer>
-          <p class="handout">The <code>bbc-daily-brief</code> skill ranks what needs you — failed builds and change requests first, then what waits on others — from <code>bb pr mine</code> and <code>bb pr list</code>. It runs only when asked and states how much it scanned. For one pull request, <code>bb pr view --build --conflicts --unresolved</code> answers "is it ready to merge" in a single call. The 44 pending reviews are what a default reviewer list of eleven produces.</p>
         </div>
       </section>
 
@@ -743,7 +726,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 6">None of these needs a dashboard. <strong>Each one is a question</strong>, answered from the source, in a sentence.</p>
           <footer class="foot"><span>every line maps to a bb command that exists in v0.24.1 · the prompts are plain language</span><span>18</span></footer>
-          <p class="handout">More prompts, by role. Developers: why CI is red, retargeting a stacked PR once its parent merges, reviewing a colleague's PR against the team's conventions and keeping comments pending. Tech leads: merge readiness, reviewers for a branch before opening it, a convention pre-review. Product managers: ticket status, what shipped last week, a ticket reply. Director and CTO: longest-waiting PRs, how much work is stacked, what reviewers repeat most. Each maps to a <code>bb</code> command.</p>
         </div>
       </section>
 
@@ -787,7 +769,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 6">The ticket supplies <strong>intent</strong>. The diff supplies <strong>fact</strong>. The project's gates supply <strong>proof</strong>. Nobody is asked to guess what the others said.</p>
           <footer class="foot"><span>every box except bb is probably already installed</span><span>19</span></footer>
-          <p class="handout">How it fits together: you ask in plain language; the coding agent reads the skills plus the repository's <code>AGENTS.md</code> and rules; the Atlassian MCP owns Jira (the ticket and the reply), <code>bb</code> owns Bitbucket (pull requests, threads, builds, conflicts, file history), and local git plus the team's own tooling own the merge and the gates. CI reports builds back to Bitbucket. The only new piece is the <code>bb</code> binary.</p>
         </div>
       </section>
 
@@ -830,7 +811,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 5">Review feedback that becomes a skill <strong>stops being review feedback</strong>. That is the part that compounds.</p>
           <footer class="foot"><span>portable SKILL.md · read by cursor, claude code, codex and opencode</span><span>20</span></footer>
-          <p class="handout">Three layers of skills. Four ship inside <code>bb</code>: <code>bitbucket-cloud</code>, <code>bbc-open-pr</code>, <code>bbc-daily-brief</code>, <code>bbc-report-bug</code>. Two optional writing skills pair with bb and the Atlassian MCP: <code>pr-description</code> and <code>jira-ticket-reply</code>. And the third layer is the team's own: <code>AGENTS.md</code>, per-area rules, and a review skill that captures recurring feedback — like the abbreviations and constants files flagged on the 57-thread PR. Feedback captured as a skill doesn't need repeating.</p>
         </div>
       </section>
 
@@ -867,7 +847,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 8">No new service to review. <strong>A CLI, a token that already exists, and one host it talks to.</strong></p>
           <footer class="foot"><span>from bb --help and the project readme · every rule has a test that fails the build</span><span>21</span></footer>
-          <p class="handout">Under the hood: a strict JSON contract and documented exit codes; the Atlassian API token lives only in the OS keychain and is never printed; four scopes cover the pull-request workflow; no shell invocation, no OpenSSL, no unsafe code, same-origin redirects only; one host, <code>api.bitbucket.org</code>. It is MIT-licensed, needs no server and no seats, and uses the same token you would use in the browser.</p>
         </div>
       </section>
 
@@ -887,7 +866,6 @@ Repointed at the new base layout.
           </ul>
           <p class="rule fill-a r" style="--i: 9">Not every question has an answer yet. <strong>What ships is honest about the ones it doesn't.</strong></p>
           <footer class="foot"><span>a tool that claims no gaps has not been used</span><span>22</span></footer>
-          <p class="handout">The limits, plainly: no approve, merge or decline; it acts with the account's token, so an agent inherits its permissions — confirmation prompts help people but are not a security boundary; CI logs aren't included, only status and URL; reviewer suggestions scan 25 files by default and report incomplete history; <code>pr mine</code> samples 30 recent repositories per workspace; no Windows. And no time savings have been measured — every number here is a count.</p>
         </div>
       </section>
 
@@ -921,7 +899,6 @@ Repointed at the new base layout.
           </div>
           <p class="rule fill-a r" style="--i: 4">Same team. Same reviewers. Same standards. <strong>Less memory game.</strong></p>
           <footer class="foot"><span>the hero was never the tool · it is the team getting its evenings back</span><span>23</span></footer>
-          <p class="handout">The next pull request like the 57-thread one: the 33 mechanical review points are caught by the team's review skill before any reviewer looks; the 20 design questions get full attention; conflicts are resolved from a link with the gates green and the reasoning in the commit; reviewers are chosen from file history; and the PM gets a reply they can stop reading halfway. Same team, same standards, less memory game.</p>
         </div>
       </section>
 
@@ -957,7 +934,6 @@ bb skill install --global</p>
           </div>
           <p class="rule fill-a r" style="--i: 6">Every decision stays human. <strong>Most of the tabs do not.</strong> And the next flag worth adding is one nobody has guessed yet — open an issue.</p>
           <footer class="foot"><span>github.com/biokraft/bbcloud · issues and pull requests welcome · bbc-report-bug files one for you</span><span>24</span></footer>
-          <p class="handout">One ask per role. Developers: install (three commands) and try "resolve the merge conflicts on &lt;PR link&gt;". Tech leads: compare <code>bb pr reviewers suggest</code> with the default reviewer list on one PR. Product managers: ask for a ticket reply and check whether reading can stop at "How to test". Director and CTO: sponsor a four-week pilot with four volunteers, measuring review round-trips and time from a conflict request to green — and stop if nothing moves. Issues and pull requests are welcome at <code>github.com/biokraft/bbcloud</code>; the <code>bbc-report-bug</code> skill files one with private data redacted.</p>
         </div>
       </section>
 
@@ -983,7 +959,6 @@ bb skill install --global</p>
             <p class="credit"><strong>Seán Baufeld</strong> wrote <code>bb</code> and put it out under MIT — the reason anyone can <code style="font-family: var(--mono-font);">brew install</code> it. Reviewer suggestions from file history, selective review context, the agent skills and the macOS keychain fix came after, from contributors.</p>
           </div>
           <footer class="foot"><span>bb · bitbucket cloud cli · open source · MIT</span><span>25</span></footer>
-          <p class="handout">Read the ticket, fix it your way, answer every review thread, tell the PM — without living in a browser tab. <strong>bb is by Seán Baufeld</strong> (MIT, <code>github.com/biokraft/bbcloud</code>); reviewer suggestions, selective review context, the agent skills and the macOS keychain fix came from contributors. The <code>pr-description</code> and <code>jira-ticket-reply</code> skills are plain Markdown.</p>
         </div>
       </section>
     </main>
