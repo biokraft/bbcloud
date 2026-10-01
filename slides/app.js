@@ -55,6 +55,26 @@
   applyTheme(currentThemeMode(), false);
   systemLight.addEventListener("change", () => applyTheme(currentThemeMode(), false));
 
+  // Three references name the current release rather than a verified version, so
+  // they track it. The version baked into the markup is the fallback: every failure
+  // here is swallowed, because a deck that renders offline is worth more than a deck
+  // that is right about the latest tag.
+  const applyLatestVersion = (tag) => {
+    if (!tag) {
+      return;
+    }
+    document.querySelectorAll("[data-version-latest]").forEach((element) => {
+      element.textContent = element.textContent.replace(/\bv?\d+\.\d+\.\d+\b/, tag);
+    });
+  };
+
+  if (window.fetch) {
+    fetch("https://api.github.com/repos/biokraft/bbcloud/releases/latest")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((release) => applyLatestVersion(release?.tag_name))
+      .catch(() => {});
+  }
+
   if (!deck || slides.length === 0) {
     return;
   }

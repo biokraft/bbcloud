@@ -717,6 +717,9 @@ p { margin: 0; }
   font-family: var(--mono-font);
   font-size: 0.6em;
   line-height: 1.4;
+  /* The promo is a fixed-width box holding single unbreakable tokens like the
+     repository URL, which overflow the border in a monospace face. */
+  overflow-wrap: anywhere;
 }
 
 .promo b { color: var(--accent); font-size: 1.5em; letter-spacing: -0.02em; }
