@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d11" />
+    <meta name="description" content="bb — an open-source Bitbucket Cloud CLI: tickets to pull requests, review rounds, merge conflicts and ticket replies, from the terminal and from your coding agent." />
+    <title>bb — Bitbucket Cloud CLI</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <script>
+      (() => {
+        document.documentElement.classList.add("js");
+        try {
+          const savedTheme = localStorage.getItem("bbcloud-theme");
+          if (savedTheme === "light" || savedTheme === "dark") {
+            document.documentElement.dataset.theme = savedTheme;
+          }
+        } catch (_) {
+          // The presentation still works when storage is unavailable.
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar" aria-label="Presentation controls">
+      <a class="wordmark" href="#slide-1" aria-label="Go to first slide">
+        <span class="wordmark-mark" aria-hidden="true">b</span>
+        <span>bb · bitbucket cloud cli</span>
+      </a>
+      <div class="topbar-actions">
+        <span id="slide-counter" class="slide-counter" aria-live="polite">01 / 25</span>
+        <button id="theme-button" class="icon-button" type="button" aria-label="Switch to light mode" aria-pressed="false" title="Theme (T)">
+          <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 15.2A8.5 8.5 0 0 1 8.8 3.6 8.5 8.5 0 1 0 20.4 15.2Z" /></svg>
+          <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+        </button>
+        <button id="fullscreen-button" class="icon-button" type="button" aria-label="Toggle fullscreen" title="Fullscreen (F)"><span aria-hidden="true">⛶</span></button>
+        <button id="help-button" class="icon-button" type="button" aria-label="Show keyboard shortcuts" title="Shortcuts (?)">?</button>
+      </div>
+    </header>
+
+    <main id="deck" class="deck" tabindex="0" aria-label="bb, a Bitbucket Cloud CLI, presentation">
+
+      <!-- ================= ACT I · THE ORDINARY WORLD ================= -->
+
+      <!-- 1 · Title -->
+      <section class="slide" id="slide-1" data-title="Title" aria-labelledby="s1-title">
+        <div class="stage stage--title">
+          <div class="title-copy">
+            <div class="kicker r">bitbucket cloud · coding agents · open source</div>
+            <h1 id="s1-title" class="r" style="--i: 1; font-size: 3.05em;">57 review threads.<br />One merge conflict.<br /><span class="accent">Two clicks left<br />in the browser.</span></h1>
+            <p class="lede r" style="--i: 2">A story about one real pull request, and the open-source Bitbucket CLI that means most of Bitbucket and Jira stays out of the browser — for people, and for the coding agents already in use.</p>
+            <div class="byline r" style="--i: 3"><strong data-version-latest>bb v0.25.0</strong><span>MIT · open source</span><span>github.com/biokraft/bbcloud</span></div>
+          </div>
+          <div class="promo r" style="--i: 2" aria-hidden="true">
+            <b>bb</b>
+            <span>Bitbucket Cloud CLI</span>
+            <hr />
+            <span>MIT · one binary · no server</span>
+            <span data-version-latest>macOS + Linux · v0.25.0</span>
+            <hr />
+            <span>4 agent skills in the box</span>
+            <span>github.com/biokraft/bbcloud</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2 · Ordinary world -->
+      <section class="slide" id="slide-2" data-title="One team's numbers" aria-labelledby="s2-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act i</span>the ordinary world</div>
+          <h2 id="s2-title" class="r" style="--i: 1">One team, one repository, <span class="accent">the last 90 days.</span></h2>
+          <div class="stats fill-b">
+            <div class="stat r" style="--i: 2"><div class="stat-n" data-count="27">27</div><div class="stat-l"><strong>people committed</strong>. A mid-sized product team, nothing exotic.</div><div class="stat-s">git shortlog --since=90.days</div></div>
+            <div class="stat stat--accent r" style="--i: 3"><div class="stat-n" data-count="1042">1,042</div><div class="stat-l"><strong>pull requests merged</strong>. About 80 a week, into one repository.</div><div class="stat-s">"Merged in … (pull request #…)"</div></div>
+            <div class="stat r" style="--i: 4"><div class="stat-n" data-count="1016">1,016</div><div class="stat-l"><strong>Jira tickets</strong> named in commit messages. Every one has a PM waiting on a reply.</div><div class="stat-s">git log | grep -o '[A-Z]*-[0-9]*'</div></div>
+            <div class="stat r" style="--i: 5"><div class="stat-n" data-count="71">71</div><div class="stat-l"><strong>open pull requests</strong> on one day — 12 of them stacked on another feature branch.</div><div class="stat-s">bb pr list --json</div></div>
+            <div class="stat stat--rose r" style="--i: 6"><div class="stat-n" data-count="10.4" data-decimals="1">10.4</div><div class="stat-l"><strong>reviewers per open PR</strong>, on average. 52 of the 71 tag exactly eleven people.</div><div class="stat-s">bb pr list --json · reviewers[]</div></div>
+            <div class="stat r" style="--i: 7"><div class="stat-n" data-count="166">166</div><div class="stat-l"><strong>merge commits that mention a conflict</strong>, on top of 714 "merge develop into my branch" syncs.</div><div class="stat-s">git log --merges --grep=conflict</div></div>
+          </div>
+          <p class="rule fill-a r" style="--i: 8">None of these numbers is a problem. Each of them is <strong>a lot of trips to a web page.</strong></p>
+          <footer class="foot"><span>one real team, anonymised · read-only git + bb · september 2026</span><span>02</span></footer>
+        </div>
+      </section>
+
+      <!-- 3 · The tab tax -->
+      <section class="slide" id="slide-3" data-title="The tab tax" aria-labelledby="s3-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act i</span>the tab tax, measured on one PR</div>
+          <h2 id="s3-title" class="r" style="--i: 1">The work is judgement. <span class="accent">The trips are fetches.</span></h2>
+          <div class="split split--main fill-b">
+            <ul class="verbs">
+              <li class="r" style="--i: 2"><span>Read WEB-2203</span><code>Jira</code></li>
+              <li class="r" style="--i: 3"><span>Open the PR, write the description</span><code>Bitbucket</code></li>
+              <li class="r" style="--i: 4"><span>Default reviewers</span><code>11 people tagged</code></li>
+              <li class="r" style="--i: 5"><span>Wait for CI</span><code>CI · run #71 on this branch</code></li>
+              <li class="r" style="--i: 6"><span>Read 57 threads in 35 files</span><code>Bitbucket, file by file</code></li>
+              <li class="r" style="--i: 7"><span>Resolve each one</span><code>57 clicks, and a memory</code></li>
+              <li class="r" style="--i: 8"><span>"Please resolve merge conflicts"</span><code>Bitbucket → IDE → Bitbucket</code></li>
+              <li class="r" style="--i: 9"><span>Tell the PM it is done</span><code>Jira</code></li>
+            </ul>
+            <div class="tabs" aria-hidden="true">
+              <span class="tab tab--jira r" style="--i: 1"><b>●</b> WEB-2203</span>
+              <span class="tab r" style="--i: 2"><b>●</b> pull-requests/new</span>
+              <span class="tab r" style="--i: 3"><b>●</b> #2187 overview</span>
+              <span class="tab tab--ci r" style="--i: 4"><b>●</b> ci run #68</span>
+              <span class="tab r" style="--i: 5"><b>●</b> #2187 diff</span>
+              <span class="tab tab--ide r" style="--i: 6"><b>●</b> StatsController.php</span>
+              <span class="tab r" style="--i: 7"><b>●</b> thread 1 / 57</span>
+              <span class="tab tab--ide r" style="--i: 8"><b>●</b> SourceTag.jsx</span>
+              <span class="tab r" style="--i: 9"><b>●</b> thread 9 / 57</span>
+              <span class="tab tab--ci r" style="--i: 10"><b>●</b> ci run #69</span>
+              <span class="tab r" style="--i: 11"><b>●</b> thread 14 / 57</span>
+              <span class="tab tab--ide r" style="--i: 12"><b>●</b> StatsViewModel.php</span>
+              <span class="tab r" style="--i: 13"><b>●</b> wait, did I fix 9?</span>
+              <span class="tab r" style="--i: 14"><b>●</b> thread 23 / 57</span>
+              <span class="tab tab--ide r" style="--i: 15"><b>●</b> .constants.js</span>
+              <span class="tab r" style="--i: 16"><b>●</b> thread 31 / 57</span>
+              <span class="tab r" style="--i: 17"><b>●</b> merge conflicts</span>
+              <span class="tab tab--ide r" style="--i: 18"><b>●</b> git merge develop</span>
+              <span class="tab tab--ci r" style="--i: 19"><b>●</b> ci run #70</span>
+              <span class="tab r" style="--i: 20"><b>●</b> thread 44 / 57</span>
+              <span class="tab r" style="--i: 21"><b>●</b> resolve · resolve · resolve</span>
+              <span class="tab tab--ci r" style="--i: 22"><b>●</b> ci run #71</span>
+              <span class="tab tab--jira r" style="--i: 23"><b>●</b> WEB-2203 reply</span>
+              <span class="tab r" style="--i: 24"><b>●</b> which 3 are left?</span>
+            </div>
+          </div>
+          <p class="rule fill-a r" style="--i: 10">Each trip costs <strong>the context that came with it</strong>. And a coding agent has no tab at all — whatever lives only in a browser, it cannot help with.</p>
+          <footer class="foot"><span>pr #2187, anonymised · the tab labels on the right are a dramatisation</span><span>03</span></footer>
+        </div>
+      </section>
+
+      <!-- ================= ACT II · THE CALL ================= -->
+
+      <!-- 4 · A wild PR appears -->
+      <section class="slide" id="slide-4" data-title="PR #2187" aria-labelledby="s4-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act ii</span>the call to adventure</div>
+          <h2 id="s4-title" class="r" style="--i: 1">A wild <span class="accent">PR #2187</span> appears.</h2>
+          <div class="split split--main fill-b">
+            <div class="split-main" style="gap: 0.8em;">
+              <div class="hp r" style="--i: 2" data-total="57"><span>open threads</span><span class="hp-bar"><span class="hp-fill"></span></span><span class="hp-n">57</span></div>
+              <div class="thread-map r" style="--i: 2" data-mode="appear" role="img" aria-label="57 review threads spread across 35 files"></div>
+              <p class="card-foot" style="border: 0; padding: 0; margin-top: 0;">one dot per thread · one box per file · in the order Bitbucket lists them</p>
+            </div>
+            <div class="split-main">
+              <article class="card card--rose r" style="--i: 3">
+                <div class="card-label">the encounter</div>
+                <p><strong>57 threads in 35 files</strong>, from 3 reviewers, in 3 days. Four were later deleted by their authors.</p>
+              </article>
+              <article class="card r" style="--i: 4">
+                <div class="card-label">the side quest</div>
+                <p>One general comment: <strong>"Please resolve merge conflicts."</strong> The branch reached CI run <strong>#71</strong>.</p>
+              </article>
+              <article class="card r" style="--i: 5">
+                <div class="card-label">the party</div>
+                <p><strong>11 reviewers tagged</strong> by default. 3 of them commented. That is not a complaint about anyone — it is what defaults do.</p>
+              </article>
+            </div>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">The review was <strong>good</strong>. Every comment was fair. The problem is the shape: the browser shows 57 threads one at a time, in file order.</p>
+          <footer class="foot"><span>bb pr view 2187 --json · a statistics dashboard · real thread layout, anonymised</span><span>04</span></footer>
+        </div>
+      </section>
+
+      <!-- 5 · The memory game -->
+      <section class="slide" id="slide-5" data-title="The memory game" aria-labelledby="s5-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act ii</span>why the browser turns it into a memory game</div>
+          <h2 id="s5-title" class="r" style="--i: 1">One fix closes ten threads in ten files. <span class="accent">Now remember which.</span></h2>
+          <div class="split split--even fill-b">
+            <div class="split-main" style="gap: 0.8em;">
+              <div class="thread-map r" style="--i: 2" data-mode="themes" role="img" aria-label="The same 57 threads, coloured by the theme of the comment"></div>
+              <p class="card-foot" style="border: 0; padding: 0; margin-top: 0;">hover a theme to pin it · clustered by keyword, not by hand</p>
+            </div>
+            <ul class="tm-legend r" style="--i: 3">
+              <li data-theme="0"><span>Move it to a constants file</span><b>10 · 10 files</b></li>
+              <li data-theme="1"><span>No abbreviations — <code>cv</code>, <code>qty</code>, <code>Fqn</code></span><b>7 · 4 files</b></li>
+              <li data-theme="2"><span>One component per file</span><b>4 · 4 files</b></li>
+              <li data-theme="3"><span>Use <code>#[MapRequestPayload]</code></span><b>3 · 2 files</b></li>
+              <li data-theme="4"><span>Helper / DTO suffix</span><b>3 · 3 files</b></li>
+              <li data-theme="5"><span>Upper-case, backed enums</span><b>2 · 1 file</b></li>
+              <li data-theme="6"><span>Styled components, no inline styles</span><b>2 · 2 files</b></li>
+              <li data-theme="7"><span>Query-builder order</span><b>2 · 2 files</b></li>
+              <li data-theme="8" class="is-design"><span>Real design questions</span><b>20</b></li>
+            </ul>
+          </div>
+          <p class="rule fill-a r" style="--i: 4"><strong>33 of 57 are mechanical</strong> — eight commits' worth. 20 are real design questions, and those deserve a human answer, not a bulk fix.</p>
+          <footer class="foot"><span>a commit touches many threads · the page resolves one thread at a time</span><span>05</span></footer>
+        </div>
+      </section>
+
+      <!-- 6 · What each of you gets -->
+      <section class="slide" id="slide-6" data-title="What's in it for you" aria-labelledby="s6-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act ii</span>what is at stake, per seat at the table</div>
+          <h2 id="s6-title" class="r" style="--i: 1">One tool, <span class="accent">four different wins.</span></h2>
+          <div class="grid-4 fill-b">
+            <article class="card r" style="--i: 2">
+              <div class="who">director it · cto</div>
+              <h3>Throughput, without a new platform</h3>
+              <ul class="ticks">
+                <li><strong>No licence, no server, no procurement.</strong> MIT, one binary, the token in the OS keychain.</li>
+                <li>Works with the agents already in use — Cursor, Claude Code, Codex, OpenCode — and the <strong>Atlassian MCP</strong>.</li>
+                <li>Review feedback becomes <strong>team knowledge an agent reads</strong>, not tribal memory.</li>
+              </ul>
+            </article>
+            <article class="card r" style="--i: 3">
+              <div class="who">technical team lead</div>
+              <h3>Review load worth steering</h3>
+              <ul class="ticks">
+                <li>Reviewers <strong>from file history</strong>, instead of eleven by default.</li>
+                <li>"Ready to merge?" in one call: <strong>build, conflicts, open threads</strong>.</li>
+                <li>A 57-thread round becomes <strong>a checklist</strong>, answered in-thread with commit hashes.</li>
+              </ul>
+            </article>
+            <article class="card r" style="--i: 4">
+              <div class="who">product manager</div>
+              <h3>Answers without chasing a developer</h3>
+              <ul class="ticks">
+                <li>Ticket replies written <strong>for the PM first</strong>: what users get, how to test — then the tech tail.</li>
+                <li>"Is WEB-3497 in review, and is it green?" — answered from <strong>Jira and Bitbucket</strong> at once.</li>
+                <li>Updates <strong>edit the same comment</strong> instead of stacking new ones.</li>
+              </ul>
+            </article>
+            <article class="card r" style="--i: 5">
+              <div class="who">developer</div>
+              <h3>Stay in the editor</h3>
+              <ul class="ticks">
+                <li>No tab for reading, answering, describing or retargeting a PR.</li>
+                <li><strong>"Resolve the merge conflicts on &lt;link&gt;"</strong> — fetched, merged, tested, explained.</li>
+                <li>Description and ticket reply are <strong>drafts for approval</strong>, not chores.</li>
+              </ul>
+            </article>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">The common thread: <strong>fewer trips to Bitbucket and Jira in the browser</strong>, for people and for agents alike.</p>
+          <footer class="foot"><span>why first · what it can do next · how it works last</span><span>06</span></footer>
+        </div>
+      </section>
+
+      <!-- ================= ACT III · THE MENTOR ================= -->
+
+      <!-- 7 · Meet bb -->
+      <section class="slide" id="slide-7" data-title="Meet bb" aria-labelledby="s7-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iii</span>meeting the mentor</div>
+          <h2 id="s7-title" class="r" style="--i: 1">GitHub has <code style="font-size: 0.85em;">gh</code>. GitLab has <code style="font-size: 0.85em;">glab</code>. <span class="accent">Bitbucket has <code style="font-size: 0.85em;">bb</code>.</span></h2>
+          <div class="split split--main fill-b">
+            <div class="forges">
+              <div class="forge r" style="--i: 2">
+                <div class="forge-name">GitHub<small>official</small></div>
+                <div class="forge-has">gh</div>
+              </div>
+              <div class="forge r" style="--i: 3">
+                <div class="forge-name">GitLab<small>official</small></div>
+                <div class="forge-has">glab</div>
+              </div>
+              <div class="forge forge--none r" style="--i: 4">
+                <div class="forge-name">Bitbucket Cloud<small>official</small></div>
+                <div class="forge-has">— <span class="muted" style="font-family: var(--ui-font); font-size: 0.5em; font-weight: 400;">a browser tab</span></div>
+              </div>
+              <div class="forge forge--bb r" style="--i: 5">
+                <div class="forge-name">Bitbucket Cloud<small>since August 2026</small></div>
+                <div class="forge-has">bb <span class="muted" style="font-family: var(--ui-font); font-size: 0.5em; font-weight: 400;">MIT · Homebrew · crates.io</span></div>
+              </div>
+            </div>
+            <div class="split-main">
+              <article class="card card--accent r" style="--i: 6">
+                <div class="card-label">where it comes from</div>
+                <p><strong>Seán Baufeld</strong> wrote <code>bb</code> and published it under MIT — an independent Rust rewrite of the PHP <code>bb-cli</code>. It has grown since: <strong>reviewer suggestions from file history</strong>, selective review context for agents, the agent skills, and the macOS keychain fix.</p>
+              </article>
+              <article class="card r" style="--i: 7">
+                <div class="card-label">what it is</div>
+                <p>One Rust binary. <code>bb &lt;noun&gt; &lt;verb&gt;</code>, like <code>gh</code>. <strong><code style="white-space: nowrap;">--json</code> on every command</strong>, and it ships the skills that teach an agent to use it.</p>
+              </article>
+              <article class="card r" style="--i: 8">
+                <div class="card-label">alive</div>
+                <p>Six releases since early September, v0.21 to <strong>v0.25.0</strong>. Issues and pull requests welcome.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>github.com/biokraft/bbcloud · atlassian ships no official bitbucket cloud cli</span><span>07</span></footer>
+        </div>
+      </section>
+
+      <!-- 8 · Crossing the threshold -->
+      <section class="slide" id="slide-8" data-title="Three commands" aria-labelledby="s8-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iii</span>crossing the threshold</div>
+          <h2 id="s8-title" class="r" style="--i: 1">Three commands. <span class="accent">Then it knows the repository.</span></h2>
+          <div class="split split--main fill-b">
+            <figure class="term r" style="--i: 2">
+              <figcaption class="term-chrome"><span></span><span></span><span></span><b>~/acme/web</b></figcaption>
+              <pre class="term-body" style="font-size: 0.56em;"><code><span class="c-c">$ </span><span class="c-w">brew install biokraft/tap/bb</span>
+<span class="c-c">$ </span><span class="c-w">bb auth login</span>
+<span class="c-c">$ </span><span class="c-w">bb skill install --global</span>
+
+<span class="c-c">$ </span><span class="c-w">bb pr list --build</span>
+ ID    TITLE                                  BUILD        TARGET          ✓
+ 3425  WEB-3545 Fix missing account action    <span class="c-g">SUCCESSFUL</span>   develop       2/11
+ 3424  WEB-3472 Validate api responses        <span class="c-r">FAILED</span>       develop       0/11
+ 3418  WEB-3297 Result list filter            <span class="c-r">FAILED</span>       <span class="c-a">feature/…3295</span> 0/11
+ 3396  WEB-3497 Fix TypeError in app bridge   <span class="c-g">SUCCESSFUL</span>   develop       1/11
+ 3394  WEB-3357 Exclude archived orders       <span class="c-g">SUCCESSFUL</span>   develop       0/11
+ 3240  WEB-3132 Remove legacy layout          <span class="c-a">INPROGRESS</span>   <span class="c-a">feature/…3427</span> 0/11
+ <span class="c-c">… 65 more</span><span class="caret"></span></code></pre>
+            </figure>
+            <div class="split-main">
+              <article class="card r" style="--i: 3">
+                <div class="card-label">1 · install</div>
+                <p>Homebrew, one static binary, no runtime. Also <code>install.sh</code>, nix, cargo.</p>
+              </article>
+              <article class="card r" style="--i: 4">
+                <div class="card-label">2 · log in</div>
+                <p>An Atlassian API token, <strong>checked before it is stored</strong> in the keychain. A wrong scope fails here, not three commands later.</p>
+              </article>
+              <article class="card r" style="--i: 5">
+                <div class="card-label">3 · teach the agent</div>
+                <p>Writes the bundled skills for Cursor, Claude Code, Codex and OpenCode. <strong>No network needed</strong> — they ship inside the binary.</p>
+              </article>
+              <article class="card card--accent r" style="--i: 6">
+                <div class="card-label">no config</div>
+                <p>The repository comes from the <strong>git remote</strong>. In any Bitbucket checkout, <code>bb pr list</code> just works.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>anonymised from a real pr list · the real table also shows author and reviewer names</span><span>08</span></footer>
+        </div>
+      </section>
+
+      <!-- ================= ACT IV · THE TRIALS ================= -->
+
+      <!-- 9 · Ticket to PR -->
+      <section class="slide" id="slide-9" data-title="Ticket to PR" aria-labelledby="s9-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 1 · for developers</div>
+          <h2 id="s9-title" class="r" style="--i: 1">From <span class="accent">WEB-3497</span> to a pull request, without a tab.</h2>
+          <p class="prompt fill-b r" style="--i: 2; margin-bottom: 0.7em;"><q>pick up WEB-3497, fix it, run our gates, open the PR</q></p>
+          <div class="pipe-row">
+            <div class="pipe pipe--mcp r" style="--i: 3">
+              <span class="pipe-n">01 · read</span>
+              <strong>The ticket</strong>
+              <code>Atlassian MCP<br />getJiraIssue</code>
+              <small>Description, comments, the linked error report.</small>
+            </div>
+            <div class="pipe r" style="--i: 4">
+              <span class="pipe-n">02 · branch</span>
+              <strong>The team's convention</strong>
+              <code>bugfix/WEB-3497-<br />fix-typeerror-in-…</code>
+              <small>A <code>prepare-commit-msg</code> hook prefixes <code>[WEB-3497]</code>.</small>
+            </div>
+            <div class="pipe r" style="--i: 5">
+              <span class="pipe-n">03 · fix</span>
+              <strong>Implement + test</strong>
+              <code>src/native-app/<br />AppBridge.ts</code>
+              <small>A spec that fails before the fix.</small>
+            </div>
+            <div class="pipe pipe--human r" style="--i: 6">
+              <span class="pipe-n">04 · gate</span>
+              <strong>The project gates</strong>
+              <code>lint · typecheck<br />· test</code>
+              <small>From <code>AGENTS.md</code>. Next slide.</small>
+            </div>
+            <div class="pipe pipe--bb r" style="--i: 7">
+              <span class="pipe-n">05 · open</span>
+              <strong>Describe + open</strong>
+              <code>bb pr create develop<br />--description-stdin</code>
+              <small>The description is <strong>shown for approval first</strong>.</small>
+            </div>
+            <div class="pipe pipe--bb r" style="--i: 8">
+              <span class="pipe-n">06 · people</span>
+              <strong>Reviewers</strong>
+              <code>bb pr reviewers<br />suggest → add</code>
+              <small>Picked, from evidence.</small>
+            </div>
+          </div>
+          <div class="grid-3" style="margin-top: 0.7em;">
+            <article class="card card--green r" style="--i: 9">
+              <div class="card-label">not a mock-up</div>
+              <p><strong>A real PR</strong> went this way, here #3396: 6 files, one commit, description by the skill, CI green.</p>
+            </article>
+            <article class="card r" style="--i: 10">
+              <div class="card-label">jira links itself</div>
+              <p>Branch, commits and title carry the key, so Bitbucket's Jira integration links it. <strong>No manual link</strong>.</p>
+            </article>
+            <article class="card r" style="--i: 11">
+              <div class="card-label">then ci</div>
+              <p>Any CI that posts a build status to Bitbucket; <code>bb pr build 3396</code> reads it.</p>
+            </article>
+          </div>
+          <footer class="foot"><span>amber = jira via the atlassian mcp · blue = bitbucket via bb · green = the project gates</span><span>09</span></footer>
+        </div>
+      </section>
+
+      <!-- 10 · Your gates -->
+      <section class="slide" id="slide-10" data-title="Your gates" aria-labelledby="s10-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 1 · where the gates come from</div>
+          <h2 id="s10-title" class="r" style="--i: 1">The agent runs <span class="accent">the project's</span> gates. The ones already agreed on.</h2>
+          <div class="split split--code fill-b">
+            <pre class="code code--tight r" style="--i: 2"><code><span class="c-c"># AGENTS.md — "before you open a PR"</span>
+
+<span class="c-c"># bb's own repository, enforced by its CI</span>
+<span class="c-w">cargo</span> fmt --all --check
+<span class="c-w">cargo</span> clippy --all-targets -- -D warnings
+<span class="c-w">cargo</span> test --all
+
+<span class="c-c"># a typical PHP + React app, same idea</span>
+<span class="c-w">composer</span> phpstan                   <span class="c-c"># static analysis</span>
+<span class="c-w">composer</span> php-cs-fixer              <span class="c-c"># code style</span>
+<span class="c-w">composer</span> unit-test <span class="c-c">&amp;&amp;</span> <span class="c-w">composer</span> integration-test
+
+<span class="c-c"># frontend/: its own toolchain — say so</span>
+<span class="c-w">npm run</span> lint <span class="c-c">&amp;&amp;</span> <span class="c-w">npm run</span> typecheck <span class="c-c">&amp;&amp;</span> <span class="c-w">npm test</span></code></pre>
+            <div class="split-main">
+              <article class="card card--accent r" style="--i: 3">
+                <div class="card-label">from AGENTS.md, not a prompt</div>
+                <p><code>bb</code> brings no gates. The agent runs what the repository's <code>AGENTS.md</code> lists. Two JS codebases with <strong>different toolchains</strong>? Write it down — that is exactly the trap an agent falls into.</p>
+              </article>
+              <article class="card r" style="--i: 4">
+                <div class="card-label">then ci</div>
+                <p>Jenkins, Pipelines, anything that reports to Bitbucket. On the team from slide 2: <strong>64 of 71 open PRs green, 5 red</strong>, found with <code>bb pr list --build-status failed</code>.</p>
+              </article>
+              <article class="card card--green r" style="--i: 5">
+                <div class="card-label">the proof goes in the commit</div>
+                <p>"Verified: unit 2017/2017, integration 274/274, static analysis, code style and template lint all green." — <strong>where the reviewer reads it</strong>.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>bb's gates from its readme · the app gates are a typical example</span><span>10</span></footer>
+        </div>
+      </section>
+
+      <!-- 11 · PR description -->
+      <section class="slide" id="slide-11" data-title="PR description" aria-labelledby="s11-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 2 · for reviewers</div>
+          <h2 id="s11-title" class="r" style="--i: 1">A description the reviewer <span class="accent">actually finishes.</span></h2>
+          <div class="split split--main fill-b">
+            <div class="tmpl r" style="--i: 2">
+              <h4>TL;DR · PR #3396</h4>
+              <ul>
+                <li>Android installs the app bridge twice: a bare object exposing only <code>postMessage</code>, then <code>bridge.js</code> replaces it. Two bugs came out of that.</li>
+                <li>A wrapper built in that window stayed bound to the bare object — every native call silently did nothing. Calls before the swap threw a <code>TypeError</code>.</li>
+                <li>The bridge is now resolved per call, which settles both.</li>
+              </ul>
+              <h4>What to look at</h4>
+              <ul>
+                <li><code>AppBridge.ts</code> — the fix. <code>getBridge()</code> per call; <code>ready()</code> idempotent, which removed an <code>if (!isReady)</code> from 15 methods.</li>
+                <li><code>AppBridge.types.ts</code> — <code>call</code> is optional, so the 16 <code>?.</code> guards are compiler-enforced.</li>
+                <li>Read the <em>native object install</em> specs, <span class="note">not the "does not throw" case — that one passes even with the fix reverted.</span></li>
+              </ul>
+            </div>
+            <div class="split-main">
+              <article class="card r" style="--i: 3">
+                <span class="badge badge--amber">optional skill · pr-description</span>
+                <p><strong>The reviewer already has the diff.</strong> The description supplies what a diff cannot: intent, priority, and what is not in the diff. 3 TL;DR bullets, 4 review-focus bullets, one screen.</p>
+              </article>
+              <article class="card card--accent r" style="--i: 4">
+                <div class="card-label">run it again after the review</div>
+                <p class="code code--sm">bb pr edit 3396 \
+  --description-stdin &lt; body.md</p>
+                <p><strong>Replaces, never appends.</strong> Same prompt after round two, and the description matches the branch again.</p>
+              </article>
+              <article class="card r" style="--i: 5">
+                <div class="card-label">the sentence humans skip</div>
+                <p>"Read these, not that one — it passes with the fix reverted." That is where <strong>a reviewer's time actually goes</strong>.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>a real description, lightly trimmed and anonymised · the skill is optional, MIT</span><span>11</span></footer>
+        </div>
+      </section>
+
+      <!-- 12 · Reviewers -->
+      <section class="slide" id="slide-12" data-title="Suggested reviewers" aria-labelledby="s12-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 3 · for tech leads</div>
+          <h2 id="s12-title" class="r" style="--i: 1">When eleven are tagged, <span class="accent">who is it for?</span></h2>
+          <div class="split split--even fill-b">
+            <div class="split-main">
+              <div class="stats" style="grid-template-columns: 1fr 1fr;">
+                <div class="stat stat--rose r" style="--i: 2"><div class="stat-n"><span data-count="693">693</span><small>/ 740</small></div><div class="stat-l">reviewer slots on open PRs are <strong>still pending</strong>. 42 approved, 5 changes requested.</div></div>
+                <div class="stat r" style="--i: 3"><div class="stat-n"><span data-count="52">52</span><small>/ 71</small></div><div class="stat-l">open PRs tag <strong>exactly eleven people</strong> — the default list.</div></div>
+              </div>
+              <pre class="code code--sm r" style="--i: 4"><code><span class="c-c">$ </span><span class="c-w">bb pr reviewers suggest</span> <span class="c-v">--pr 3396 --json \</span>
+    <span class="c-v">--acknowledge-private-data</span>
+{ <span class="c-a">"files_scanned"</span>: 6, <span class="c-a">"history_complete"</span>: <span class="c-g">true</span>,
+  <span class="c-a">"suggestions"</span>: [{ <span class="c-a">"name"</span>: <span class="c-c">"Dana"</span>, <span class="c-a">"target_commits"</span>: 3,
+    <span class="c-a">"files"</span>: [<span class="c-c">"…/AppBridge.ts"</span>, <span class="c-c">"…/AppBridge.types.ts"</span>,
+              <span class="c-c">"…/useAppBridge.ts"</span>] }] }
+<span class="c-c">$ </span><span class="c-w">bb pr reviewers add</span> <span class="c-v">3396 dana</span></code></pre>
+            </div>
+            <div class="split-main">
+              <article class="card card--accent r" style="--i: 5">
+                <div class="card-label">who knows these files</div>
+                <p>It reads <strong>git history of the files the branch touched</strong> on the target branch. Here: one person, 3 commits, on 3 of the 6 files.</p>
+              </article>
+              <article class="card r" style="--i: 6">
+                <div class="card-label">read-only · the choice is explicit</div>
+                <p>It <strong>never tags anyone</strong>. The <code>bbc-open-pr</code> skill shows the evidence, and only <code>reviewers add</code> writes.</p>
+              </article>
+              <article class="card card--amber r" style="--i: 7">
+                <div class="card-label">honest when it can't know</div>
+                <p>For #2187 it suggests <strong>nobody</strong>: 25 of 121 files scanned, most of them new, <code>history_complete: false</code>. It says so rather than guess.</p>
+              </article>
+            </div>
+          </div>
+          <p class="rule fill-a r" style="--i: 8">The default list is a broadcast. <strong>File history is an invitation</strong> to the people who know the code.</p>
+          <footer class="foot"><span>bb pr list --json · bb pr reviewers suggest · real counts, "dana" stands in for a real colleague</span><span>12</span></footer>
+        </div>
+      </section>
+
+      <!-- 13 · The rematch -->
+      <section class="slide" id="slide-13" data-title="The rematch" aria-labelledby="s13-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 4 · the ordeal · for developers</div>
+          <h2 id="s13-title" class="r" style="--i: 1">PR #2187: <span class="accent">the rematch.</span></h2>
+          <p class="prompt r" style="--i: 2"><q>answer the review on <code>2187</code>: one commit per theme, reply on every thread, then tell me what to resolve</q></p>
+          <div class="split split--even fill-b">
+            <div class="split-main" style="gap: 0.7em;">
+              <div class="hp" data-total="57"><span>unanswered</span><span class="hp-bar"><span class="hp-fill"></span></span><span class="hp-n">57</span></div>
+              <div class="thread-map" data-mode="fight" role="img" aria-label="The 57 threads turning green as each theme is fixed"></div>
+            </div>
+            <ol class="fight-log">
+              <li data-step="0"><span>commit · move constants into <code>.constants</code> files</span><b>−10</b></li>
+              <li data-step="1"><span>commit · spell out <code>cv</code>, <code>qty</code>, <code>Fqn</code></span><b>−7</b></li>
+              <li data-step="2"><span>commit · one component per file</span><b>−4</b></li>
+              <li data-step="3"><span>commit · <code>#[MapRequestPayload]</code> on 3 actions</span><b>−3</b></li>
+              <li data-step="4"><span>commit · Helper / DTO suffixes</span><b>−3</b></li>
+              <li data-step="5"><span>commit · upper-case backed enums</span><b>−2</b></li>
+              <li data-step="6"><span>commit · styled components, no inline styles</span><b>−2</b></li>
+              <li data-step="7"><span>commit · query-builder order</span><b>−2</b></li>
+              <li data-step="8" class="is-design"><span>reply · 20 design questions, answered in-thread</span><b>−20</b></li>
+              <li data-step="9"><span>skip · 4 deleted comments</span><b>−4</b></li>
+            </ol>
+          </div>
+          <p class="rule fill-a r" style="--i: 3">Every reply names its commit. Then the agent <strong>lists the threads it believes are addressed</strong>, and resolving stays a human decision.</p>
+          <footer class="foot"><span>bb pr view 2187 --unresolved --json · bb pr comment --reply-to · bb pr resolve</span><span>13</span></footer>
+        </div>
+      </section>
+
+      <!-- 14 · Merge conflicts -->
+      <section class="slide" id="slide-14" data-title="Merge conflicts" aria-labelledby="s14-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 5 · the reward · for anyone who merges develop</div>
+          <h2 id="s14-title" class="r" style="--i: 1">"Please resolve merge conflicts." <span class="accent">Done, and tested.</span></h2>
+          <p class="prompt r" style="--i: 2"><q>resolve all merge conflicts <code>bitbucket.org/acme/web/pull-requests/3240</code></q></p>
+          <div class="split split--code fill-b">
+            <pre class="code code--sm code--tight r" style="--i: 3"><code><span class="c-c">commit 3f9c1ae · feature/WEB-3132-remove-legacy-layout</span>
+<span class="c-w">Merge branch 'develop' into feature/WEB-3132-…</span>
+
+Conflict: FeatureFlags kept develop's new
+ENABLE_ORDER_EXPORT_V2 and dropped
+ENABLE_LEGACY_LAYOUT, which this branch removes.
+
+<span class="c-a">Develop also added OrderSummaryPage.html.twig</span>
+<span class="c-a">after this branch diverged, so git merged it in as a</span>
+<span class="c-a">clean add with its legacy layout path intact.</span>
+That directory is deleted here, so the page would have
+<span class="c-r">500'd with a Twig LoaderError on first render.</span>
+Repointed at the new base layout.
+
+<span class="c-g">Verified: unit 2016/2016, integration 274/274,</span>
+<span class="c-g">static analysis, code style, template lint.</span></code></pre>
+            <div class="split-main">
+              <article class="card r" style="--i: 4">
+                <div class="card-label">what happens</div>
+                <p><code>bb pr view 3240 --conflicts</code> names source, target and files. Then plain git: fetch both, merge, <strong>resolve from both branches' intent</strong>, run the gates, explain every decision in the commit, push.</p>
+              </article>
+              <article class="card card--accent r" style="--i: 5">
+                <div class="card-label">the conflict git didn't report</div>
+                <p>Git said <em>merged cleanly</em>. Context and the gates said <strong>this page would 500</strong>. That is the part a human skims past at 6 pm.</p>
+              </article>
+              <article class="card r" style="--i: 6">
+                <div class="card-label">every team's conflict magnets</div>
+                <p>The <strong>feature-flag registry</strong>, the routes file, the one page component everybody touches. In 90 days the team on slide 2 had <strong>166 conflict merges</strong>.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>a real merge commit, anonymised and lightly trimmed · the default message just says "# conflicts:"</span><span>14</span></footer>
+        </div>
+      </section>
+
+      <!-- 15 · Ticket reply -->
+      <section class="slide" id="slide-15" data-title="Ticket reply" aria-labelledby="s15-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 6 · for product managers</div>
+          <h2 id="s15-title" class="r" style="--i: 1">The ticket reply a PM <span class="accent">can stop reading halfway.</span></h2>
+          <div class="split split--main fill-b">
+            <div class="tmpl r" style="--i: 2">
+              <h4>WEB-3497 · comment</h4>
+              <ul style="list-style: none; padding-left: 0;">
+                <li><strong>Fixed: in the Android app, actions that talk to the app no longer do nothing, or crash, while a page is still loading.</strong></li>
+              </ul>
+              <h4>How to test</h4>
+              <ul>
+                <li>Android app on staging → the account switcher page → it redirects straight away.</li>
+                <li>The error tracker should stop receiving new events for this <code>TypeError</code> after the release.</li>
+              </ul>
+              <h4>For the tech lead</h4>
+              <ul>
+                <li>The bridge is resolved per call instead of captured once; <code>call</code> is optional in the types, so the guards are compiler-enforced. PR #3396.</li>
+              </ul>
+            </div>
+            <div class="split-main">
+              <article class="card r" style="--i: 3">
+                <span class="badge badge--amber">optional skill · jira-ticket-reply</span>
+                <p>Written for <strong>two readers, in order</strong>: a PM who needs what a user gets, then a tech lead who needs what moved.</p>
+              </article>
+              <article class="card card--accent r" style="--i: 4">
+                <div class="card-label">the fold</div>
+                <p>Everything through <em>How to test</em> is for the PM, who is <strong>allowed to stop there</strong>. The tail is for the lead.</p>
+              </article>
+              <article class="card r" style="--i: 5">
+                <div class="card-label">feedback round two</div>
+                <p>QA reopens it? Same prompt. The skill names <strong>edit or append</strong> before posting — a correction edits, a real revision appends. Posted through the <strong>Atlassian MCP</strong>, shown for approval first.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="foot"><span>illustrative · drafted from the bridge-fix pr · the skill matches the diff, not the journey</span><span>15</span></footer>
+        </div>
+      </section>
+
+      <!-- 16 · Idempotent -->
+      <section class="slide" id="slide-16" data-title="Run it again" aria-labelledby="s16-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>the quiet superpower</div>
+          <h2 id="s16-title" class="r" style="--i: 1">Say it twice. <span class="accent">Nothing doubles.</span></h2>
+          <ul class="klist fill-b">
+            <li class="r" style="--i: 2"><code>bb pr edit 3396 --description-stdin</code><span>Replaces the description. The same prompt after each review round keeps it true.</span><span class="gate-off">replaces</span></li>
+            <li class="r" style="--i: 3"><code>jira-ticket-reply</code><span>Names <strong>edit</strong> or <strong>append</strong> before it posts. No stack of "update:" comments.</span><span class="gate-off">explicit</span></li>
+            <li class="r" style="--i: 4"><code>bb pr reviewers add 3396 dana,ash</code><span>Resolves every name first — one unknown name writes nothing. Someone already tagged: exit 0.</span><span class="gate-off">all or none</span></li>
+            <li class="r" style="--i: 5"><code>bb pr resolve 2187 &lt;thread&gt;</code><span>An already-resolved thread answers 409: nothing to do.</span><span class="gate-off">no-op</span></li>
+            <li class="r" style="--i: 6"><code>bb pr retarget 3418 --to develop</code><span>Same PR, same comments, same reviewers — once the branch below it merges.</span><span class="gate-off">in place</span></li>
+            <li class="r" style="--i: 7"><code>"resolve the merge conflicts on …"</code><span>On a branch already up to date with its target, git finds nothing to merge.</span><span class="gate-off">no-op</span></li>
+            <li class="r" style="--i: 8"><code>bb skill install</code><span>Refreshes stale copies after an upgrade. An edited skill is reported, never overwritten.</span><span class="gate-off">safe</span></li>
+          </ul>
+          <p class="rule fill-a r" style="--i: 9">That is what makes a sentence reusable: <strong>"update the description and the ticket"</strong> is safe to say after every round.</p>
+          <footer class="foot"><span>behaviour as documented in the bitbucket-cloud skill and bb --help, v0.25.0</span><span>16</span></footer>
+        </div>
+      </section>
+
+      <!-- 17 · The morning -->
+      <section class="slide" id="slide-17" data-title="The morning" aria-labelledby="s17-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>trial 7 · for tech leads</div>
+          <h2 id="s17-title" class="r" style="--i: 1">The standup, <span class="accent">before the standup.</span></h2>
+          <div class="split split--main fill-b">
+            <figure class="term r" style="--i: 2">
+              <figcaption class="term-chrome"><span></span><span></span><span></span><b>anywhere · bbc-daily-brief</b></figcaption>
+              <pre class="term-body"><code><span class="c-c">you › </span><span class="c-w">give me my daily brief</span>
+
+<span class="c-r">needs you</span>
+  3424  WEB-3472 Validate api responses       <span class="c-r">build FAILED</span> · changes requested
+  3418  WEB-3297 Result list filter           <span class="c-r">build FAILED</span> · stacked on 3397
+
+<span class="c-a">waiting on others</span>
+  3240  WEB-3132 Remove legacy layout         <span class="c-a">CI running</span> · stacked on 3427
+  3396  WEB-3497 Fix TypeError in app bridge  <span class="c-g">green</span> · 1/11 approved · 0 threads
+
+<span class="c-c">44 open PRs list you as a pending reviewer.</span>
+<span class="c-c">scan: 1 workspace · 30 most recently updated repositories</span><span class="caret"></span></code></pre>
+            </figure>
+            <div class="split-main">
+              <article class="card r" style="--i: 3">
+                <div class="card-label">what waits on me</div>
+                <p class="code code--sm">bb pr list --needs-my-review</p>
+                <p class="code code--sm">bb pr mine --role reviewer</p>
+              </article>
+              <article class="card r" style="--i: 4">
+                <div class="card-label">what is red</div>
+                <p class="code code--sm">bb pr list --build-status failed</p>
+              </article>
+              <article class="card card--accent r" style="--i: 5">
+                <div class="card-label">is it ready to merge</div>
+                <p class="code code--sm" style="font-size: 0.55em;">bb pr view 3396 --build --conflicts --unresolved</p>
+                <p>Build, conflicts and open threads, <strong>in one call</strong>.</p>
+              </article>
+            </div>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">44 pending reviews is not a to-do list — it is the eleven-person default, <strong>talking</strong>. The brief ranks what actually needs action.</p>
+          <footer class="foot"><span>illustrative brief · the skill runs only on request</span><span>17</span></footer>
+        </div>
+      </section>
+
+      <!-- 18 · Cookbook -->
+      <section class="slide" id="slide-18" data-title="More trials" aria-labelledby="s18-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act iv</span>more trials · sorted by who asks</div>
+          <h2 id="s18-title" class="r" style="--i: 1">Things people <span class="accent">actually type.</span></h2>
+          <div class="grid-4 fill-b">
+            <div class="cook r" style="--i: 2">
+              <div class="who">developer</div>
+              <ul>
+                <li><q>why is CI red on 3424?</q><small>bb pr build → the CI run URL</small></li>
+                <li><q>once 3397 merges, point 3418 at develop</q><small>bb pr retarget 3418 --to develop</small></li>
+                <li><q>review 3396 against our conventions, keep my comments pending</q><small>bb pr diff · bb pr comment --pending</small></li>
+              </ul>
+            </div>
+            <div class="cook r" style="--i: 3">
+              <div class="who">tech lead</div>
+              <ul>
+                <li><q>which open PRs are ready to merge?</q><small>bb pr view --build --conflicts --unresolved</small></li>
+                <li><q>who should review this branch before I open it?</q><small>bb pr reviewers suggest develop</small></li>
+                <li><q>pre-review 2187 against our conventions</q><small>AGENTS.md · house rules · bb pr diff</small></li>
+              </ul>
+            </div>
+            <div class="cook r" style="--i: 4">
+              <div class="who">product manager</div>
+              <ul>
+                <li><q>is WEB-3497 in review, and is it green?</q><small>Atlassian MCP · bb pr list · bb pr build</small></li>
+                <li><q>what shipped last week, per ticket?</q><small>bb pr list --state MERGED --json</small></li>
+                <li><q>reply on the ticket, in PM language</q><small>jira-ticket-reply · Atlassian MCP</small></li>
+              </ul>
+            </div>
+            <div class="cook r" style="--i: 5">
+              <div class="who">director it · cto</div>
+              <ul>
+                <li><q>which PRs have waited longest for a first review?</q><small>bb pr list --json · bb pr view --metadata-only</small></li>
+                <li><q>how much of our work is stacked?</q><small>bb pr list --json · 12 of 71 on slide 2</small></li>
+                <li><q>what did reviewers repeat most last month?</q><small>bb pr view --json → candidates for a skill</small></li>
+              </ul>
+            </div>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">None of these needs a dashboard. <strong>Each one is a question</strong>, answered from the source, in a sentence.</p>
+          <footer class="foot"><span>every line maps to a bb command that exists in v0.25.0 · the prompts are plain language</span><span>18</span></footer>
+        </div>
+      </section>
+
+      <!-- ================= ACT V · THE ROAD BACK ================= -->
+
+      <!-- 19 · How it fits -->
+      <section class="slide" id="slide-19" data-title="How it fits" aria-labelledby="s19-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act v</span>the road back · how it works</div>
+          <h2 id="s19-title" class="r" style="--i: 1">Nothing new to host. <span class="accent">One new binary.</span></h2>
+          <div class="flow fill-b">
+            <div class="flow-row r" style="--i: 2"><b>Ask</b><span>one sentence, in plain language — "resolve the conflicts on 3240", "reply on the ticket"</span></div>
+            <div class="flow-row flow-row--agent r" style="--i: 3"><b>Coding agent</b><span>Cursor · Claude Code · Codex · OpenCode — reads the skills, the repository's <code>AGENTS.md</code>, its rules</span></div>
+            <div class="flow-3 r" style="--i: 4">
+              <div class="owner owner--mcp">
+                <h3>Atlassian MCP <em>Jira</em></h3>
+                <ul>
+                  <li><strong>The ticket</strong> — description, comments, links</li>
+                  <li><strong>The reply</strong> — posted only after review</li>
+                </ul>
+                <p class="card-foot">what was asked for</p>
+              </div>
+              <div class="owner owner--bb">
+                <h3>bb <em>Bitbucket</em></h3>
+                <ul>
+                  <li><strong>PRs</strong> — diff, files, threads, builds, conflicts</li>
+                  <li><strong>People</strong> — file history, reviewers</li>
+                </ul>
+                <p class="card-foot">what changed</p>
+              </div>
+              <div class="owner" style="border-color: color-mix(in srgb, var(--green) 40%, transparent);">
+                <h3 style="color: var(--green);">git + project tooling <em>local</em></h3>
+                <ul>
+                  <li><strong>Branches &amp; merges</strong> — plain git</li>
+                  <li><strong>Gates</strong> — whatever <code>AGENTS.md</code> lists</li>
+                </ul>
+                <p class="card-foot">whether it works</p>
+              </div>
+            </div>
+            <div class="flow-row r" style="--i: 5"><b>CI</b><span>reports each build to Bitbucket, where <code>bb pr build</code> and <code>--build</code> read it</span></div>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">The ticket supplies <strong>intent</strong>. The diff supplies <strong>fact</strong>. The project's gates supply <strong>proof</strong>. Nobody is asked to guess what the others said.</p>
+          <footer class="foot"><span>every box except bb is probably already installed</span><span>19</span></footer>
+        </div>
+      </section>
+
+      <!-- 20 · Skills -->
+      <section class="slide" id="slide-20" data-title="Skills" aria-labelledby="s20-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act v</span>the elixir, part one</div>
+          <h2 id="s20-title" class="r" style="--i: 1">Skills are <span class="accent">house rules</span> an agent can read.</h2>
+          <div class="grid-3 fill-b">
+            <article class="card r" style="--i: 2">
+              <span class="badge badge--accent">ships in bb</span>
+              <h3>bb skill install --global</h3>
+              <ul class="ticks">
+                <li><strong>bitbucket-cloud</strong> — read, review and answer PRs</li>
+                <li><strong>bbc-open-pr</strong> — push, suggest reviewers, draft, then ask</li>
+                <li><strong>bbc-daily-brief</strong> — the ranked queue, only when asked</li>
+                <li><strong>bbc-report-bug</strong> — file a bb bug, private data redacted</li>
+              </ul>
+              <p class="card-foot">offline · refreshed on upgrade</p>
+            </article>
+            <article class="card r" style="--i: 3">
+              <span class="badge badge--amber">optional · pairs with bb + mcp</span>
+              <h3>Two for the writing</h3>
+              <ul class="ticks">
+                <li><strong>pr-description</strong> — reviewer-first, one screen</li>
+                <li><strong>jira-ticket-reply</strong> — PM first, lead second, with a fold</li>
+              </ul>
+              <p class="card-foot">plain SKILL.md · pastes straight into AGENTS.md</p>
+            </article>
+            <article class="card card--green r" style="--i: 4">
+              <span class="badge badge--green">the third layer</span>
+              <h3>The project's own</h3>
+              <ul class="ticks">
+                <li><strong>AGENTS.md</strong> — the gates, the toolchains, the traps</li>
+                <li><strong>rules</strong> — <code>.cursor/rules</code>, <code>CLAUDE.md</code>: conventions per area</li>
+                <li><strong>a review skill</strong> — the feedback the project keeps getting (<code>cv</code>, constants files, one component per file) <strong>written down once</strong>, for every agent.</li>
+              </ul>
+              <p class="card-foot">start with whatever reviewers repeat most</p>
+            </article>
+          </div>
+          <p class="rule fill-a r" style="--i: 5">Review feedback that becomes a skill <strong>stops being review feedback</strong>. That is the part that compounds.</p>
+          <footer class="foot"><span>portable SKILL.md · read by cursor, claude code, codex and opencode</span><span>20</span></footer>
+        </div>
+      </section>
+
+      <!-- 21 · Under the hood -->
+      <section class="slide" id="slide-21" data-title="Under the hood" aria-labelledby="s21-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act v</span>under the hood · for the cto and security</div>
+          <h2 id="s21-title" class="r" style="--i: 1">Boring, <span class="accent">on purpose.</span></h2>
+          <div class="grid-3 fill-b">
+            <article class="card r" style="--i: 2">
+              <div class="card-label">a contract for machines</div>
+              <p><code>--json</code> on every command; stdout is <strong>one JSON value and nothing else</strong>. Exit codes are the API: 0 ok, 1 error, 2 not logged in, 3 not found.</p>
+            </article>
+            <article class="card r" style="--i: 3">
+              <div class="card-label">the token</div>
+              <p>An Atlassian API token in the <strong>OS keychain</strong>, and nowhere else. Never printed; there is no <code>auth show</code>. App passwords were removed on 2026-07-28.</p>
+            </article>
+            <article class="card r" style="--i: 4">
+              <div class="card-label">least privilege</div>
+              <p>Four scopes cover the PR workflow: <code>read:user</code>, <code>read:pullrequest</code>, <code>write:pullrequest</code>, <code>read:repository</code>.</p>
+            </article>
+            <article class="card r" style="--i: 5">
+              <div class="card-label">no shell, no openssl, no unsafe</div>
+              <p>Git calls are argument vectors, never <code>sh -c</code>. rustls only. <code>#![forbid(unsafe_code)]</code>. Redirects stay on the same origin.</p>
+            </article>
+            <article class="card r" style="--i: 6">
+              <div class="card-label">one host</div>
+              <p>Talks to <code>api.bitbucket.org</code> only. <code>bb update</code> checks GitHub releases <strong>without credentials</strong>.</p>
+            </article>
+            <article class="card card--green r" style="--i: 7">
+              <div class="card-label">cost</div>
+              <p><strong>MIT. No server, no seats, no vendor.</strong> Homebrew for macOS, binaries for Linux. The tokens it uses are the ones a browser session already uses.</p>
+            </article>
+          </div>
+          <p class="rule fill-a r" style="--i: 8">No new service to review. <strong>A CLI, a token that already exists, and one host it talks to.</strong></p>
+          <footer class="foot"><span>from bb --help and the project readme · every rule has a test that fails the build</span><span>21</span></footer>
+        </div>
+      </section>
+
+      <!-- 22 · Honest limits -->
+      <section class="slide" id="slide-22" data-title="Honest limits" aria-labelledby="s22-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act v</span>what is not measured yet</div>
+          <h2 id="s22-title" class="r" style="--i: 1">What it <span class="rose">doesn't</span> do, and what is <span class="rose">unmeasured</span>.</h2>
+          <ul class="verbs fill-b">
+            <li class="r" style="--i: 2"><span>No <strong>approve</strong>, <strong>merge</strong> or <strong>decline</strong>.</span><code class="c-r">two clicks stay in the browser</code></li>
+            <li class="r" style="--i: 3"><span>It is <strong>the account's token</strong>: an agent using <code>bb</code> inherits its permissions.</span><code class="c-r">prompts aren't a boundary · review is</code></li>
+            <li class="r" style="--i: 4"><span>CI <strong>logs</strong> are not in <code>bb</code> — status and run URL only.</span><code class="c-r">open the run</code></li>
+            <li class="r" style="--i: 5"><span>Reviewer suggestions scan <strong>25 files</strong> by default, and say so.</span><code class="c-r">--file-limit</code></li>
+            <li class="r" style="--i: 6"><span><code>pr mine</code> samples the <strong>30 most recently updated</strong> repositories per workspace.</span><code class="c-r">--repo-limit</code></li>
+            <li class="r" style="--i: 7"><span>No <strong>Windows</strong>. macOS and Linux.</span><code class="c-r">see the readme</code></li>
+            <li class="r" style="--i: 8"><span>No <strong>time saved</strong> has been measured — every number here is a count.</span><code class="c-r">a pilot would</code></li>
+          </ul>
+          <p class="rule fill-a r" style="--i: 9">Not every question has an answer yet. <strong>What ships is honest about the ones it doesn't.</strong></p>
+          <footer class="foot"><span>a tool that claims no gaps has not been used</span><span>22</span></footer>
+        </div>
+      </section>
+
+      <!-- ================= ACT VI · THE RETURN ================= -->
+
+      <!-- 23 · The next 57-thread PR -->
+      <section class="slide" id="slide-23" data-title="The return" aria-labelledby="s23-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act vi</span>return with the elixir</div>
+          <h2 id="s23-title" class="r" style="--i: 1">The next <span class="accent">57-thread PR.</span></h2>
+          <div class="achievement" aria-hidden="true"><span class="trophy">★</span><span><small>achievement unlocked</small><strong>Tab Zero-ish</strong> — approve and merge still count</span></div>
+          <div class="ba fill-b">
+            <article class="card card--rose r" style="--i: 2">
+              <div class="card-label">the first time</div>
+              <ul class="ticks">
+                <li><span class="strike">57 threads, 35 files, resolved one by one in file order</span></li>
+                <li><span class="strike">"Please resolve merge conflicts" → the IDE, by hand</span></li>
+                <li><span class="strike">11 reviewers tagged, 3 commented</span></li>
+                <li><span class="strike">the ticket reply written last, at the end of the day</span></li>
+              </ul>
+            </article>
+            <article class="card card--green r" style="--i: 3">
+              <div class="card-label">the next time</div>
+              <ul class="ticks">
+                <li><strong>The 33 mechanical ones</strong> are caught by the review skill before anyone looks.</li>
+                <li><strong>The 20 design questions</strong> get the reviewers' full attention.</li>
+                <li><strong>Conflicts</strong> resolved from a link, gates green, reasons in the commit.</li>
+                <li><strong>Reviewers</strong> who own the files; <strong>a reply</strong> the PM can stop reading halfway.</li>
+              </ul>
+            </article>
+          </div>
+          <p class="rule fill-a r" style="--i: 4">Same team. Same reviewers. Same standards. <strong>Less memory game.</strong></p>
+          <footer class="foot"><span>the hero was never the tool · it is the team getting its evenings back</span><span>23</span></footer>
+        </div>
+      </section>
+
+      <!-- 24 · The ask -->
+      <section class="slide" id="slide-24" data-title="The ask" aria-labelledby="s24-title">
+        <div class="stage">
+          <div class="kicker r"><span class="act">act vi</span>monday</div>
+          <h2 id="s24-title" class="r" style="--i: 1">One small ask <span class="accent">per seat.</span></h2>
+          <div class="grid-4 fill-b">
+            <article class="card card--accent r" style="--i: 2">
+              <span class="badge badge--accent">developers · 5 minutes</span>
+              <h3>Install, then one sentence</h3>
+              <p class="code code--sm">brew install biokraft/tap/bb
+bb auth login
+bb skill install --global</p>
+              <p>Then: <strong>"resolve the merge conflicts on &lt;PR link&gt;"</strong>.</p>
+            </article>
+            <article class="card r" style="--i: 3">
+              <span class="badge badge--accent">tech leads · one pr</span>
+              <h3>Compare the list</h3>
+              <p>On the next PR, <code>bb pr reviewers suggest</code> against the default list: <strong>who was missing, who did not need to be there?</strong></p>
+            </article>
+            <article class="card r" style="--i: 4">
+              <span class="badge badge--accent">product managers · one ticket</span>
+              <h3>Read to the fold</h3>
+              <p>A <code>jira-ticket-reply</code> on the next ticket, read <strong>only to "How to test"</strong>. Anything past that which a product manager still has to read means the skill is wrong — open an issue.</p>
+            </article>
+            <article class="card card--green r" style="--i: 5">
+              <span class="badge badge--green">leadership · four weeks</span>
+              <h3>Sponsor a pilot</h3>
+              <p>Four volunteers, four weeks. Count <strong>review round-trips</strong> and <strong>time from "please resolve conflicts" to green</strong>. If it doesn't move, stop.</p>
+            </article>
+          </div>
+          <p class="rule fill-a r" style="--i: 6">Every decision stays human. <strong>Most of the tabs do not.</strong> And the next flag worth adding is one nobody has guessed yet — open an issue.</p>
+          <footer class="foot"><span>github.com/biokraft/bbcloud · issues and pull requests welcome · bbc-report-bug files one for you</span><span>24</span></footer>
+        </div>
+      </section>
+
+      <!-- 25 · Close -->
+      <section class="slide" id="slide-25" data-title="Close" aria-labelledby="s25-title">
+        <div class="stage stage--close">
+          <h2 id="s25-title" class="close-lines">
+            <span class="r" style="--i: 1">Read the ticket.</span>
+            <span class="r" style="--i: 2">Fix it your way.</span>
+            <span class="r accent" style="--i: 3">Answer all 57.</span>
+            <span class="r" style="--i: 4">Tell the PM.</span>
+          </h2>
+          <p class="close-tag r" style="--i: 5">Out of the browser tab — and the same house rules, in the coding agent.</p>
+          <div class="close-row r" style="--i: 6">
+            <div class="close-links">
+              <a href="https://github.com/biokraft/bbcloud" target="_blank" rel="noreferrer"><small>source</small>github.com/biokraft/bbcloud</a>
+              <a href="https://crates.io/crates/bbcloud" target="_blank" rel="noreferrer"><small>crates.io</small><span data-version-latest>bbcloud · MIT · v0.25.0</span></a>
+              <a href="https://github.com/biokraft/bbcloud#agent-skills" target="_blank" rel="noreferrer"><small>skills</small>four ship in bb</a>
+            </div>
+            <div class="qr-group">
+              <figure class="qr"><img src="./assets/qr-bbcloud.svg" alt="QR code for github.com/biokraft/bbcloud" /><figcaption>source</figcaption></figure>
+            </div>
+            <p class="credit"><strong>Seán Baufeld</strong> wrote <code>bb</code> and put it out under MIT — the reason anyone can <code style="font-family: var(--mono-font);">brew install</code> it. Reviewer suggestions from file history, selective review context, the agent skills and the macOS keychain fix came after, from contributors.</p>
+          </div>
+          <footer class="foot"><span>bb · bitbucket cloud cli · open source · MIT</span><span>25</span></footer>
+        </div>
+      </section>
+    </main>
+
+    <nav class="deck-nav" aria-label="Slide navigation">
+      <button class="nav-arrow" type="button" data-action="prev" aria-label="Previous slide">←</button>
+      <div class="nav-center">
+        <div class="nav-progress" aria-hidden="true"><span id="progress-bar"></span></div>
+        <div id="slide-dots" class="slide-dots" aria-label="Choose a slide"></div>
+      </div>
+      <button class="nav-arrow" type="button" data-action="next" aria-label="Next slide">→</button>
+    </nav>
+
+
+    <aside id="backup-panel" class="drawer backup-panel" hidden>
+      <div class="drawer-header"><span>backup · the questions this deck skips</span><button type="button" data-close="backup-panel" aria-label="Close backup panel">×</button></div>
+      <div class="drawer-content">
+        <div class="backup-grid">
+          <div class="backup-card"><h3>Does this replace the Atlassian MCP?</h3><p>No. The MCP owns Jira — the ticket, its comments, the reply. <code>bb</code> owns Bitbucket — pull requests, threads, builds, conflicts, file history. They don't overlap, which is why the combination works.</p></div>
+          <div class="backup-card"><h3>Can an agent merge or approve?</h3><p>Not through <code>bb</code>: there is no approve, merge or decline command. Everything else acts with the account's token, so an agent inherits the same permissions. Confirmation prompts on <code>resolve</code> and <code>request-changes</code> help people; an agent can pass <code>--yes</code>, so they are not a boundary. Review culture and Bitbucket's merge checks are.</p></div>
+          <div class="backup-card"><h3>Where do the numbers come from?</h3><p>Read-only <code>git log</code>, <code>git shortlog</code>, <code>bb pr list --json</code>, <code>bb pr view --json</code> and <code>bb pr reviewers suggest</code> on one real product team's repository in September 2026. Names, ticket keys, pull request numbers and file paths are changed; the counts are not. The theme clustering of the 57 threads is by keyword, so treat the per-theme counts as approximate.</p></div>
+          <div class="backup-card"><h3>Is it safe to hand a token to a tool like this?</h3><p>The token goes to the OS keychain and nowhere else — no file, no config directory, no child-process environment. <code>auth status</code> can only print the last four characters, and a test fails the build if anyone adds an <code>auth show</code>. On macOS the secret is passed on stdin, never in argv.</p></div>
+          <div class="backup-card"><h3>Why does reviewer suggestion need <code>--acknowledge-private-data</code>?</h3><p>It reads file paths, colleague names, dates and account ids from commit history and hands them to whatever is on the other end — possibly a model. The flag makes a person say yes to that first.</p></div>
+          <div class="backup-card"><h3>What about CI?</h3><p>Anything that posts a build status to Bitbucket — Jenkins, Bitbucket Pipelines, others. <code>bb</code> reads that status and the run URL. It does not fetch CI logs; open the URL for those.</p></div>
+          <div class="backup-card"><h3>Isn't bulk-answering review comments disrespectful to reviewers?</h3><p>The opposite is the goal: the agent replies on every thread with the commit that addressed it, so a reviewer sees exactly what changed for their point. Design questions get a reasoned answer for you to check, not a "done". And you decide what gets resolved.</p></div>
+          <div class="backup-card"><h3>What does it cost?</h3><p>Nothing to buy or host: MIT licence, one binary, Homebrew, an install script, nix, cargo or a release download. It uses an existing Atlassian API token and the coding agent already in use.</p></div>
+          <div class="backup-card"><h3>What if a skill disagrees with the project?</h3><p>Edit it. Skills are plain Markdown. <code>bb skill install</code> never overwrites a skill that was edited; it reports it and leaves it alone. The optional skills can be pasted into <code>AGENTS.md</code>.</p></div>
+          <div class="backup-card"><h3>Who maintains it, and how are releases made?</h3><p><code>github.com/biokraft/bbcloud</code> is maintained in the open and contributions are welcome. <strong>Seán Baufeld</strong> started it; releases are automated: the version comes from <code>cargo-semver-checks</code>, and merging the release PR publishes to crates.io, builds four binaries with checksums and updates the Homebrew formula.</p></div>
+          <div class="backup-card"><h3>What would a pilot actually measure?</h3><p>Two things countable without new tooling: review round-trips per PR (from <code>bb pr view --json</code>) and time from a "please resolve merge conflicts" comment to a green build. Four volunteers, four weeks, compared with their previous four weeks.</p></div>
+          <div class="backup-card"><h3>Is Windows on the roadmap?</h3><p>Not stated. macOS arm64 and x86_64, Linux x86_64 and arm64. If you need Windows, open an issue — that's a conversation, not a promise.</p></div>
+        </div>
+      </div>
+    </aside>
+
+    <div id="help-overlay" class="help-overlay" hidden>
+      <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <div class="drawer-header"><span id="help-title">navigation</span><button type="button" data-close="help-overlay" aria-label="Close shortcuts">×</button></div>
+        <div class="help-grid">
+          <div><kbd>→</kbd><kbd>space</kbd><span>next slide</span></div>
+          <div><kbd>←</kbd><span>previous slide</span></div>
+          <div><kbd>home</kbd><kbd>end</kbd><span>first / last</span></div>
+          <div><kbd>f</kbd><span>fullscreen</span></div>
+          <div><kbd>t</kbd><span>theme: auto → dark → light</span></div>
+          <div><kbd>b</kbd><span>backup answers</span></div>
+          <div><kbd>?</kbd><span>this panel</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <noscript><div class="noscript-message">Navigation needs JavaScript. The full script is in <a href="https://github.com/biokraft/bbcloud">the repository README</a>.</div></noscript>
+    <script src="./app.js" defer></script>
+    <script src="./story.js" defer></script>
+  </body>
+</html>
