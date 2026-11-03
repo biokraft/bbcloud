@@ -310,6 +310,9 @@ enum PrCommand {
         /// Delete the source branch once merged
         #[arg(long)]
         close_source_branch: bool,
+        /// Open the pull request as a draft
+        #[arg(long)]
+        draft: bool,
     },
     /// Show a pull request with its comments
     #[command(alias = "show", alias = "v")]
@@ -850,6 +853,7 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
             interactive,
             web,
             close_source_branch,
+            draft,
         } => {
             commands::pr::create(
                 &ctx,
@@ -864,6 +868,7 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
                     interactive,
                     web,
                     close_source_branch,
+                    draft,
                 },
             )
             .await

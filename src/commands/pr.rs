@@ -250,6 +250,7 @@ pub struct CreateArgs {
     pub interactive: bool,
     pub web: bool,
     pub close_source_branch: bool,
+    pub draft: bool,
 }
 
 async fn default_reviewers(ctx: &Ctx) -> Result<Vec<ReviewerRef>> {
@@ -430,6 +431,8 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         id: u64,
         target: String,
         url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        draft: Option<bool>,
     }
 
     let mut created = Vec::new();
@@ -450,6 +453,9 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
             "reviewers": reviewers,
             "close_source_branch": args.close_source_branch,
         });
+        if args.draft {
+            body["draft"] = serde_json::Value::Bool(true);
+        }
         if let Some(text) = description.as_deref() {
             body["description"] = serde_json::Value::String(text.to_string());
         }
@@ -468,7 +474,8 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         };
 
         if !ctx.format.is_json() {
-            output::success(&format!("#{} {source} \u{2192} {target}", pr.id));
+            let marker = if args.draft { " (draft)" } else { "" };
+            output::success(&format!("#{} {source} \u{2192} {target}{marker}", pr.id));
             output::info(&url);
         }
         if args.web {
@@ -478,6 +485,7 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
             id: pr.id,
             target,
             url,
+            draft: pr.draft.then_some(true),
         });
     }
 
@@ -564,6 +572,7 @@ mod create_guard_tests {
             interactive: false,
             web: false,
             close_source_branch: false,
+            draft: false,
         }
     }
 

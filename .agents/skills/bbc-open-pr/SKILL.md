@@ -184,6 +184,9 @@ not suggest.
 bb pr create <target> --title "<title>" --description-stdin --reviewer '{uuid-1},{uuid-2}' --json < "$body"
 ```
 
+Add `--draft` only when the user asked for a draft pull request. Never choose it on your own: a
+draft hides the pull request from reviewers' queues until someone marks it ready.
+
 `--reviewer` is the full reviewer set. It replaces the repository's default reviewers, so only the
 people the user picked are on the pull request. `bb` removes you from the list, because Bitbucket
 rejects the author. If the user picked no one, pass `--no-default-reviewers` and no `--reviewer`.

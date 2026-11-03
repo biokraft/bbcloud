@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -281,12 +282,62 @@ async fn create_json_reports_ids_and_urls() {
         ])
         .output()
         .unwrap();
+    assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value[0]["id"], 17);
+    assert!(value[0].get("draft").is_none());
     assert!(value[0]["url"]
         .as_str()
         .unwrap()
         .contains("pull-requests/17"));
+}
+
+#[tokio::test]
+async fn create_json_includes_draft_only_when_returned_true_for_every_target() {
+    for draft in [false, true] {
+        let server = MockServer::start().await;
+        let url = "https://bitbucket.org/acme/widgets/pull-requests/26";
+        Mock::given(method("POST"))
+            .and(path("/repositories/acme/widgets/pullrequests"))
+            .and(body_partial_json(serde_json::json!({ "draft": true })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 26,
+                "draft": draft,
+                "links": { "html": { "href": url } }
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let out = bb(&server)
+            .args([
+                "pr",
+                "create",
+                "main,release/1",
+                "feature/a",
+                "--title",
+                "t",
+                "--no-default-reviewers",
+                "--draft",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let rows = value.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        for (row, target) in rows.iter().zip(["main", "release/1"]) {
+            assert_eq!(row["id"], 26);
+            assert_eq!(row["target"], target);
+            assert_eq!(row["url"], url);
+            if draft {
+                assert_eq!(row["draft"], true);
+            } else {
+                assert!(row.get("draft").is_none());
+            }
+        }
+    }
 }
 
 /// A target of only separators leaves no branch to target.
@@ -637,4 +688,109 @@ async fn reviewer_flag_applies_to_every_target() {
         ])
         .assert()
         .success();
+}
+
+async fn mount_create(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/repositories/acme/widgets/pullrequests"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": 21,
+            "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/21" } }
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn posted_bodies(server: &MockServer) -> Vec<serde_json::Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "POST")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn draft_flag_sends_draft_true_and_marks_the_line() {
+    let server = MockServer::start().await;
+    mount_create(&server).await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--no-default-reviewers",
+            "--draft",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("#21 feature/a \u{2192} main (draft)"));
+
+    let bodies = posted_bodies(&server).await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["draft"], true);
+}
+
+#[tokio::test]
+async fn without_draft_the_body_has_no_draft_key() {
+    let server = MockServer::start().await;
+    mount_create(&server).await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--no-default-reviewers",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("(draft)").not());
+
+    let bodies = posted_bodies(&server).await;
+    assert!(bodies[0].get("draft").is_none());
+}
+
+#[tokio::test]
+async fn draft_applies_to_every_target() {
+    let server = MockServer::start().await;
+    mount_create(&server).await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main,release/1",
+            "feature/a",
+            "--title",
+            "t",
+            "--no-default-reviewers",
+            "--draft",
+        ])
+        .assert()
+        .success();
+
+    let bodies = posted_bodies(&server).await;
+    assert_eq!(bodies.len(), 2);
+    assert!(bodies.iter().all(|b| b["draft"] == true));
+}
+
+#[test]
+fn help_lists_the_draft_flag() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
+        .args(["pr", "create", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--draft"));
 }

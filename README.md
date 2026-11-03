@@ -241,6 +241,7 @@ bb pr create main --title "Add caching"   # source branch inferred from your che
 bb pr create main --description-stdin < body.md --no-default-reviewers
 bb pr create main --reviewer dana,ash     # tag exactly these two, no default reviewers
 bb pr create main,release/2.4 --title "Fix login" # one PR per target; --json returns an array
+bb pr create main --draft --title "WIP: caching"  # open as a draft; `pr list --state draft` finds it
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
