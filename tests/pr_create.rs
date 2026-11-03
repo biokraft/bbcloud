@@ -285,7 +285,7 @@ async fn create_json_reports_ids_and_urls() {
     assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value[0]["id"], 17);
-    assert!(value[0].get("draft").is_none());
+    assert_eq!(value[0]["draft"], false);
     assert!(value[0]["url"]
         .as_str()
         .unwrap()
@@ -293,7 +293,7 @@ async fn create_json_reports_ids_and_urls() {
 }
 
 #[tokio::test]
-async fn create_json_includes_draft_only_when_returned_true_for_every_target() {
+async fn create_json_reports_the_returned_draft_state_for_every_target() {
     for draft in [false, true] {
         let server = MockServer::start().await;
         let url = "https://bitbucket.org/acme/widgets/pull-requests/26";
@@ -331,11 +331,7 @@ async fn create_json_includes_draft_only_when_returned_true_for_every_target() {
             assert_eq!(row["id"], 26);
             assert_eq!(row["target"], target);
             assert_eq!(row["url"], url);
-            if draft {
-                assert_eq!(row["draft"], true);
-            } else {
-                assert!(row.get("draft").is_none());
-            }
+            assert_eq!(row["draft"], draft);
         }
     }
 }
@@ -690,11 +686,13 @@ async fn reviewer_flag_applies_to_every_target() {
         .success();
 }
 
-async fn mount_create(server: &MockServer) {
+/// `draft` is what Bitbucket reports back, which is what the output shows.
+async fn mount_create(server: &MockServer, draft: bool) {
     Mock::given(method("POST"))
         .and(path("/repositories/acme/widgets/pullrequests"))
         .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
             "id": 21,
+            "draft": draft,
             "links": { "html": { "href": "https://bitbucket.org/acme/widgets/pull-requests/21" } }
         })))
         .mount(server)
@@ -715,7 +713,7 @@ async fn posted_bodies(server: &MockServer) -> Vec<serde_json::Value> {
 #[tokio::test]
 async fn draft_flag_sends_draft_true_and_marks_the_line() {
     let server = MockServer::start().await;
-    mount_create(&server).await;
+    mount_create(&server, true).await;
 
     bb(&server)
         .args([
@@ -737,10 +735,34 @@ async fn draft_flag_sends_draft_true_and_marks_the_line() {
     assert_eq!(bodies[0]["draft"], true);
 }
 
+/// The marker follows the response, so a pull request Bitbucket opened as
+/// ready is not labelled a draft just because the flag asked for one.
+#[tokio::test]
+async fn the_draft_marker_follows_the_response_not_the_flag() {
+    let server = MockServer::start().await;
+    mount_create(&server, false).await;
+
+    bb(&server)
+        .args([
+            "pr",
+            "create",
+            "main",
+            "feature/a",
+            "--title",
+            "t",
+            "--no-default-reviewers",
+            "--draft",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("#21 feature/a \u{2192} main"))
+        .stdout(contains("(draft)").not());
+}
+
 #[tokio::test]
 async fn without_draft_the_body_has_no_draft_key() {
     let server = MockServer::start().await;
-    mount_create(&server).await;
+    mount_create(&server, false).await;
 
     bb(&server)
         .args([
@@ -763,7 +785,7 @@ async fn without_draft_the_body_has_no_draft_key() {
 #[tokio::test]
 async fn draft_applies_to_every_target() {
     let server = MockServer::start().await;
-    mount_create(&server).await;
+    mount_create(&server, true).await;
 
     bb(&server)
         .args([

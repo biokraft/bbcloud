@@ -431,8 +431,7 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         id: u64,
         target: String,
         url: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        draft: Option<bool>,
+        draft: bool,
     }
 
     let mut created = Vec::new();
@@ -474,7 +473,9 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
         };
 
         if !ctx.format.is_json() {
-            let marker = if args.draft { " (draft)" } else { "" };
+            // From the response, not the flag, so this line and the JSON row
+            // agree on what Bitbucket actually created.
+            let marker = if pr.draft { " (draft)" } else { "" };
             output::success(&format!("#{} {source} \u{2192} {target}{marker}", pr.id));
             output::info(&url);
         }
@@ -485,7 +486,7 @@ pub async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
             id: pr.id,
             target,
             url,
-            draft: pr.draft.then_some(true),
+            draft: pr.draft,
         });
     }
 

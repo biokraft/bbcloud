@@ -145,8 +145,7 @@ struct EditRow {
     description: String,
     url: String,
     changed: Vec<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    draft: Option<bool>,
+    draft: bool,
 }
 
 impl EditRow {
@@ -157,7 +156,7 @@ impl EditRow {
             description: pr.description_text().to_string(),
             url: pr.html_url().to_string(),
             changed,
-            draft: pr.draft.then_some(true),
+            draft: pr.draft,
         }
     }
 }

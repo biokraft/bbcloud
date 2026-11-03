@@ -81,7 +81,7 @@ async fn ready_marks_a_draft_ready_without_changing_content() {
         .success();
     let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
     assert_eq!(value["changed"], serde_json::json!(["draft"]));
-    assert!(value.get("draft").is_none());
+    assert_eq!(value["draft"], false);
     assert_eq!(
         put_bodies(&server).await,
         vec![serde_json::json!({ "title": "Add widget cache", "draft": false })]
@@ -125,11 +125,7 @@ async fn draft_state_flags_handle_transitions_and_noops_in_both_formats() {
                         serde_json::json!([])
                     };
                     assert_eq!(value["changed"], changed);
-                    if requested {
-                        assert_eq!(value["draft"], true);
-                    } else {
-                        assert!(value.get("draft").is_none());
-                    }
+                    assert_eq!(value["draft"], requested);
                     assert_eq!(value["title"], "Add widget cache");
                     assert_eq!(value["description"], "Caches widgets.");
                 } else {
@@ -261,7 +257,7 @@ async fn draft_json_reports_the_returned_state_not_the_flag() {
         .assert()
         .success();
     let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
-    assert!(value.get("draft").is_none());
+    assert_eq!(value["draft"], false);
     assert_eq!(value["changed"], serde_json::json!(["draft"]));
 }
 

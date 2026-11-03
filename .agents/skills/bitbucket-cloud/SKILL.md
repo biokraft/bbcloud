@@ -167,8 +167,8 @@ before you write.
 open pull request to a draft. The flags are mutually exclusive and can accompany content edits.
 Use either only when the user explicitly requests that status change. Never mark ready just to
 advance a workflow, or mark draft to hide a pull request from reviewers. Without either flag,
-draft status is left alone. JSON includes `"draft": true` only for drafts; `changed` includes
-`"draft"` for either transition and is empty when nothing changed.
+draft status is left alone. JSON always carries `draft` as a boolean, read from Bitbucket's
+response; `changed` includes `"draft"` for either transition and is empty when nothing changed.
 
 ## Create a repository
 

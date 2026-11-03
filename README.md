@@ -262,8 +262,9 @@ bb update                                 # check for a newer release and update
 
 `pr edit --ready` and `--draft` are mutually exclusive and can be combined with title or
 description edits. Only open pull requests can be edited. Unchanged values cause no write;
-omitting both flags leaves draft status alone. JSON includes `"draft": true` only for drafts
-and lists `"draft"` in `changed` for either status transition.
+omitting both flags leaves draft status alone. JSON always carries `draft` as a boolean, as
+Bitbucket reports it after the write, and lists `"draft"` in `changed` for either status
+transition. `pr create --json` rows carry the same `draft` boolean.
 
 `bb repo create` sends `is_private: true` unless you pass `--public`. Omitting the field is not
 safe: the effective default depends on workspace configuration, so an omitted value can publish
