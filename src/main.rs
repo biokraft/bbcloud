@@ -249,7 +249,7 @@ enum PrCommand {
         #[arg(long = "to")]
         to: String,
     },
-    /// Change an open pull request's title or description
+    /// Change an open pull request's title, description or draft status
     ///
     /// With no flag, in a terminal, prompts for both, pre-filled with the
     /// current text.
@@ -264,6 +264,12 @@ enum PrCommand {
         /// Read the new description from stdin
         #[arg(long)]
         description_stdin: bool,
+        /// Mark a draft pull request ready for review; does not approve or merge it
+        #[arg(long, conflicts_with = "draft")]
+        ready: bool,
+        /// Convert an open pull request to a draft
+        #[arg(long, conflicts_with = "ready")]
+        draft: bool,
     },
     /// Request changes on a pull request, after confirming
     #[command(name = "request-changes", alias = "rc")]
@@ -826,6 +832,8 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
             title,
             description,
             description_stdin,
+            ready,
+            draft,
         } => {
             commands::pr_edit::run(
                 &ctx,
@@ -834,6 +842,8 @@ async fn dispatch_pr(repo: Option<&str>, format: Format, command: PrCommand) -> 
                     title,
                     description,
                     description_stdin,
+                    ready,
+                    draft,
                 },
             )
             .await

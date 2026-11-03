@@ -1,9 +1,10 @@
-//! `bb pr edit`: change an open pull request's title or description in place.
+//! `bb pr edit`: change an open pull request's content or draft status in place.
 //!
 //! This rides the same `PUT` as `pr retarget` and `pr reviewers`. The title is
 //! always sent, because the api rejects a `PUT` without one. The description is
 //! sent only when it changed, so fixing a typo in the title never rewrites text
-//! nobody touched.
+//! nobody touched. Draft status is sent only when explicitly requested and
+//! different from the current status. Ready means ready for review, not approval.
 
 use crate::api::models::PullRequest;
 use crate::commands::pr::Ctx;
@@ -17,13 +18,16 @@ pub struct EditArgs {
     pub title: Option<String>,
     pub description: Option<String>,
     pub description_stdin: bool,
+    pub ready: bool,
+    pub draft: bool,
 }
 
-/// The new text a caller asked for. `None` leaves that field alone.
+/// The values a caller asked for. `None` leaves that field alone.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Requested {
     title: Option<String>,
     description: Option<String>,
+    draft: Option<bool>,
 }
 
 /// Only the fields that differ from what the pull request says now.
@@ -31,6 +35,7 @@ struct Requested {
 struct Plan {
     title: Option<String>,
     description: Option<String>,
+    draft: Option<bool>,
 }
 
 impl Plan {
@@ -42,6 +47,9 @@ impl Plan {
         if self.description.is_some() {
             changed.push("description");
         }
+        if self.draft.is_some() {
+            changed.push("draft");
+        }
         changed
     }
 }
@@ -49,12 +57,18 @@ impl Plan {
 /// Drops every requested value that matches the current one. Trailing
 /// whitespace is ignored for the description: an editor or `echo` adds a
 /// final newline, and that alone is not an edit anyone meant.
-fn plan(current_title: &str, current_description: &str, requested: Requested) -> Plan {
+fn plan(
+    current_title: &str,
+    current_description: &str,
+    current_draft: bool,
+    requested: Requested,
+) -> Plan {
     Plan {
         title: requested.title.filter(|t| t != current_title),
         description: requested
             .description
             .filter(|d| d.trim_end() != current_description.trim_end()),
+        draft: requested.draft.filter(|draft| *draft != current_draft),
     }
 }
 
@@ -66,10 +80,26 @@ fn clean_title(raw: &str) -> Result<String> {
     Ok(title.to_string())
 }
 
-/// What the flags ask for, or `None` when no content flag was given and the
+/// What the flags ask for, or `None` when no edit flag was given and the
 /// caller should be prompted instead.
 fn from_flags(args: &EditArgs) -> Result<Option<Requested>> {
-    if args.title.is_none() && args.description.is_none() && !args.description_stdin {
+    if args.ready && args.draft {
+        return Err(BbError::Config(
+            "--ready and --draft cannot be used together".into(),
+        ));
+    }
+    let draft = if args.ready {
+        Some(false)
+    } else if args.draft {
+        Some(true)
+    } else {
+        None
+    };
+    if args.title.is_none()
+        && args.description.is_none()
+        && !args.description_stdin
+        && draft.is_none()
+    {
         return Ok(None);
     }
     let title = args.title.as_deref().map(clean_title).transpose()?;
@@ -82,7 +112,11 @@ fn from_flags(args: &EditArgs) -> Result<Option<Requested>> {
             .as_deref()
             .map(|d| d.trim_end_matches('\n').to_string())
     };
-    Ok(Some(Requested { title, description }))
+    Ok(Some(Requested {
+        title,
+        description,
+        draft,
+    }))
 }
 
 /// Left uncovered on purpose: it needs a terminal, and the decision it feeds
@@ -100,6 +134,7 @@ fn prompt(current_title: &str, current_description: &str) -> Result<Requested> {
     Ok(Requested {
         title: Some(clean_title(&title)?),
         description: Some(description.trim_end_matches('\n').to_string()),
+        draft: None,
     })
 }
 
@@ -110,6 +145,8 @@ struct EditRow {
     description: String,
     url: String,
     changed: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft: Option<bool>,
 }
 
 impl EditRow {
@@ -120,6 +157,7 @@ impl EditRow {
             description: pr.description_text().to_string(),
             url: pr.html_url().to_string(),
             changed,
+            draft: pr.draft.then_some(true),
         }
     }
 }
@@ -129,7 +167,7 @@ pub async fn run(ctx: &Ctx, args: EditArgs) -> Result<()> {
     let flags = from_flags(&args)?;
     if flags.is_none() && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(BbError::Config(format!(
-            "nothing to change on #{id} — pass --title, --description or --description-stdin"
+            "nothing to change on #{id} — pass --title, --description, --description-stdin, --ready or --draft"
         )));
     }
 
@@ -151,7 +189,7 @@ pub async fn run(ctx: &Ctx, args: EditArgs) -> Result<()> {
         Some(requested) => requested,
         None => prompt(&current_title, &current_description)?,
     };
-    let plan = plan(&current_title, &current_description, requested);
+    let plan = plan(&current_title, &current_description, pr.draft, requested);
     let changed = plan.changed();
 
     if changed.is_empty() {
@@ -169,6 +207,9 @@ pub async fn run(ctx: &Ctx, args: EditArgs) -> Result<()> {
     });
     if let Some(description) = &plan.description {
         body["description"] = serde_json::Value::String(description.clone());
+    }
+    if let Some(draft) = plan.draft {
+        body["draft"] = serde_json::Value::Bool(draft);
     }
     let updated: PullRequest = ctx.client.put_json(&path, &body).await?;
 
@@ -195,34 +236,82 @@ mod tests {
         Requested {
             title: title.map(str::to_string),
             description: description.map(str::to_string),
+            draft: None,
         }
     }
 
     #[test]
     fn a_trailing_newline_alone_is_not_a_description_change() {
-        let p = plan("T", "body", requested(None, Some("body\n")));
+        let p = plan("T", "body", false, requested(None, Some("body\n")));
         assert!(p.changed().is_empty(), "got {p:?}");
     }
 
     #[test]
     fn clearing_the_description_is_a_change() {
-        let p = plan("T", "body", requested(None, Some("")));
+        let p = plan("T", "body", false, requested(None, Some("")));
         assert_eq!(p.description.as_deref(), Some(""));
     }
 
     #[test]
     fn an_identical_title_is_dropped_and_a_new_one_kept() {
-        assert!(plan("T", "", requested(Some("T"), None)).title.is_none());
+        assert!(plan("T", "", false, requested(Some("T"), None))
+            .title
+            .is_none());
         assert_eq!(
-            plan("T", "", requested(Some("U"), None)).title.as_deref(),
+            plan("T", "", false, requested(Some("U"), None))
+                .title
+                .as_deref(),
             Some("U")
         );
     }
 
     #[test]
     fn changed_lists_title_before_description() {
-        let p = plan("T", "a", requested(Some("U"), Some("b")));
+        let p = plan("T", "a", false, requested(Some("U"), Some("b")));
         assert_eq!(p.changed(), vec!["title", "description"]);
+    }
+
+    #[test]
+    fn draft_plans_only_include_requested_transitions() {
+        for current_draft in [false, true] {
+            for draft in [None, Some(false), Some(true)] {
+                let requested = Requested {
+                    draft,
+                    ..Default::default()
+                };
+                let result = plan("T", "body", current_draft, requested);
+                let expected = draft.filter(|value| *value != current_draft);
+                assert_eq!(result.draft, expected);
+                assert_eq!(result.changed().is_empty(), expected.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn changed_lists_draft_after_content() {
+        let result = plan(
+            "T",
+            "body",
+            true,
+            Requested {
+                title: Some("New title".into()),
+                description: Some("New body".into()),
+                draft: Some(false),
+            },
+        );
+        assert_eq!(result.changed(), vec!["title", "description", "draft"]);
+    }
+
+    #[test]
+    fn conflicting_state_flags_are_rejected_for_library_callers() {
+        let args = EditArgs {
+            ready: true,
+            draft: true,
+            ..Default::default()
+        };
+        let error = from_flags(&args).unwrap_err().to_string();
+        assert!(error.contains("--ready"));
+        assert!(error.contains("--draft"));
     }
 
     #[test]

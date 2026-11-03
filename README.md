@@ -244,6 +244,8 @@ bb pr create main,release/2.4 --title "Fix login" # one PR per target; --json re
 bb pr create main --draft --title "WIP: caching"  # open as a draft; `pr list --state draft` finds it
 bb pr retarget 42 --to main               # fix a PR opened against the wrong branch
 bb pr edit 42 --title "Cache lookups"     # fix a title; --description-stdin
+bb pr edit 42 --ready                    # mark a draft ready for review, not approved or merged
+bb pr edit 42 --draft                    # convert an open PR to a draft
 bb pr comment 42 -f src/auth.rs -l 88 -b "off by one"
 bb pr comment 42 --pending -b "nit"       # draft until you press Finish review
 bb pr resolve 42 998877                   # confirms first, then closes the thread
@@ -257,6 +259,11 @@ bb repo create api-gateway --project ENG         # private by default
 bb repo create docs --project ENG --public       # explicit opt-in to public
 bb update                                 # check for a newer release and update
 ```
+
+`pr edit --ready` and `--draft` are mutually exclusive and can be combined with title or
+description edits. Only open pull requests can be edited. Unchanged values cause no write;
+omitting both flags leaves draft status alone. JSON includes `"draft": true` only for drafts
+and lists `"draft"` in `changed` for either status transition.
 
 `bb repo create` sends `is_private: true` unless you pass `--public`. Omitting the field is not
 safe: the effective default depends on workspace configuration, so an omitted value can publish

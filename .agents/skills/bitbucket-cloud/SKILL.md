@@ -150,6 +150,8 @@ These commands have no confirmation prompt, so the check is yours.
 bb pr retarget 42 --to main --json
 bb pr edit 42 --title "Cache session lookups" --json
 bb pr edit 42 --description-stdin --json < body.md
+bb pr edit 42 --ready --json
+bb pr edit 42 --draft --json
 ```
 
 Retarget when the user asks, or when you opened the pull request against the wrong branch. A
@@ -160,6 +162,13 @@ old base can show as outdated. Say so in your report.
 `pr edit` changes only the fields you pass. `--description ""` clears the description. An edit that
 changes nothing writes nothing. Show the user the new title or description, and wait for a yes
 before you write.
+
+`--ready` marks a draft ready for review; it does not approve or merge it. `--draft` converts an
+open pull request to a draft. The flags are mutually exclusive and can accompany content edits.
+Use either only when the user explicitly requests that status change. Never mark ready just to
+advance a workflow, or mark draft to hide a pull request from reviewers. Without either flag,
+draft status is left alone. JSON includes `"draft": true` only for drafts; `changed` includes
+`"draft"` for either transition and is empty when nothing changed.
 
 ## Create a repository
 

@@ -55,6 +55,269 @@ async fn put_bodies(server: &MockServer) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn ready_marks_a_draft_ready_without_changing_content() {
+    let server = MockServer::start().await;
+    let mut current = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+    current["draft"] = Value::Bool(true);
+    Mock::given(method("GET"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(current))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut updated = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+    updated["draft"] = Value::Bool(false);
+    Mock::given(method("PUT"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(updated))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "edit", "7", "--ready", "--json"])
+        .write_stdin("")
+        .assert()
+        .success();
+    let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(value["changed"], serde_json::json!(["draft"]));
+    assert!(value.get("draft").is_none());
+    assert_eq!(
+        put_bodies(&server).await,
+        vec![serde_json::json!({ "title": "Add widget cache", "draft": false })]
+    );
+}
+
+#[tokio::test]
+async fn draft_state_flags_handle_transitions_and_noops_in_both_formats() {
+    for (flag, requested) in [("--ready", false), ("--draft", true)] {
+        for current_draft in [false, true] {
+            for json in [false, true] {
+                let server = MockServer::start().await;
+                let mut current = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+                current["draft"] = Value::Bool(current_draft);
+                Mock::given(method("GET"))
+                    .and(path(PR_PATH))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(current.clone()))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let changes = current_draft != requested;
+                current["draft"] = Value::Bool(requested);
+                Mock::given(method("PUT"))
+                    .and(path(PR_PATH))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(current))
+                    .expect(if changes { 1 } else { 0 })
+                    .mount(&server)
+                    .await;
+
+                let mut cmd = bb(&server);
+                cmd.args(["pr", "edit", "7", flag]).write_stdin("");
+                if json {
+                    cmd.arg("--json");
+                }
+                let out = cmd.assert().success();
+                if json {
+                    let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+                    let changed = if changes {
+                        serde_json::json!(["draft"])
+                    } else {
+                        serde_json::json!([])
+                    };
+                    assert_eq!(value["changed"], changed);
+                    if requested {
+                        assert_eq!(value["draft"], true);
+                    } else {
+                        assert!(value.get("draft").is_none());
+                    }
+                    assert_eq!(value["title"], "Add widget cache");
+                    assert_eq!(value["description"], "Caches widgets.");
+                } else {
+                    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
+                    assert!(stdout.contains(if changes {
+                        "updated: draft"
+                    } else {
+                        "nothing to do"
+                    }));
+                }
+                let bodies = put_bodies(&server).await;
+                if changes {
+                    assert_eq!(
+                        bodies,
+                        vec![
+                            serde_json::json!({ "title": "Add widget cache", "draft": requested })
+                        ]
+                    );
+                } else {
+                    assert!(bodies.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn draft_state_can_be_changed_with_title_and_description() {
+    for (flag, draft) in [("--ready", false), ("--draft", true)] {
+        let server = MockServer::start().await;
+        let mut current = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+        current["draft"] = Value::Bool(!draft);
+        Mock::given(method("GET"))
+            .and(path(PR_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(current))
+            .mount(&server)
+            .await;
+        let mut updated = pr_body("OPEN", "Cache widgets", "New text");
+        updated["draft"] = Value::Bool(draft);
+        Mock::given(method("PUT"))
+            .and(path(PR_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(updated))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let out = bb(&server)
+            .args([
+                "pr",
+                "edit",
+                "7",
+                flag,
+                "--title",
+                "Cache widgets",
+                "--description-stdin",
+                "--json",
+            ])
+            .write_stdin("New text\n")
+            .assert()
+            .success();
+        let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        assert_eq!(
+            value["changed"],
+            serde_json::json!(["title", "description", "draft"])
+        );
+        assert_eq!(
+            put_bodies(&server).await,
+            vec![
+                serde_json::json!({ "title": "Cache widgets", "description": "New text", "draft": draft })
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn content_edits_leave_draft_status_alone() {
+    for (flag, text, expected) in [
+        (
+            "--title",
+            "Cache widgets",
+            serde_json::json!({ "title": "Cache widgets" }),
+        ),
+        (
+            "--description",
+            "New text",
+            serde_json::json!({ "title": "Add widget cache", "description": "New text" }),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let mut current = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+        current["draft"] = Value::Bool(true);
+        Mock::given(method("GET"))
+            .and(path(PR_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(current.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(PR_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(current))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let out = bb(&server)
+            .args(["pr", "edit", "7", flag, text, "--json"])
+            .assert()
+            .success();
+        let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        assert_eq!(value["draft"], true);
+        assert_eq!(put_bodies(&server).await, vec![expected]);
+    }
+}
+
+#[tokio::test]
+async fn draft_json_reports_the_returned_state_not_the_flag() {
+    let server = MockServer::start().await;
+    mount_get(&server, "OPEN").await;
+    let mut updated = pr_body("OPEN", "Add widget cache", "Caches widgets.");
+    updated["draft"] = Value::Bool(false);
+    Mock::given(method("PUT"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(updated))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = bb(&server)
+        .args(["pr", "edit", "7", "--draft", "--json"])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert!(value.get("draft").is_none());
+    assert_eq!(value["changed"], serde_json::json!(["draft"]));
+}
+
+#[tokio::test]
+async fn ready_and_draft_conflict_before_any_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    bb(&server)
+        .args(["pr", "edit", "7", "--ready", "--draft"])
+        .assert()
+        .failure()
+        .code(1);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn draft_state_flags_refuse_closed_pull_requests() {
+    for state in ["MERGED", "DECLINED"] {
+        for flag in ["--ready", "--draft"] {
+            let server = MockServer::start().await;
+            mount_get(&server, state).await;
+            Mock::given(method("PUT"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let out = bb(&server)
+                .args(["pr", "edit", "7", flag])
+                .assert()
+                .failure()
+                .code(1);
+            assert!(String::from_utf8_lossy(&out.get_output().stderr).contains(state));
+        }
+    }
+}
+
+#[test]
+fn edit_help_lists_draft_state_flags() {
+    let out = Command::cargo_bin("bb")
+        .unwrap()
+        .env("BB_NO_UPDATE_CHECK", "1")
+        .env("BB_SKILL_NO_AUTO_REFRESH", "1")
+        .args(["pr", "edit", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
+    assert!(stdout.contains("--ready"));
+    assert!(stdout.contains("--draft"));
+    assert!(stdout.contains("ready for review"));
+}
+
+#[tokio::test]
 async fn title_only_edit_sends_no_description() {
     let server = MockServer::start().await;
     mount_get(&server, "OPEN").await;
@@ -287,6 +550,8 @@ async fn no_flags_without_a_terminal_errors_before_any_request() {
     let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("--title"), "stderr: {stderr}");
     assert!(stderr.contains("--description-stdin"), "stderr: {stderr}");
+    assert!(stderr.contains("--ready"), "stderr: {stderr}");
+    assert!(stderr.contains("--draft"), "stderr: {stderr}");
 }
 
 #[tokio::test]
