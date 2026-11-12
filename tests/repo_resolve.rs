@@ -241,3 +241,24 @@ fn a_remote_with_an_empty_url_is_skipped_rather_than_parsed() {
         .success()
         .stdout(contains("https://bitbucket.org/acme/widgets"));
 }
+
+/// Bitbucket's clone dialog hands out `git@ssh.bitbucket.org:…` for SSH, so an
+/// `origin` copied from it must resolve like `git@bitbucket.org:…` does instead
+/// of failing with "no bitbucket.org remote found" (issue #95).
+#[test]
+fn an_ssh_bitbucket_org_origin_resolves() {
+    let repo = git_repo();
+    run_git(
+        repo.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@ssh.bitbucket.org:acme/widgets.git",
+        ],
+    );
+    bb_in(repo.path())
+        .assert()
+        .success()
+        .stdout(contains("https://bitbucket.org/acme/widgets"));
+}

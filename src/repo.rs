@@ -4,6 +4,21 @@ use std::fmt;
 
 const MAX_SEGMENT: usize = 100;
 
+/// The remote url shapes that name a Bitbucket Cloud repository, each followed
+/// by `workspace/repo`. `ssh.bitbucket.org` is the host Bitbucket's own clone
+/// dialog hands out for SSH, so a remote copied from it uses that name rather
+/// than `bitbucket.org`; both reach the same service. Git accepts the scp-like
+/// `git@host:path` and the `ssh://git@host/path` spelling interchangeably, so
+/// both are listed for each SSH host.
+const REMOTE_PREFIXES: [&str; 6] = [
+    "git@bitbucket.org:",
+    "git@ssh.bitbucket.org:",
+    "ssh://git@bitbucket.org/",
+    "ssh://git@ssh.bitbucket.org/",
+    "https://bitbucket.org/",
+    "http://bitbucket.org/",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoSlug {
     pub workspace: String,
@@ -28,11 +43,10 @@ fn valid_segment(s: &str) -> bool {
 impl RepoSlug {
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
-        let body = if let Some(rest) = input.strip_prefix("git@bitbucket.org:") {
-            rest
-        } else if let Some(rest) = input.strip_prefix("https://bitbucket.org/") {
-            rest
-        } else if let Some(rest) = input.strip_prefix("http://bitbucket.org/") {
+        let body = if let Some(rest) = REMOTE_PREFIXES
+            .iter()
+            .find_map(|prefix| input.strip_prefix(prefix))
+        {
             rest
         } else if input.contains("://") || input.contains('@') {
             return Err(BbError::Config(format!(
@@ -191,6 +205,42 @@ mod tests {
                 .to_string(),
             "acme/widgets"
         );
+    }
+
+    #[test]
+    fn parses_every_ssh_host_and_spelling() {
+        for url in [
+            "git@ssh.bitbucket.org:acme/widgets.git",
+            "ssh://git@bitbucket.org/acme/widgets.git",
+            "ssh://git@ssh.bitbucket.org/acme/widgets.git",
+            "ssh://git@ssh.bitbucket.org/acme/widgets",
+        ] {
+            assert_eq!(
+                RepoSlug::parse(url).unwrap().to_string(),
+                "acme/widgets",
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ssh_bitbucket_org_origin_is_detected_as_bitbucket() {
+        let urls = ["git@ssh.bitbucket.org:acme/widgets.git"];
+        assert_eq!(
+            first_bitbucket_slug(urls.iter().copied()).map(|s| s.to_string()),
+            Some("acme/widgets".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_lookalike_ssh_hosts() {
+        for bad in [
+            "git@ssh.bitbucket.org.evil.example.com:acme/widgets.git",
+            "git@evilssh.bitbucket.org:acme/widgets.git",
+            "ssh://git@bitbucket.org.evil.example.com/acme/widgets.git",
+        ] {
+            assert!(RepoSlug::parse(bad).is_err(), "must reject {bad:?}");
+        }
     }
 
     #[test]
