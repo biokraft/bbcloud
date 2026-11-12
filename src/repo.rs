@@ -5,9 +5,9 @@ use std::fmt;
 const MAX_SEGMENT: usize = 100;
 
 /// The remote url shapes that name a Bitbucket Cloud repository, each followed
-/// by `workspace/repo`. `ssh.bitbucket.org` is the host Bitbucket's own clone
-/// dialog hands out for SSH, so a remote copied from it uses that name rather
-/// than `bitbucket.org`; both reach the same service. Git accepts the scp-like
+/// by `workspace/repo`. Atlassian is moving Git over SSH from `bitbucket.org`
+/// to `ssh.bitbucket.org`, so SSH remotes on either host must resolve while
+/// checkouts are migrated, and on the new one after. Git accepts the scp-like
 /// `git@host:path` and the `ssh://git@host/path` spelling interchangeably, so
 /// both are listed for each SSH host.
 const REMOTE_PREFIXES: [&str; 6] = [

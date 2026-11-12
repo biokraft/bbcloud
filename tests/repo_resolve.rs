@@ -242,8 +242,8 @@ fn a_remote_with_an_empty_url_is_skipped_rather_than_parsed() {
         .stdout(contains("https://bitbucket.org/acme/widgets"));
 }
 
-/// Bitbucket's clone dialog hands out `git@ssh.bitbucket.org:…` for SSH, so an
-/// `origin` copied from it must resolve like `git@bitbucket.org:…` does instead
+/// Atlassian is moving Git over SSH to `ssh.bitbucket.org`, so an `origin` of
+/// `git@ssh.bitbucket.org:…` must resolve like `git@bitbucket.org:…` does instead
 /// of failing with "no bitbucket.org remote found" (issue #95).
 #[test]
 fn an_ssh_bitbucket_org_origin_resolves() {
