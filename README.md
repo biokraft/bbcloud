@@ -191,6 +191,13 @@ scopes are enough:
 | `read:project:bitbucket` | `project list`, and the project picker `repo create` uses when `--project` is omitted |
 | `admin:repository:bitbucket` | `repo create`. This is the only scope that permits creating a repository — no combination of the read and write scopes above is enough |
 
+Atlassian's token form has a **Search by scope name** field that accepts a comma-separated list.
+Paste this to narrow the picker to the six scopes above, then tick the ones you want:
+
+```text
+read:user:bitbucket,read:pullrequest:bitbucket,read:repository:bitbucket,write:pullrequest:bitbucket,read:project:bitbucket,admin:repository:bitbucket
+```
+
 One gotcha worth knowing: `write:pullrequest:bitbucket` does **not** imply
 `read:repository:bitbucket`, so `pr create` needs both. The same applies to `pr view --conflicts`:
 the pull-request endpoint redirects to a repository file-conflict resource, so a token with only

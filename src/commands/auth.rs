@@ -58,6 +58,18 @@ pub fn scope_lines(indent: &str) -> String {
         .join("\n")
 }
 
+/// Every scope in `SCOPES`, comma-separated with no spaces. Atlassian's token
+/// form has a "Search by scope name" field that takes this whole string and
+/// narrows two dozen Bitbucket scopes to these six, so the user ticks what is
+/// left instead of copying each name across one at a time.
+pub fn scope_search_text() -> String {
+    SCOPES
+        .iter()
+        .map(|(scope, _)| *scope)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// `--help` carries the same guidance as the interactive walkthrough, because
 /// `--email` with `--token-stdin` skips the walkthrough entirely and a CI user
 /// has nowhere else to read it.
@@ -66,13 +78,19 @@ pub fn login_long_about() -> String {
         "Store an atlassian api token in the os keyring.
 
 Create the token at {TOKEN_HELP_URL},
-choosing \"Create API token with scopes\" and Bitbucket as the product, then grant:
+choosing \"Create API token with scopes\" and Bitbucket as the product. Paste
+this into the \"Search by scope name\" field and tick the scopes it finds:
+
+  {}
+
+What each scope is for:
 
 {}
 
 The first three are the read-only floor. Grant the rest only for the commands
 named beside them: writing to a pull request, listing projects, and creating a
 repository are each a separate grant.",
+        scope_search_text(),
         scope_lines("  ")
     )
 }
@@ -91,7 +109,11 @@ fn print_onboarding() {
     println!();
     output::info(&format!("1. open {TOKEN_HELP_URL}"));
     output::info("2. choose \"Create API token with scopes\", then pick Bitbucket as the product");
-    output::info("3. grant these scopes:");
+    output::info(
+        "3. paste this into the \"Search by scope name\" field and tick the scopes it finds:",
+    );
+    println!("     {}", scope_search_text());
+    output::info("   what each scope is for:");
     println!("{}", scope_lines("     "));
     output::info(
         "   the first three are the read-only floor; grant the rest only for the commands \
