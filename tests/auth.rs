@@ -332,6 +332,26 @@ fn login_prints_the_token_url_and_every_required_scope() {
         stdout.contains("Create API token with scopes"),
         "no scoped-token instruction: {stdout}"
     );
+    assert_pasteable_scope_line(&stdout);
+}
+
+/// Atlassian's "Search by scope name" field takes the whole comma-separated
+/// list, so the output must carry it on a line of its own: every scope, in
+/// `SCOPES` order, no spaces, nothing else on the line to trip a copy.
+fn assert_pasteable_scope_line(text: &str) {
+    let expected = bb_cli::commands::auth::SCOPES
+        .iter()
+        .map(|(s, _)| *s)
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(
+        text.lines().any(|l| l.trim() == expected),
+        "no pasteable `{expected}` line: {text}"
+    );
+    assert!(
+        text.contains("Search by scope name"),
+        "no pointer to the search field: {text}"
+    );
 }
 
 /// The walkthrough is for someone who will type values. `--email` with
@@ -391,6 +411,7 @@ fn auth_login_help_lists_the_required_scopes() {
     for (scope, _) in bb_cli::commands::auth::SCOPES {
         assert!(text.contains(scope), "scope {scope} missing: {text}");
     }
+    assert_pasteable_scope_line(&text);
 }
 
 /// A 403 on the verification call means the token exists but lacks
@@ -528,4 +549,16 @@ fn the_readme_scope_table_matches_the_login_walkthrough() {
             "`bb auth login` asks for {scope} but the README scope table does not list it"
         );
     }
+}
+
+/// The README's paste-ready scope line is a third copy of `SCOPES`; it must
+/// change whenever a scope is added, or the search field stops finding it.
+#[test]
+fn the_readme_scope_search_line_matches_the_login_walkthrough() {
+    let readme = include_str!("../README.md");
+    let expected = bb_cli::commands::auth::scope_search_text();
+    assert!(
+        readme.lines().any(|l| l == expected),
+        "README has no `{expected}` line under `### Token scopes`"
+    );
 }
